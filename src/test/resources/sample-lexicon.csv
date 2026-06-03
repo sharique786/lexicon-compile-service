@@ -1,0 +1,11 @@
+Term ID, Term Description, Risk Driver Name
+lexicon_research_1::1, (manipulate*) NEAR{5} ((price) OR (spread) OR (stock)), Research Based Front Running
+lexicon_research_1::2, "((""please don't forward"") OR (""do not share don't forward""))", Research Based Front Running
+lexicon_research_1::3, don't FOLLOWEDBY{3} compliance, Evasion of Surveillance
+lexicon_research_1::4, insider AND before AND announcement, Insider Trading
+lexicon_research_1::5, front* NEAR{3} (run* OR running), Front Running
+lexicon_research_1::6, tip* AND NOT disclaimer, Tip-Off
+lexicon_research_1::7, 💰 OR 🤫 OR 🤐, Coded Communication
+lexicon_research_1::8, 비밀 OR 내부자 거래 OR 주가 조작, Korean Insider Trading
+lexicon_research_1::9, 内幕交易 OR 操纵市场, Chinese Insider Trading
+lexicon_research_1::10, Übernahme OR Insiderhandel, German Market Abuse

@@ -1,0 +1,14 @@
+# =============================================================================
+# LOCAL profile
+# =============================================================================
+spring:
+  config:
+    activate:
+      on-profile: local
+
+server:
+  port: 8080
+
+logging:
+  level:
+    com.db.macs3.ecomms.spectre: DEBUG

@@ -1,0 +1,17 @@
+# =============================================================================
+# TEST profile
+# =============================================================================
+spring:
+  config:
+    activate:
+      on-profile: test
+
+server:
+  port: 0
+  compression:
+    enabled: true
+    min-response-size: 1
+
+logging:
+  level:
+    com.db.macs3.ecomms.spectre: DEBUG

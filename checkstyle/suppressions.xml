@@ -1,0 +1,241 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+    "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+    "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+
+<!--
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  Checkstyle Suppressions — Lexicon Compile Service                      ║
+  ║  com.db.macs3.ecomms.spectre                                            ║
+  ║                                                                          ║
+  ║  Compatible with: checkstyle 10.12.5                                    ║
+  ║                                                                          ║
+  ║  Format:                                                                 ║
+  ║    <suppress checks="CheckName"                                         ║
+  ║               files="regex-matched-against-file-path"                   ║
+  ║               lines="optional-line-range" />                            ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+-->
+<suppressions>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         1. TEST SOURCES
+         Test classes prioritise readability over strict production conventions.
+         All documentation, visibility, and logging rules are relaxed for tests.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- No Javadoc required on test classes -->
+    <suppress checks="JavadocType"
+              files="[\\/]src[\\/]test[\\/]"/>
+
+    <!-- No Javadoc required on test methods or helper methods -->
+    <suppress checks="JavadocMethod"
+              files="[\\/]src[\\/]test[\\/]"/>
+
+    <!-- No Javadoc required on test fields (e.g. @Autowired MockMvc) -->
+    <suppress checks="JavadocVariable"
+              files="[\\/]src[\\/]test[\\/]"/>
+
+    <!-- System.out.println allowed in tests (performance timing output) -->
+    <suppress checks="RegexpSinglelineJava"
+              files="[\\/]src[\\/]test[\\/]"
+              message=".*System\.out.*"/>
+
+    <!-- e.printStackTrace() allowed in test catch blocks for diagnostics -->
+    <suppress checks="RegexpSinglelineJava"
+              files="[\\/]src[\\/]test[\\/]"
+              message=".*printStackTrace.*"/>
+
+    <!-- System.err.println allowed in tests -->
+    <suppress checks="RegexpSinglelineJava"
+              files="[\\/]src[\\/]test[\\/]"
+              message=".*System\.err.*"/>
+
+    <!-- Test methods can be longer than 80 lines (given setup + assertions) -->
+    <suppress checks="MethodLength"
+              files="[\\/]src[\\/]test[\\/]"/>
+
+    <!-- Test classes can have higher cyclomatic complexity (multiple assertion paths) -->
+    <suppress checks="CyclomaticComplexity"
+              files="[\\/]src[\\/]test[\\/]"/>
+
+    <!-- Test fields can be package-private (@Autowired MockMvc, ObjectMapper, etc.) -->
+    <suppress checks="VisibilityModifier"
+              files="[\\/]src[\\/]test[\\/]"/>
+
+    <!-- Integration test: embedded text blocks for multi-language messages can be long -->
+    <suppress checks="LineLength"
+              files="MultiLanguageIntegrationTest\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         2. MODEL CLASSES (Models.java)
+         Java 21 records generate accessors automatically (e.g. termId(),
+         compilationStatus()). Per-accessor Javadoc adds no value.
+         The class-level and factory-method Javadoc is sufficient.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Record component accessors and factory methods need no method Javadoc -->
+    <suppress checks="JavadocMethod"
+              files="Models\.java"/>
+
+    <!-- Record component fields are documented at the record class level -->
+    <suppress checks="JavadocVariable"
+              files="Models\.java"/>
+
+    <!-- CompileRequest uses mutable class for Jackson binding — setters are boilerplate -->
+    <suppress checks="VisibilityModifier"
+              files="Models\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         3. TRANSLATOR — TermSyntaxTranslator.java
+         Implements a recursive-descent parser with inherently high cyclomatic
+         complexity. The parseExpression() dispatch across 6 operator levels
+         and the character-level loops in escapeSpecialChars() / convertMixedContent()
+         exceed the standard limits by design.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Recursive-descent parser methods exceed cyclomatic complexity limit -->
+    <suppress checks="CyclomaticComplexity"
+              files="TermSyntaxTranslator\.java"/>
+
+    <!-- translateLeaf(), convertMixedContent(), splitTopLevel() can exceed 80 lines -->
+    <suppress checks="MethodLength"
+              files="TermSyntaxTranslator\.java"/>
+
+    <!-- Inner TranslationException is a package-private implementation detail -->
+    <suppress checks="JavadocType"
+              files="TermSyntaxTranslator\.java"/>
+
+    <!-- Private methods (escapeSpecialChars, hasNonAscii, etc.) need no Javadoc -->
+    <suppress checks="JavadocMethod"
+              files="TermSyntaxTranslator\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         4. TRANSLATOR SUPPORT TYPES (ParseContext, ProximityMatch, TranslationResult)
+         Small supporting types. All documentation lives at the class/record level.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- ParseContext: package-private class, mutation helpers documented at class level -->
+    <suppress checks="JavadocMethod"
+              files="ParseContext\.java"/>
+
+    <!-- ParseContext: private fields documented via class-level Javadoc -->
+    <suppress checks="JavadocVariable"
+              files="ParseContext\.java"/>
+
+    <!-- ProximityMatch: record components documented on the record class itself -->
+    <suppress checks="JavadocVariable"
+              files="ProximityMatch\.java"/>
+
+    <!-- TranslationResult: sealed interface factory methods and record accessors -->
+    <suppress checks="JavadocMethod"
+              files="TranslationResult\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         5. HYPERSCAN COMPILER (HyperscanCompiler.java)
+         ValidationResult record accessors (isPass, isFailed, etc.) are
+         auto-generated and self-documenting. Private helpers are internal.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- ValidationResult record accessors and private helper methods -->
+    <suppress checks="JavadocMethod"
+              files="HyperscanCompiler\.java"/>
+
+    <!-- ValidationResult record component fields documented at record class level -->
+    <suppress checks="JavadocVariable"
+              files="HyperscanCompiler\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         6. CONFIGURATION CLASSES
+         Spring @ConfigurationProperties inner classes use plain getters/setters.
+         @Bean methods are documented at the class level.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- LexiconProperties inner class getters/setters are boilerplate -->
+    <suppress checks="JavadocMethod"
+              files="LexiconProperties\.java"/>
+
+    <!-- LexiconProperties fields are bound by Spring — no public field Javadoc needed -->
+    <suppress checks="JavadocVariable"
+              files="LexiconProperties\.java"/>
+
+    <!-- Inner static class names (Compiler, Upload) need no type-level Javadoc -->
+    <suppress checks="JavadocType"
+              files="LexiconProperties\.java"/>
+
+    <!-- LexiconCompileConfig: CORS and health indicator @Bean methods -->
+    <suppress checks="JavadocMethod"
+              files="LexiconCompileConfig\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         7. GZIP REQUEST FILTER (GzipRequestFilter.java)
+         GzipRequestWrapper overrides Servlet API methods — these are bridge
+         implementations required by the interface, not public API.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- All methods in GzipRequestFilter — Servlet API bridge implementations -->
+    <suppress checks="JavadocMethod"
+              files="GzipRequestFilter\.java"/>
+
+    <!-- GzipRequestWrapper inner class — package-private implementation detail -->
+    <suppress checks="JavadocType"
+              files="GzipRequestFilter\.java"/>
+
+    <!-- decompressedBody is an internal byte array — not public API -->
+    <suppress checks="JavadocVariable"
+              files="GzipRequestFilter\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         8. MAIN APPLICATION CLASS (LexiconCompileServiceApp.java)
+         Trivial @SpringBootApplication entry point — main() does not benefit
+         from method-level Javadoc beyond the class comment.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <suppress checks="JavadocMethod"
+              files="LexiconCompileServiceApp\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         9. CONTROLLER LAYER
+         GlobalExceptionHandler @ExceptionHandler methods are self-documented
+         by their annotations. Private errorBody() helper is internal.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- GlobalExceptionHandler — @ExceptionHandler methods and private helpers -->
+    <suppress checks="JavadocMethod"
+              files="GlobalExceptionHandler\.java"/>
+
+    <!-- LexiconCompileController private helper (stripExtension) -->
+    <suppress checks="JavadocMethod"
+              files="LexiconCompileController\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         10. SERVICE LAYER — private helpers
+         Private helper methods in service classes are covered by the
+         class-level and public-method Javadoc.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- CsvCompileService private helpers: isHeaderRow, isBlankRow, stripBom -->
+    <suppress checks="JavadocMethod"
+              files="CsvCompileService\.java"/>
+
+    <!-- LexiconCompileService private compileTerm() -->
+    <suppress checks="JavadocMethod"
+              files="LexiconCompileService\.java"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         11. LONG LINES IN CONSTANT DEFINITIONS
+         PCRE constant strings and Javadoc @see URLs in translator/compiler
+         classes naturally exceed 120 chars even after manual wrapping.
+         ══════════════════════════════════════════════════════════════════════ -->
+
+    <!-- First ~60 lines of TermSyntaxTranslator: class Javadoc with PCRE examples -->
+    <suppress checks="LineLength"
+              files="TermSyntaxTranslator\.java"
+              lines="1-60"/>
+
+    <!-- First ~60 lines of HyperscanCompiler: class Javadoc table with patterns -->
+    <suppress checks="LineLength"
+              files="HyperscanCompiler\.java"
+              lines="1-60"/>
+
+</suppressions>

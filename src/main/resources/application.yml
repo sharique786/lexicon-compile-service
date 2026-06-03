@@ -1,0 +1,79 @@
+# =============================================================================
+# Lexicon Compile Service — Application Configuration
+# Spring Boot 4.0.6 | JDK 21 | GCP Cloud Run
+# com.gliwka.hyperscan 5.4.0-2.0.0 | GZIP request + response
+# =============================================================================
+
+spring:
+  application:
+    name: lexicon-compile-service
+  profiles:
+    active: local
+  jackson:
+    serialization:
+      indent-output: false
+    deserialization:
+      fail-on-unknown-properties: false
+    default-property-inclusion: non_null
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB
+      max-request-size: 10MB
+  lifecycle:
+    timeout-per-shutdown-phase: 15s
+
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+  compression:
+    enabled: true
+    min-response-size: 1024
+    mime-types:
+      - application/json
+      - application/json;charset=UTF-8
+      - text/plain
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 10
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: Lexicon Compile Service
+    version: 1.0.0
+    engine: Hyperscan (com.gliwka.hyperscan 5.4.0-2.0.0)
+    springBoot: "4.0.6"
+    jdk: "21"
+    compression: GZIP request + response
+
+lexicon:
+  hyperscan-version: 5.4.0-2.0.0
+  compiler:
+    max-terms-per-request: 1000
+  upload:
+    max-file-size: 10MB
+
+logging:
+  level:
+    root: WARN
+    com.db.macs3.ecomms.spectre: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+
+
+

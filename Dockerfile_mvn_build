@@ -1,0 +1,107 @@
+# =============================================================================
+# Dockerfile — Lexicon Compile Service
+# Spring Boot 4.0.6 | JDK 21 | com.gliwka.hyperscan 5.4.0-2.0.0
+#
+# FIX: Stage 1 now uses the official Maven image (maven:3.9-eclipse-temurin-21)
+#      which has BOTH JDK 21 AND mvn pre-installed.
+#      The previous base (eclipse-temurin:21-jdk-jammy) is JDK-only — no mvn.
+#
+# 2-stage build:
+#   Stage 1: maven:3.9-eclipse-temurin-21-jammy  → compile + package + extract layers
+#   Stage 2: eclipse-temurin:21-jre-jammy         → minimal runtime only
+# =============================================================================
+
+# ── Stage 1: Build ────────────────────────────────────────────────────────────
+# maven:3.9-eclipse-temurin-21-jammy includes:
+#   • Eclipse Temurin JDK 21 (same distribution as Stage 2's JRE)
+#   • Apache Maven 3.9.x  ← fixes "mvn: not found"
+#   • Ubuntu 22.04 (Jammy)
+FROM maven:3.9-eclipse-temurin-21-jammy AS maven-builder
+
+WORKDIR /build
+
+# ── Cache Maven dependencies ──────────────────────────────────────────────────
+# Copying pom.xml first and running dependency:go-offline means this layer is
+# only invalidated when pom.xml changes, not on every source code change.
+COPY pom.xml .
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -q dependency:go-offline
+
+# ── Compile and package ───────────────────────────────────────────────────────
+COPY src src
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -q package -DskipTests \
+    && echo "JAR built:" \
+    && ls -lh target/lexicon-compile-service-*.jar
+
+# ── Extract Spring Boot 4 layered JAR ─────────────────────────────────────────
+# Spring Boot 4 layertools splits the JAR into cache-optimised layers:
+#   dependencies          → 3rd-party JARs (changes rarely)
+#   spring-boot-loader    → Spring Boot loader (changes rarely)
+#   snapshot-dependencies → SNAPSHOT JARs (changes on version bumps)
+#   application           → your compiled classes (changes every build)
+RUN java -Djarmode=layertools \
+    -jar target/lexicon-compile-service-*.jar \
+    extract --destination target/extracted
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+# Minimal JRE-only image — no compiler, no Maven, much smaller attack surface.
+FROM eclipse-temurin:21-jre-jammy AS runtime
+
+# com.gliwka.hyperscan native runtime requirements:
+#   libstdc++6  — C++ standard library (Hyperscan is a C++ library)
+#   libgomp1    — OpenMP (used internally by Hyperscan for parallelism)
+# Note: libhyperscan-dev is NOT needed — the .so is bundled inside the JAR
+#       and extracted to java.io.tmpdir at JVM startup automatically.
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends \
+        libstdc++6 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user (Cloud Run security best practice)
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
+WORKDIR /app
+
+# ── Copy Spring Boot 4 layered content in Docker cache-friendly order ─────────
+# Layers that change least frequently are copied first so Docker cache reuse
+# is maximised on typical "code changed, deps unchanged" builds.
+COPY --from=maven-builder /build/target/extracted/dependencies/          ./
+COPY --from=maven-builder /build/target/extracted/spring-boot-loader/    ./
+COPY --from=maven-builder /build/target/extracted/snapshot-dependencies/ ./
+COPY --from=maven-builder /build/target/extracted/application/           ./
+
+RUN chown -R appuser:appuser /app
+USER appuser
+
+# ── Environment ───────────────────────────────────────────────────────────────
+ENV PORT=8080
+ENV SPRING_PROFILES_ACTIVE=cloud-run
+
+# JVM tuning for JDK 21 on Cloud Run (container-aware):
+#   UseContainerSupport      — reads cgroup CPU/memory limits automatically
+#   MaxRAMPercentage=75.0    — 75% of container RAM for heap
+#   ExitOnOutOfMemoryError   — crash fast so Cloud Run can restart the instance
+#   UseG1GC                  — best general-purpose GC for JDK 21
+#   --enable-preview         — required for JDK 21 preview features used in project
+#
+# Virtual threads: auto-enabled by Spring Boot 4 + Tomcat — no extra JVM flag needed.
+# Hyperscan .so: extracted to java.io.tmpdir on first use — no -Djava.library.path needed.
+ENV JAVA_TOOL_OPTIONS="\
+  -XX:+UseContainerSupport \
+  -XX:MaxRAMPercentage=75.0 \
+  -XX:+ExitOnOutOfMemoryError \
+  -XX:+UseG1GC \
+  --enable-preview \
+  -Dspring.profiles.active=cloud-run"
+
+EXPOSE ${PORT}
+
+# Spring Boot 4 moved JarLauncher to the new package:
+#   org.springframework.boot.loader.launch.JarLauncher  (Boot 4.x)
+#   org.springframework.boot.loader.JarLauncher          (Boot 2.x / 3.x)
+ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]
+
+# Health check for local docker run / docker compose testing
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -sf http://localhost:${PORT}/actuator/health || exit 1

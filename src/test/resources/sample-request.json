@@ -1,0 +1,85 @@
+{
+  "lexiconRuleName": "lexicon_research_1",
+  "terms": [
+    {
+      "termId": "lexicon_research_1::1",
+      "termDescription": "(manipulate) NEAR{5} ((price) OR (spread) OR (stock))",
+      "riskDriverName": "Research Based Front Running"
+    },
+    {
+      "termId": "lexicon_research_1::2",
+      "termDescription": "((\"please don't forward\") OR (\"do not share don't forward\"))",
+      "riskDriverName": "Research Based Front Running"
+    },
+    {
+      "termId": "lexicon_research_1::3",
+      "termDescription": "don't FOLLOWEDBY{3} compliance",
+      "riskDriverName": "Evasion of Surveillance"
+    },
+    {
+      "termId": "lexicon_research_1::4",
+      "termDescription": "insider AND before AND announcement",
+      "riskDriverName": "Insider Trading"
+    },
+    {
+      "termId": "lexicon_research_1::5",
+      "termDescription": "front* NEAR{3} (run* OR running OR runner)",
+      "riskDriverName": "Front Running"
+    },
+    {
+      "termId": "lexicon_research_1::6",
+      "termDescription": "tip* AND NOT disclaimer",
+      "riskDriverName": "Tip-Off"
+    },
+    {
+      "termId": "lexicon_research_1::7",
+      "termDescription": "💰 OR 🤫 OR 🤐",
+      "riskDriverName": "Coded Communication"
+    },
+    {
+      "termId": "lexicon_research_1::8",
+      "termDescription": "비밀 OR 내부자 거래 OR 주가 조작",
+      "riskDriverName": "Korean Insider Trading"
+    },
+    {
+      "termId": "lexicon_research_1::9",
+      "termDescription": "内幕交易 OR 操纵市场 OR 内部消息",
+      "riskDriverName": "Chinese Insider Trading"
+    },
+    {
+      "termId": "lexicon_research_1::10",
+      "termDescription": "株価操作 OR インサイダー取引 OR 内部情報",
+      "riskDriverName": "Japanese Insider Trading"
+    },
+    {
+      "termId": "lexicon_research_1::11",
+      "termDescription": "Übernahme OR Insiderhandel OR Kursmanipulation",
+      "riskDriverName": "German Market Abuse"
+    },
+    {
+      "termId": "lexicon_research_1::12",
+      "termDescription": "מסחר פנים OR מניפולציה OR מידע פנים",
+      "riskDriverName": "Hebrew Insider Trading"
+    },
+    {
+      "termId": "lexicon_research_1::13",
+      "termDescription": "مخالفة OR استثمار داخلي OR تلاعب بالسوق",
+      "riskDriverName": "Arabic Market Abuse"
+    },
+    {
+      "termId": "lexicon_research_1::14",
+      "termDescription": "içeriden bilgi OR piyasa manipülasyonu",
+      "riskDriverName": "Turkish Insider Trading"
+    },
+    {
+      "termId": "lexicon_research_1::15",
+      "termDescription": "1ns1d3r* OR fr0nt*",
+      "riskDriverName": "Leet-Speak Obfuscation"
+    },
+    {
+      "termId": "lexicon_research_1::16",
+      "termDescription": "insider OR 내부자 OR 内幕 OR インサイダー OR 💰",
+      "riskDriverName": "Multi-Language Signal"
+    }
+  ]
+}

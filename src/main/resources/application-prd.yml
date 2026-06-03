@@ -1,0 +1,28 @@
+# =============================================================================
+# CLOUD-RUN profile
+# =============================================================================
+spring:
+  config:
+    activate:
+      on-profile: cloud-run
+
+server:
+  port: ${PORT:8080}
+  compression:
+    enabled: true
+    min-response-size: 1024
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 20
+
+lexicon:
+  compiler:
+    max-terms-per-request: 2000
+
+logging:
+  level:
+    root: WARN
+    com.db.macs3.ecomms.spectre: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5level [%thread] %logger{36} - %msg%n"

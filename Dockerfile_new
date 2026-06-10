@@ -1,0 +1,219 @@
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  Dockerfile — Lexicon Compile Service (all-in-one, single file)         ║
+# ║                                                                          ║
+# ║  THREE-STAGE BUILD                                                       ║
+# ║  ─────────────────                                                       ║
+# ║  Stage 1 │ maven-builder  │ Compiles the Spring Boot fat JAR            ║
+# ║  Stage 2 │ lib-extractor  │ Pulls 2 .so files from wolfi (apk)          ║
+# ║  Stage 3 │ runtime        │ Distroless final image (glibc, no CVEs)     ║
+# ║                                                                          ║
+# ║  Why three stages?                                                       ║
+# ║  • Stage 1 is discarded → no build tools in production image            ║
+# ║  • Stage 2 is discarded → wolfi's CVE packages never reach production   ║
+# ║  • Stage 3 only contains: JRE + JAR + 2 .so files = minimal CVE surface ║
+# ║                                                                          ║
+# ║  Build command:                                                          ║
+# ║    docker buildx build                                                   ║
+# ║      --platform linux/amd64                                             ║
+# ║      --tag lexicon-compile-service:latest                               ║
+# ║      .                                                                   ║
+# ║                                                                          ║
+# ║  Requires in build context:                                              ║
+# ║    pom.xml                                                               ║
+# ║    src/                                                                  ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  STAGE 1 — Maven build                                                  ║
+# ║                                                                          ║
+# ║  Compiles the Spring Boot fat JAR from source.                          ║
+# ║  This entire stage is DISCARDED — Maven, JDK, and source code never     ║
+# ║  appear in the final production image.                                   ║
+# ║                                                                          ║
+# ║  Layer-cache optimisation:                                               ║
+# ║    pom.xml is copied first and dependencies are resolved separately.     ║
+# ║    Maven only re-downloads dependencies when pom.xml changes, not on    ║
+# ║    every source code edit → much faster incremental builds.             ║
+# ║                                                                          ║
+# ║  Note: if your organisation restricts Docker Hub access, replace        ║
+# ║  'maven:3.9-eclipse-temurin-21' with your internal mirror image.        ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+FROM maven:3.9-eclipse-temurin-21 AS maven-builder
+
+WORKDIR /build
+
+# ── Copy pom.xml first and resolve all dependencies ───────────────────────
+# This layer is cached independently of source changes.
+# Dependencies are only re-downloaded when pom.xml is modified.
+COPY pom.xml ./
+RUN mvn dependency:go-offline \
+      --no-transfer-progress \
+      --quiet
+
+# ── Copy source and build the fat JAR ────────────────────────────────────
+COPY src ./src
+RUN mvn package \
+      --no-transfer-progress \
+      -DskipTests \
+      -Dmaven.test.skip=true
+
+# ── Rename to a fixed filename so the runtime COPY is unambiguous ─────────
+# Spring Boot produces: lexicon-compile-service-1.0.0-SNAPSHOT.jar
+# We rename to app.jar so Stage 3 has a deterministic path to copy from.
+RUN cp target/lexicon-compile-service-*.jar target/app.jar && \
+    echo "JAR built successfully:" && \
+    ls -lh target/app.jar
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  STAGE 2 — Native library extractor (wolfi)                             ║
+# ║                                                                          ║
+# ║  Uses 21-wolfi with apk (available in your org) to:                     ║
+# ║    a) Patch ALL CVEs in wolfi packages with 'apk upgrade'               ║
+# ║    b) Install the 2 C libraries Hyperscan needs at runtime              ║
+# ║    c) Extract the actual ELF binary files (not symlinks)                ║
+# ║    d) Verify both files are real ELF64 shared objects                   ║
+# ║                                                                          ║
+# ║  Only 2 files cross the boundary into Stage 3:                          ║
+# ║    libstdc++.so.6  → C++ standard library (used by Hyperscan .so)       ║
+# ║    libgomp.so.1    → GNU OpenMP (used by Hyperscan for parallel scan)   ║
+# ║                                                                          ║
+# ║  NOTHING ELSE from wolfi enters the final image.                        ║
+# ║  This stage is completely DISCARDED after the build.                    ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+FROM 21-wolfi AS lib-extractor
+
+RUN apk upgrade --no-cache && \
+    apk add --no-cache \
+        libstdc++ \
+        libgomp && \
+    \
+    mkdir -p /extracted && \
+    \
+    # -L flag: dereference symlinks so we copy the actual ELF binary,
+    # not a symlink that would point to a non-existent path in Stage 3.
+    cp -L /usr/lib/libstdc++.so.6 /extracted/ && \
+    cp -L /usr/lib/libgomp.so.1   /extracted/ && \
+    \
+    # Hard verification before crossing the stage boundary.
+    # If either file is not a real ELF64 shared object, the build fails here
+    # rather than silently shipping a broken image.
+    file /extracted/libstdc++.so.6 | grep -q "ELF 64-bit LSB shared object" && \
+    echo "libstdc++.so.6 verified OK" && \
+    file /extracted/libgomp.so.1   | grep -q "ELF 64-bit LSB shared object" && \
+    echo "libgomp.so.1   verified OK"
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  STAGE 3 — Final runtime image (distroless)                             ║
+# ║                                                                          ║
+# ║  Base: gcr.io/distroless/java21-debian12:nonroot                        ║
+# ║    • Debian 12 Bookworm → glibc 2.36 ✓ (required by Hyperscan .so)     ║
+# ║    • Java 21 JRE included                                               ║
+# ║    • NO shell (/bin/sh does not exist)                                  ║
+# ║    • NO package manager (no apk, no apt-get)                            ║
+# ║    • NO curl, wget, or any utilities                                     ║
+# ║    • Runs as non-root UID 65532 by default                              ║
+# ║    • Google patches this image weekly → minimal CVE surface             ║
+# ║                                                                          ║
+# ║  This stage receives from previous stages:                              ║
+# ║    FROM maven-builder : target/app.jar          → /app/app.jar          ║
+# ║    FROM lib-extractor : libstdc++.so.6          → /app/native-libs/     ║
+# ║    FROM lib-extractor : libgomp.so.1            → /app/native-libs/     ║
+# ║                                                                          ║
+# ║  Total final image contains:                                             ║
+# ║    Debian 12 base + Java 21 JRE + app.jar + 2 .so files                 ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+FROM gcr.io/distroless/java21-debian12:nonroot AS runtime
+
+# ── Copy the 2 native libraries from the wolfi extractor stage ────────────
+# /app/native-libs is a dedicated path — not mixed into system library dirs.
+# LD_LIBRARY_PATH (set below) tells the Linux dynamic linker to look here
+# when Hyperscan's .so calls dlopen() and needs libstdc++ and libgomp.
+COPY --from=lib-extractor /extracted/libstdc++.so.6 /app/native-libs/libstdc++.so.6
+COPY --from=lib-extractor /extracted/libgomp.so.1   /app/native-libs/libgomp.so.1
+
+# ── Copy the compiled application JAR from the Maven build stage ──────────
+# distroless:nonroot runs as UID 65532 — files copied here are readable
+# by that user without needing a separate chown command.
+COPY --from=maven-builder /build/target/app.jar /app/app.jar
+
+# ── Port ──────────────────────────────────────────────────────────────────
+EXPOSE 8080
+
+# ── LD_LIBRARY_PATH ───────────────────────────────────────────────────────
+# Tells the Linux dynamic linker where to find libstdc++.so.6 and
+# libgomp.so.1 at runtime.
+#
+# How this works at startup:
+#   1. Java starts, Spring Boot loads HyperscanCompiler bean
+#   2. JavaCPP Loader finds libhyperscan.so INSIDE the fat JAR
+#   3. Loader extracts libhyperscan.so to java.io.tmpdir (/tmp)
+#   4. JVM calls System.load("/tmp/libhyperscan.so")
+#   5. Linux dynamic linker resolves libhyperscan.so's own dependencies:
+#        - libstdc++.so.6  → found in LD_LIBRARY_PATH → /app/native-libs/
+#        - libgomp.so.1    → found in LD_LIBRARY_PATH → /app/native-libs/
+#   6. Hyperscan is ready. selfTest() passes.
+ENV LD_LIBRARY_PATH=/app/native-libs
+
+# ── JVM options ───────────────────────────────────────────────────────────
+# All set via JAVA_TOOL_OPTIONS (applied automatically to every java command).
+#
+#   -XX:+UseContainerSupport      JVM reads container CPU/memory limits
+#                                  rather than host machine limits.
+#                                  Prevents OOM on Cloud Run.
+#
+#   -XX:MaxRAMPercentage=75.0     Use 75% of container memory for heap.
+#                                  Leaves 25% for Hyperscan native heap,
+#                                  JVM metaspace, and thread stacks.
+#
+#   --enable-preview              Required for Spring Boot 4 / Java 21
+#                                  sealed types and preview features.
+#
+#   -Djava.io.tmpdir=/tmp         Cloud Run containers have a read-only
+#                                  filesystem except /tmp.
+#                                  JavaCPP Loader must write to /tmp.
+#
+#   -Djava.library.path=...       Secondary hint for the JVM's own native
+#                                  library resolution (belt + suspenders
+#                                  alongside LD_LIBRARY_PATH).
+ENV JAVA_TOOL_OPTIONS="\
+  -XX:+UseContainerSupport \
+  -XX:MaxRAMPercentage=75.0 \
+  --enable-preview \
+  -Djava.io.tmpdir=/tmp \
+  -Djava.library.path=/app/native-libs"
+
+# ── OCI image labels for traceability ────────────────────────────────────
+LABEL org.opencontainers.image.title="lexicon-compile-service"
+LABEL org.opencontainers.image.description="Lexicon Compile Service — Spring Boot 4 / Java 21 / Hyperscan"
+LABEL org.opencontainers.image.base.name="gcr.io/distroless/java21-debian12:nonroot"
+LABEL com.org.spectre.hyperscan.native-libs="libstdc++.so.6,libgomp.so.1"
+LABEL com.org.spectre.hyperscan.lib-source="21-wolfi (apk upgraded)"
+
+# ── Entry point ───────────────────────────────────────────────────────────
+# MUST be exec-form JSON array — distroless has NO /bin/sh.
+# Shell form ("java -jar ...") requires a shell interpreter which does not
+# exist in distroless. Using shell form here causes a silent startup failure.
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+
+# ── Health check ──────────────────────────────────────────────────────────
+# HEALTHCHECK instruction is intentionally omitted.
+# distroless has no curl, wget, or shell to run a health check command.
+# Configure health probes in Cloud Run instead (cloud-run-service.yaml):
+#
+#   startupProbe:
+#     httpGet:
+#       path: /actuator/health/liveness
+#       port: 8080
+#     initialDelaySeconds: 10   # JavaCPP extracts .so on first use
+#     periodSeconds: 5
+#     failureThreshold: 12      # 60s total window for cold start
+#
+#   livenessProbe:
+#     httpGet:
+#       path: /actuator/health/liveness
+#       port: 8080
+#     periodSeconds: 10
+#     failureThreshold: 3

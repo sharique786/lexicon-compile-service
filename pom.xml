@@ -48,6 +48,7 @@
         <hyperscan.version>5.4.0-2.0.0</hyperscan.version>
         <icu4j.version>73.2</icu4j.version>
         <opencsv.version>5.9</opencsv.version>
+        <tika.version>3.3.1</tika.version>
 
         <!-- Plugin versions -->
         <maven-checkstyle-plugin.version>3.3.1</maven-checkstyle-plugin.version>
@@ -115,6 +116,18 @@
             <groupId>com.opencsv</groupId>
             <artifactId>opencsv</artifactId>
             <version>${opencsv.version}</version>
+        </dependency>
+
+        <!-- Optional: Apache Tika language detection for language-level disambiguation -->
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+            <version>${tika.version}</version> <!-- Match your project's Tika version -->
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-langdetect-optimaize</artifactId>
+            <version>${tika.version}</version>
         </dependency>
 
         <!-- ── Jackson ───────────────────────────────────────────────────── -->

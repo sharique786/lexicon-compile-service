@@ -27,12 +27,22 @@ import java.util.regex.Pattern;
  *
  * <h2>Pattern examples</h2>
  * <pre>
- * (manipulate*) NEAR{5} ((price) OR (spread) OR (stock))
+ * (manipulate*) NEAR{5} ((price) OR (spread) OR (stock))   [Latin — word-based gap]
  *   → (?:manipulate\S*(?:\s+\S+){0,5}\s+(?:price|spread|stock)
  *       |(?:price|spread|stock)(?:\s+\S+){0,5}\s+manipulate\S*)
  *
- * don't FOLLOWEDBY{3} compliance
+ * don't FOLLOWEDBY{3} compliance                            [Latin — word-based gap]
  *   → don't(?:\s+\S+){0,3}\s+compliance
+ *
+ * 내부자 NEAR{3} 거래    (Korean insider NEAR trading)      [Hangul — char-based gap]
+ *   → (?:내부자[\s\S]{0,18}거래|거래[\s\S]{0,18}내부자)     [N = 3×5+3 = 18]
+ *   Matches both: "내부자 거래" (with space) and "내부자거래" (no space, informal)
+ *
+ * 内幕 NEAR{2} 交易      (Chinese insider NEAR trading)    [CJK — char-based gap]
+ *   → (?:内幕[\s\S]{0,8}交易|交易[\s\S]{0,8}内幕)           [N = 2×3+2 = 8]
+ *
+ * السعر NEAR{2} التلاعب (Arabic price NEAR manipulation)  [Arabic — word-based+UCP]
+ *   → (?:السعر(?:\s+\S+){0,2}\s+التلاعب|التلاعب(?:\s+\S+){0,2}\s+السعر)
  *
  * price AND spread AND NOT noise
  *   → (?=.*price)(?=.*spread)(?!.*noise).*  (with DOTALL flag)
@@ -265,27 +275,71 @@ public final class TermSyntaxTranslator {
     }
 
     /**
-     * NEAR{n}  → {@code (?:LEFT(?:\s+\S+){0,n}\s+RIGHT|RIGHT(?:\s+\S+){0,n}\s+LEFT)}
-     * FOLLOWEDBY{n} → {@code LEFT(?:\s+\S+){0,n}\s+RIGHT}
+     * NEAR{n}       → language-aware bidirectional proximity pattern.
+     * FOLLOWEDBY{n} → language-aware directional proximity pattern.
      *
-     * <p>The gap pattern {@code (?:\s+\S+){0,n}\s+} matches 0 to n intervening words
-     * separated by whitespace. Works for space-delimited languages.
-     * For character-based languages (Chinese, Japanese) NEAR is approximate.
+     * <h3>Gap strategy (delegated to {@link MultiLanguagePatternBuilder})</h3>
+     * <ul>
+     *   <li><b>Word-based</b> {@code (?:\\s+\\S+){0,n}\\s+} — Latin, Arabic, Hebrew
+     *       (space-delimited scripts). Arabic/Hebrew also get UTF8+UCP so that
+     *       {@code \\S} matches their Unicode characters.</li>
+     *   <li><b>Char-based</b> {@code [\\s\\S]{0,N}} where N = n × avgCharsPerWord —
+     *       CJK (Chinese/Japanese), Korean (Hangul), Thai, and any mixed-script pair
+     *       containing a space-free script. Handles both spaced and non-spaced forms
+     *       (e.g. formal vs. informal Korean writing without spaces).</li>
+     * </ul>
+     *
+     * <h3>RTL note (Arabic / Hebrew)</h3>
+     * <p>Both scripts are stored in Unicode <em>logical</em> order (the typing/reading
+     * order). The regex engine operates on logical order, so FOLLOWEDBY(A, B)
+     * correctly matches when A precedes B in the stored byte sequence.
+     * A warning is logged for mixed RTL+LTR FOLLOWEDBY terms.
      */
     private String translateProximity(ProximityMatch prox, ParseContext ctx) {
         String leftPat  = parseExpression(prox.left(),  ctx);
         String rightPat = parseExpression(prox.right(), ctx);
         int    n        = prox.distance();
-        // Gap between the two terms: 0 to n intervening words
-        String gap = "(?:\\s+\\S+){0," + n + "}\\s+";
+
+        // Mark proximity op → ParseContext.computeFlags() adds HS_FLAG_DOTALL
+        // so the gap can cross newlines in multi-line email / chat messages.
+        ctx.setHasProximityOp();
 
         if (prox.bidirectional()) {
-            // NEAR: A then B, or B then A
-            return "(?:" + leftPat + gap + rightPat
-                    + "|" + rightPat + gap + leftPat + ")";
+            // NEAR{n}: A then B, OR B then A — language-aware gap
+            MultiLanguagePatternBuilder.BuildResult r =
+                    MultiLanguagePatternBuilder.buildNear(leftPat, rightPat, n);
+            propagateProximityFlags(r, ctx);
+            log.debug("NEAR{{}} built: script={} pattern={}", n, r.scriptType(), r.pattern());
+            return r.pattern();
         } else {
-            // FOLLOWEDBY: A then B only (directional)
-            return leftPat + gap + rightPat;
+            // FOLLOWEDBY{n}: A then B only — language-aware gap, directional
+            MultiLanguagePatternBuilder.BuildResult r =
+                    MultiLanguagePatternBuilder.buildFollowedBy(leftPat, rightPat, n);
+            propagateProximityFlags(r, ctx);
+            if (r.hasWarning()) {
+                log.warn("FOLLOWEDBY mixed RTL+LTR in '{}{}{}{}{}': {}",
+                        prox.left(), " FOLLOWEDBY{", n, "} ", prox.right(), r.warning());
+            }
+            log.debug("FOLLOWEDBY{{}} built: script={} pattern={}", n, r.scriptType(), r.pattern());
+            return r.pattern();
+        }
+    }
+
+    /**
+     * Propagates script-derived flag recommendations from a
+     * {@link MultiLanguagePatternBuilder.BuildResult} into the {@link ParseContext}.
+     *
+     * <p>If the proximity script requires UTF8+UCP (Arabic, Hebrew, CJK, Korean,
+     * Thai, or any mixed combination involving those scripts) and those flags were
+     * not already accumulated by {@link #translateLeaf}, this call ensures they are
+     * included in the final {@link ParseContext#computeFlags()} bitmask.
+     *
+     * <p>Calling {@code setNeedsUtf8()} is idempotent — safe to call multiple times.
+     */
+    private static void propagateProximityFlags(
+            MultiLanguagePatternBuilder.BuildResult r, ParseContext ctx) {
+        if ((r.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
+            ctx.setNeedsUtf8();
         }
     }
 

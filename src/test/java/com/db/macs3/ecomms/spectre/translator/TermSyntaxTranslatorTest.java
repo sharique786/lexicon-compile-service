@@ -1,9 +1,13 @@
 package com.db.macs3.ecomms.spectre.translator;
 
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 
@@ -534,5 +538,229 @@ class TermSyntaxTranslatorTest {
         var r = translator.translate(input);
         assertThat(r.isSuccess()).isTrue();
         assertThat(pattern(r)).contains(expectedFragment);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // NEAR / FOLLOWEDBY — multi-language gap strategy (new tests)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    @Test @Order(200)
+    @DisplayName("NEAR: DOTALL flag set for all proximity operators (multi-line messages)")
+    void dotallSetForNear() {
+        // Previously DOTALL was only set for AND/NOT; proximity operators also need it
+        // so gaps can cross newline boundaries in email bodies.
+        var r = translator.translate("tip NEAR{3} trade");
+        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(ParseContext.HS_FLAG_DOTALL);
+    }
+
+    @Test @Order(201)
+    @DisplayName("FOLLOWEDBY: DOTALL flag set (multi-line messages)")
+    void dotallSetForFollowedBy() {
+        var r = translator.translate("buy FOLLOWEDBY{2} shares");
+        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(ParseContext.HS_FLAG_DOTALL);
+    }
+
+    @Test @Order(202)
+    @DisplayName("[KO] NEAR: 내부자 NEAR{3} 거래 → char-based gap [\\s\\S]{0,18}")
+    void koreanNear_charBasedGap() {
+        var r = translator.translate("내부자 NEAR{3} 거래");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        // Char-based gap (not word-based) — no \\s+\\S+ requirement
+        assertThat(p).contains("[\\s\\S]");
+        assertThat(p).doesNotContain("(?:\\s+\\S+)");
+        // Bidirectional: both orderings
+        assertThat(p).contains("내부자");
+        assertThat(p).contains("거래");
+        // UTF8+UCP flags must be present for Korean
+        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
+        assertThat(flags(r) & ParseContext.HS_FLAG_UCP).isEqualTo(ParseContext.HS_FLAG_UCP);
+    }
+
+    @Test @Order(203)
+    @DisplayName("[KO] NEAR pattern matches Korean without space (chat style)")
+    void koreanNear_matchesNoSpaceText() {
+        var r = translator.translate("내부자 NEAR{3} 거래");
+        String p = pattern(r);
+        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("내부자거래혐의").find())
+                .as("Korean no-space 내부자거래 must match").isTrue();
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("내부자 거래 혐의").find())
+                .as("Korean spaced 내부자 거래 must also match").isTrue();
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("거래 내부자 정보").find())
+                .as("Reversed order must match (NEAR is bidirectional)").isTrue();
+    }
+
+    @Test @Order(204)
+    @DisplayName("[KO] FOLLOWEDBY: 내부자 FOLLOWEDBY{2} 거래 → char-based, directional")
+    void koreanFollowedBy_charBasedDirectional() {
+        var r = translator.translate("내부자 FOLLOWEDBY{2} 거래");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        assertThat(p).contains("[\\s\\S]");
+        // Directional: 거래 appears exactly once
+        assertThat(p.indexOf("거래")).isEqualTo(p.lastIndexOf("거래"));
+
+        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("내부자거래").find()).isTrue();
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("거래 내부자").find())
+                .as("Reversed: FOLLOWEDBY must NOT match reverse order").isFalse();
+    }
+
+    @Test @Order(205)
+    @DisplayName("[ZH] NEAR: 内幕 NEAR{2} 交易 → char-based gap (Chinese no spaces)")
+    void chineseNear_charBasedGap() {
+        var r = translator.translate("内幕 NEAR{2} 交易");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        assertThat(p).contains("[\\s\\S]");
+        assertThat(p).contains("内幕").contains("交易");
+        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
+
+        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("内幕交易").find())
+                .as("Chinese no-space 内幕交易 must match").isTrue();
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("内幕的交易").find())
+                .as("Chinese with particle 的 must also match").isTrue();
+    }
+
+    @Test @Order(206)
+    @DisplayName("[ZH] FOLLOWEDBY: 内幕 FOLLOWEDBY{2} 交易 → char-based, directional")
+    void chineseFollowedBy_directional() {
+        var r = translator.translate("内幕 FOLLOWEDBY{2} 交易");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        assertThat(p).contains("[\\s\\S]");
+        // Directional: 交易 appears exactly once
+        assertThat(p.indexOf("交易")).isEqualTo(p.lastIndexOf("交易"));
+
+        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("内幕交易").find()).isTrue();
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("交易内幕").find())
+                .as("Reversed order must not match FOLLOWEDBY").isFalse();
+    }
+
+    @Test @Order(207)
+    @DisplayName("[JA] NEAR: インサイダー NEAR{3} 取引 → char-based (kana+kanji mix)")
+    void japaneseNear_charBasedGap() {
+        var r = translator.translate("インサイダー NEAR{3} 取引");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        assertThat(p).contains("[\\s\\S]");
+        assertThat(p).contains("インサイダー").contains("取引");
+
+        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("インサイダー取引が発覚").find())
+                .as("Japanese no-space インサイダー取引 must match").isTrue();
+    }
+
+    @Test @Order(208)
+    @DisplayName("[AR] NEAR: السعر NEAR{2} التلاعب → word-based gap + UTF8+UCP")
+    void arabicNear_wordBasedWithUcp() {
+        var r = translator.translate("السعر NEAR{2} التلاعب");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        // Arabic is space-delimited → word-based gap (\\s+\\S+)
+        assertThat(p).contains("(?:\\s+\\S+)");
+        assertThat(p).contains("السعر").contains("التلاعب");
+        // Must have UTF8+UCP for Arabic \S to match Arabic characters
+        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
+        assertThat(flags(r) & ParseContext.HS_FLAG_UCP).isEqualTo(ParseContext.HS_FLAG_UCP);
+
+        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("ارتفاع السعر بسبب التلاعب").find())
+                .as("Arabic forward order must match").isTrue();
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("التلاعب في السعر").find())
+                .as("Arabic reverse order must match (NEAR is bidirectional)").isTrue();
+    }
+
+    @Test @Order(209)
+    @DisplayName("[AR] FOLLOWEDBY: معلومات FOLLOWEDBY{2} سرية → pure RTL, no warning")
+    void arabicFollowedBy_pureRtl_noWarning() {
+        var r = translator.translate("معلومات FOLLOWEDBY{2} سرية");
+        assertThat(r.isSuccess()).isTrue();
+        // Pure RTL FOLLOWEDBY: no warning expected
+        // (logical order = reading order for Arabic)
+        TranslationResult.Success s = (TranslationResult.Success) r;
+        // Pattern is directional: سرية appears exactly once
+        assertThat(pattern(r).indexOf("سرية")).isEqualTo(pattern(r).lastIndexOf("سرية"));
+    }
+
+    @Test @Order(210)
+    @DisplayName("[HE] NEAR: מידע NEAR{3} פנים → word-based + UTF8+UCP")
+    void hebrewNear_wordBasedWithUcp() {
+        var r = translator.translate("מידע NEAR{3} פנים");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        assertThat(p).contains("(?:\\s+\\S+)");
+        assertThat(p).contains("מידע").contains("פנים");
+        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
+
+        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("מסחר עם מידע פנים הוא בלתי חוקי").find())
+                .as("Hebrew NEAR must match").isTrue();
+    }
+
+    @Test @Order(211)
+    @DisplayName("[MIXED EN+KO] NEAR: insider NEAR{3} 내부자 → MIXED_CJK → char-based gap")
+    void mixedEnglishKoreanNear_charBasedGap() {
+        var r = translator.translate("insider NEAR{3} 내부자");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        // Korean presence forces char-based gap even though English is word-based
+        assertThat(p).contains("[\\s\\S]");
+        assertThat(p).contains("insider").contains("내부자");
+        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
+
+        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("he is an insider 내부자 suspect").find())
+                .as("Mixed EN+KO: insider before 내부자 must match").isTrue();
+        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("내부자 was the insider suspect").find())
+                .as("Mixed EN+KO: 내부자 before insider must match").isTrue();
+    }
+
+    @Test @Order(212)
+    @DisplayName("[MIXED EN+AR] NEAR: price NEAR{3} السعر → MIXED_RTL → word-based")
+    void mixedEnglishArabicNear_wordBasedGap() {
+        var r = translator.translate("price NEAR{3} السعر");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        // Arabic+Latin both use spaces → word-based gap still applies
+        assertThat(p).contains("(?:\\s+\\S+)");
+        assertThat(p).contains("price").contains("السعر");
+        // Must have UTF8+UCP for Arabic
+        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
+    }
+
+    @Test @Order(213)
+    @DisplayName("[MIXED EN+AR] FOLLOWEDBY with RTL operand → warning propagated in result")
+    void mixedFollowedBy_rtlWarning_patternStillGenerated() {
+        // Mixed RTL+LTR FOLLOWEDBY: a warning should be logged but pattern still generated
+        var r = translator.translate("insider FOLLOWEDBY{2} معلومات");
+        assertThat(r.isSuccess()).isTrue();
+        // Pattern must still be usable regardless of RTL warning
+        assertThat(pattern(r)).contains("insider").contains("معلومات");
+        // The 'معلومات' side appears once (directional)
+        assertThat(pattern(r).indexOf("معلومات")).isEqualTo(pattern(r).lastIndexOf("معلومات"));
+    }
+
+    @Test @Order(214)
+    @DisplayName("[NESTED] (price OR spread) NEAR{3} (Korean 거래) → char-based (CJK wins)")
+    void nestedGroupNear_withKoreanOperand_charBased() {
+        var r = translator.translate("(price OR spread) NEAR{3} 거래");
+        assertThat(r.isSuccess()).isTrue();
+        String p = pattern(r);
+        // Korean operand forces char-based gap
+        assertThat(p).contains("[\\s\\S]");
+        assertThat(p).contains("(?:price|spread)");
+        assertThat(p).contains("거래");
     }
 }

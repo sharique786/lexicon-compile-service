@@ -8,36 +8,48 @@ import java.util.List;
  *
  * <p>Accumulates flags and metadata discovered during parsing:
  * <ul>
- *   <li>{@code hasAndOp}  — set when AND/AND NOT/NOT is found → needs HS_FLAG_DOTALL</li>
- *   <li>{@code needsUtf8} — set when any non-ASCII char is found → needs HS_FLAG_UTF8|UCP</li>
- *   <li>{@code andOperands} — individual AND operand patterns for post-filter use</li>
+ *   <li>{@code hasAndOp}       — set when AND/AND NOT/NOT is found → needs HS_FLAG_DOTALL</li>
+ *   <li>{@code hasProximityOp} — set when NEAR/FOLLOWEDBY is found → needs HS_FLAG_DOTALL
+ *       (multi-line messages: gap must cross newlines)</li>
+ *   <li>{@code needsUtf8}      — set when any non-ASCII char is found → needs HS_FLAG_UTF8|UCP</li>
+ *   <li>{@code andOperands}    — individual AND operand patterns for post-filter use</li>
  * </ul>
  */
 public class ParseContext {
 
     /** HS_FLAG_CASELESS (1) — always applied. */
     public static final int HS_FLAG_CASELESS = 1;
-    /** HS_FLAG_DOTALL (2) — dot matches newlines; needed for AND/NOT lookaheads. */
+    /** HS_FLAG_DOTALL (2) — dot matches newlines; needed for AND/NOT and NEAR/FOLLOWEDBY gaps. */
     public static final int HS_FLAG_DOTALL   = 2;
     /** HS_FLAG_UTF8 (32) — treat pattern as UTF-8; needed for non-ASCII content. */
     public static final int HS_FLAG_UTF8     = 32;
     /** HS_FLAG_UCP (64) — use Unicode character properties; applied alongside UTF8. */
     public static final int HS_FLAG_UCP      = 64;
 
-    private boolean hasAndOp  = false;
-    private boolean needsUtf8 = false;
+    private boolean hasAndOp       = false;
+    /** True when NEAR{n} or FOLLOWEDBY{n} was encountered in this expression. */
+    private boolean hasProximityOp = false;
+    private boolean needsUtf8      = false;
     private final List<String> andOperands = new ArrayList<>();
 
     /** Mark that an AND / AND NOT / NOT operator was encountered. */
-    void setHasAndOp()                    { this.hasAndOp  = true; }
+    void setHasAndOp()                    { this.hasAndOp       = true; }
+
+    /**
+     * Mark that a NEAR{n} or FOLLOWEDBY{n} operator was encountered.
+     * Ensures HS_FLAG_DOTALL is added so the gap pattern crosses newlines
+     * in multi-line email / chat messages.
+     */
+    void setHasProximityOp()              { this.hasProximityOp = true; }
 
     /** Mark that a non-ASCII character was encountered. */
-    void setNeedsUtf8()                   { this.needsUtf8 = true; }
+    void setNeedsUtf8()                   { this.needsUtf8      = true; }
 
     /** Record one AND operand pattern for post-filter use. */
     void addAndOperand(String op)         { andOperands.add(op); }
 
     boolean isHasAndOp()                  { return hasAndOp; }
+    boolean isHasProximityOp()            { return hasProximityOp; }
     boolean isNeedsUtf8()                 { return needsUtf8; }
 
     /** @return true when AND operator was used (caller should apply post-filter). */
@@ -51,15 +63,17 @@ public class ParseContext {
      *
      * <ul>
      *   <li>CASELESS (1)  — always</li>
-     *   <li>DOTALL   (2)  — if AND / NOT used</li>
+     *   <li>DOTALL   (2)  — if AND/NOT used, OR if NEAR/FOLLOWEDBY used
+     *       (gap must span line breaks in multi-line messages)</li>
      *   <li>UTF8    (32)  — if non-ASCII present</li>
-     *   <li>UCP     (64)  — alongside UTF8</li>
+     *   <li>UCP     (64)  — alongside UTF8 (makes \\s/\\S honour Unicode,
+     *       critical for Arabic, Korean, CJK, Hebrew)</li>
      * </ul>
      */
     int computeFlags() {
         int flags = HS_FLAG_CASELESS;
-        if (hasAndOp)  { flags |= HS_FLAG_DOTALL; }
-        if (needsUtf8) { flags |= HS_FLAG_UTF8 | HS_FLAG_UCP; }
+        if (hasAndOp || hasProximityOp) { flags |= HS_FLAG_DOTALL; }
+        if (needsUtf8)                  { flags |= HS_FLAG_UTF8 | HS_FLAG_UCP; }
         return flags;
     }
 }

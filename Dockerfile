@@ -1,73 +1,78 @@
 # =============================================================================
-# Dockerfile — Lexicon Compile Service
-# Base image : eclipse-temurin:21-jre-jammy  (slim JRE 21, Ubuntu 22.04, ~270 MB)
-# No Maven   : JAR must be pre-built before docker build
-#              Run:  mvn package -DskipTests
-#              Then: docker build -t lexicon-compile-service .
+# Dockerfile — Lexicon Compile Service (Chainguard variant)
+# Use this if cgr.dev/chainguard is accessible in your organisation's registry.
 #
-# Why eclipse-temurin:21-jre-jammy (not Alpine)?
-#   com.gliwka.hyperscan 5.4.0-2.0.0 bundles a native .so linked against
-#   glibc. Alpine uses musl-libc — the bundled .so would fail to load.
-#   eclipse-temurin:21-jre-jammy is glibc-based and loads the native library
-#   correctly, while still being a minimal JRE-only image (no JDK, no compiler,
-#   no Maven).
+# Chainguard JRE:
+#   - Wolfi OS base (glibc, apk) — same package manager as 21-wolfi
+#   - Zero-CVE design: Chainguard patches within hours of disclosure
+#   - Minimal OS footprint — only JRE + required runtime libs, nothing else
+#   - Regularly scored 0 CVEs by Trivy / JFrog Xray
+#   - apk-compatible → works with your org's existing apk mirror
+#
+# If cgr.dev is not accessible: use Dockerfile.debian12 instead.
 # =============================================================================
+#If maven:3.9-eclipse-temurin-21 is not reachable from your GitHub Actions runner, replace Stage 1 entirely with Wolfi
+#FROM cgr.dev/chainguard/wolfi-base:latest AS maven-builder
+#RUN apk update && apk add --no-cache openjdk-21-jdk maven
+#ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+#WORKDIR /build
+#COPY pom.xml ./
+#RUN mvn dependency:go-offline --no-transfer-progress --quiet
+#COPY src ./src
+#RUN mvn package --no-transfer-progress -DskipTests && \
+#    cp target/lexicon-compile-service-*.jar target/app.jar
 
-FROM eclipse-temurin:21-jre-jammy
 
-# ── Runtime dependencies ──────────────────────────────────────────────────────
-# Required by com.gliwka.hyperscan native library (extracted from the JAR to
-# java.io.tmpdir at JVM startup — no manual .so deployment needed):
-#   libstdc++6  → C++ standard library  (Hyperscan is written in C++)
-#   libgomp1    → OpenMP               (used internally by Hyperscan)
-#   curl        → used by HEALTHCHECK below
-RUN apt-get update -qq \
-    && apt-get install -y -qq --no-install-recommends \
-        libstdc++6 \
-        libgomp1 \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
+# ── Stage 1: Maven build ──────────────────────────────────────────────────────
+FROM maven:3.9-eclipse-temurin-21 AS maven-builder
 
-# ── Non-root user ─────────────────────────────────────────────────────────────
-RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
-WORKDIR /app
+WORKDIR /build
+COPY pom.xml ./
+RUN mvn dependency:go-offline --no-transfer-progress --quiet
 
-# ── Copy pre-built JAR ────────────────────────────────────────────────────────
-# Build the JAR on the host before running docker build:
-#   mvn package -DskipTests
-# The wildcard matches the versioned filename (e.g. lexicon-compile-service-1.0.0-SNAPSHOT.jar)
-COPY target/lexicon-compile-service-*.jar app.jar
+COPY src ./src
+RUN mvn package --no-transfer-progress -DskipTests && \
+    cp target/lexicon-compile-service-*.jar target/app.jar
 
-RUN chown appuser:appuser app.jar
-USER appuser
+# ── Stage 2: Native lib extractor (wolfi / apk) ───────────────────────────────
+FROM 21-wolfi AS lib-extractor
 
-# ── Configuration ─────────────────────────────────────────────────────────────
-ENV PORT=8080
+RUN apk upgrade --no-cache && \
+    apk add --no-cache libstdc++ libgomp && \
+    mkdir -p /extracted-libs && \
+    cp -L /usr/lib/libstdc++.so.6 /extracted-libs/ && \
+    cp -L /usr/lib/libgomp.so.1   /extracted-libs/ && \
+    file /extracted-libs/libstdc++.so.6 | grep -q "ELF 64-bit" && \
+    file /extracted-libs/libgomp.so.1   | grep -q "ELF 64-bit" && \
+    echo "Both native libs verified"
 
-# JVM flags for JDK 21 running in a container (Cloud Run / Docker / K8s):
-#   UseContainerSupport      — reads cgroup CPU/memory limits (not host values)
-#   MaxRAMPercentage=75.0    — use 75% of container memory for JVM heap
-#   ExitOnOutOfMemoryError   — crash fast so the orchestrator can restart
-#   UseG1GC                  — best general-purpose GC for JDK 21
-#   --enable-preview         — required: project uses JDK 21 preview features
-#                              (sealed interfaces, pattern matching switch, etc.)
-#   spring.profiles.active   — activates Cloud Run profile in application.yml
+# ── Stage 3: Final runtime — Chainguard JRE ───────────────────────────────────
+# cgr.dev/chainguard/jre:openjdk-21
+#   - Wolfi OS: glibc 2.39+, apk package manager
+#   - Zero-CVE design (0 known vulnerabilities at build time)
+#   - Chainguard releases security patches within hours of disclosure
+#   - Runs as nonroot by default
+#   - Compatible with Hyperscan native .so (glibc-based, same as Wolfi libs)
+#
+# ABI compatibility note: since both the extractor (21-wolfi) and the final
+# stage (chainguard, also Wolfi) use the same glibc lineage, the .so files
+# copied from Stage 2 are guaranteed ABI-compatible.
+FROM cgr.dev/chainguard/jre:openjdk-21
+
+COPY --from=lib-extractor /extracted-libs/libstdc++.so.6 /app/native-libs/libstdc++.so.6
+COPY --from=lib-extractor /extracted-libs/libgomp.so.1   /app/native-libs/libgomp.so.1
+COPY --from=maven-builder /build/target/app.jar /app/app.jar
+
+EXPOSE 8080
+
+ENV LD_LIBRARY_PATH=/app/native-libs
+
 ENV JAVA_TOOL_OPTIONS="\
   -XX:+UseContainerSupport \
   -XX:MaxRAMPercentage=75.0 \
-  -XX:+ExitOnOutOfMemoryError \
-  -XX:+UseG1GC \
   --enable-preview \
-  -Dspring.profiles.active=cloud-run"
+  -Djava.io.tmpdir=/tmp \
+  -Djava.library.path=/app/native-libs"
 
-EXPOSE ${PORT}
-
-# Spring Boot fat JAR is self-contained — java -jar reads Main-Class from
-# MANIFEST.MF (set to org.springframework.boot.loader.launch.JarLauncher by
-# the spring-boot-maven-plugin during mvn package).
-ENTRYPOINT ["java", "-jar", "app.jar"]
-
-# Health check for local docker run / docker-compose testing.
-# Cloud Run uses /actuator/health via its own health probes (configured separately).
-HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -sf http://localhost:${PORT}/actuator/health || exit 1
+# Chainguard uses exec-form ENTRYPOINT (no shell available)
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

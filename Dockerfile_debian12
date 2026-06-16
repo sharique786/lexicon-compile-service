@@ -1,0 +1,85 @@
+# =============================================================================
+# Dockerfile — Lexicon Compile Service
+# FIX: Changed final stage from java21-debian13 (Trixie/testing, 4 unfixed CVEs)
+#      to java21-debian12 (Bookworm/stable, not affected by these CVEs).
+#
+# Why the CVEs appeared:
+#   deb://debian:trixie:libc6:2.41-12+deb13u3   → CVE-2026-5450 (Critical)
+#                                                 → CVE-2026-5435 (High)
+#   deb://debian:trixie:libexpat1:2.7.1-2        → CVE-2026-45186 (High)
+#                                                 → CVE-2026-41080 (High)
+#   All 4 CVEs are in Debian 13 "Trixie" (testing branch) packages.
+#   Debian 12 "Bookworm" ships libc6 2.36 and libexpat 2.5 — different
+#   versions not affected by these specific CVEs.
+#   "FIXED VERSIONS" was empty for all 4 → no patch in Trixie yet.
+#   The only fix is to stop using Trixie.
+#
+# Build:
+#   docker buildx build --platform linux/amd64 -t lexicon-compile-service:latest .
+# =============================================================================
+
+# ── Stage 1: Maven build ──────────────────────────────────────────────────────
+FROM maven:3.9-eclipse-temurin-21 AS maven-builder
+
+WORKDIR /build
+COPY pom.xml ./
+RUN mvn dependency:go-offline --no-transfer-progress --quiet
+
+COPY src ./src
+RUN mvn package --no-transfer-progress -DskipTests && \
+    cp target/lexicon-compile-service-*.jar target/app.jar
+
+# ── Stage 2: Native lib extractor (apk-based, glibc, Hyperscan runtime deps) ─
+# Uses 21-wolfi (apk available in your org) to extract the two .so files that
+# the Hyperscan native library requires at runtime.
+# This stage is DISCARDED after build — its CVEs never enter the final image.
+FROM 21-wolfi AS lib-extractor
+
+RUN apk upgrade --no-cache && \
+    apk add --no-cache libstdc++ libgomp && \
+    mkdir -p /extracted-libs && \
+    cp -L /usr/lib/libstdc++.so.6 /extracted-libs/ && \
+    cp -L /usr/lib/libgomp.so.1   /extracted-libs/ && \
+    file /extracted-libs/libstdc++.so.6 | grep -q "ELF 64-bit" && \
+    file /extracted-libs/libgomp.so.1   | grep -q "ELF 64-bit" && \
+    echo "Both native libs verified OK"
+
+# ── Stage 3: Final runtime image ──────────────────────────────────────────────
+# ✓ FIXED: changed debian13 → debian12
+#
+# gcr.io/distroless/java21-debian12:nonroot
+#   - Debian 12 Bookworm (stable, active security support)
+#   - libc6 2.36 — NOT affected by CVE-2026-5450 or CVE-2026-5435
+#   - libexpat 2.5 — NOT affected by CVE-2026-45186 or CVE-2026-41080
+#   - No shell, no apk/apt, no utilities — minimal CVE surface
+#   - Runs as UID 65532 (nonroot) — never runs as root
+#   - Google patches this image weekly
+FROM gcr.io/distroless/java21-debian12:nonroot
+
+# Hyperscan native .so dependencies (extracted from wolfi, not Trixie)
+COPY --from=lib-extractor /extracted-libs/libstdc++.so.6 /app/native-libs/libstdc++.so.6
+COPY --from=lib-extractor /extracted-libs/libgomp.so.1   /app/native-libs/libgomp.so.1
+
+# Application JAR
+COPY --from=maven-builder /build/target/app.jar /app/app.jar
+
+EXPOSE 8080
+
+# LD_LIBRARY_PATH: tells dlopen() where to find libstdc++ and libgomp
+# when Hyperscan's native .so is extracted to /tmp at startup.
+ENV LD_LIBRARY_PATH=/app/native-libs
+
+# JVM flags:
+#   -Djava.io.tmpdir=/tmp     Cloud Run read-only FS; JavaCPP extracts .so to /tmp
+#   -XX:+UseContainerSupport  JVM reads container memory limits correctly
+#   -XX:MaxRAMPercentage=75.0 Leave 25% for Hyperscan native heap
+#   --enable-preview          Spring Boot 4 / Java 21 preview features
+ENV JAVA_TOOL_OPTIONS="\
+  -XX:+UseContainerSupport \
+  -XX:MaxRAMPercentage=75.0 \
+  --enable-preview \
+  -Djava.io.tmpdir=/tmp \
+  -Djava.library.path=/app/native-libs"
+
+# distroless has NO /bin/sh — ENTRYPOINT must be exec-form JSON array
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

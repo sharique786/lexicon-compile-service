@@ -1,44 +1,18 @@
 package com.db.macs3.ecomms.spectre.model;
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  CompileRequest — inbound JSON (or parsed from CSV)
-// ═════════════════════════════════════════════════════════════════════════════
-
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Request body for {@code POST /api/lexicon/compile}.
- *
- * <p>Supports both JSON and CSV (via {@code POST /api/lexicon/compile/csv}).
- *
- * <p>JSON example:
- * <pre>
- * {
- *   "lexiconRuleName": "lexicon_research_1",
- *   "terms": [
- *     {
- *       "termId": "lexicon_research_1::1",
- *       "termDescription": "(manipulate*) NEAR{5} ((price) OR (spread) OR (stock))",
- *       "riskDriverName": "Research Based Front Running"
- *     }
- *   ]
- * }
- * </pre>
- *
- * <p>CSV example:
- * <pre>
- * Term ID, Term Description, Risk Driver Name
- * lexicon_research_1::1, (manipulate*) NEAR{5} ((price) OR (spread)), Research
- * </pre>
- */
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class CompileRequest {
 
     @NotBlank(message = "lexiconRuleName must not be blank")
@@ -83,22 +57,10 @@ public class CompileRequest {
             @JsonProperty("riskDriverName")
             String riskDriverName
 
-    ) {
-    }
+    ) {}
 
-    public String getLexiconRuleName() {
-        return lexiconRuleName;
-    }
-
-    public void setLexiconRuleName(String v) {
-        this.lexiconRuleName = v;
-    }
-
-    public List<TermInput> getTerms() {
-        return terms;
-    }
-
-    public void setTerms(List<TermInput> v) {
-        this.terms = v;
-    }
+    public String getLexiconRuleName()          { return lexiconRuleName; }
+    public void setLexiconRuleName(String v)    { this.lexiconRuleName = v; }
+    public List<TermInput> getTerms()           { return terms; }
+    public void setTerms(List<TermInput> v)     { this.terms = v; }
 }

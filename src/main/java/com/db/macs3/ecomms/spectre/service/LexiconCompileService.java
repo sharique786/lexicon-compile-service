@@ -101,8 +101,16 @@ public class LexiconCompileService {
 
     /**
      * Runs translate → validate for one term using JDK 21 pattern matching switch.
+     *
+     * <p>Public (not just used internally by {@link #compile}) so that
+     * {@code LexiconCompileBundleService} can reuse this exact pipeline for
+     * {@code termType="Standard"} terms in the {@code /compile/bundle}
+     * endpoint, guaranteeing identical translate/validate/result-building
+     * behaviour between {@code /compile} and {@code /compile/bundle} with
+     * zero duplicated logic. This is a pure visibility change — the method
+     * body and behaviour are unchanged.
      */
-    private TermCompilationResult compileTerm(CompileRequest.TermInput term) {
+    public TermCompilationResult compileTerm(CompileRequest.TermInput term) {
         TranslationResult translation;
         try {
             translation = translator.translate(term.termDescription());

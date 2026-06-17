@@ -9,8 +9,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.EnumSet;
-import java.util.Set;
+import java.util.List;
 
 /**
  * Validates Hyperscan PCRE patterns using the {@code com.gliwka.hyperscan} Java binding
@@ -140,6 +142,16 @@ public class HyperscanCompiler {
      * Converts an HS_FLAG_* bitmask to the {@link ExpressionFlag} EnumSet
      * required by {@link Expression}.
      *
+     * <p><b>Return type note:</b> this returns {@link EnumSet} specifically
+     * (not the wider {@link java.util.Set} interface) because every
+     * {@code Expression} constructor in {@code com.gliwka.hyperscan.wrapper}
+     * requires an {@code EnumSet<ExpressionFlag>} argument — Java's static
+     * type system does not implicitly narrow {@code Set} to {@code EnumSet}
+     * at the call site, even when the runtime object actually is an
+     * {@code EnumSet}. Declaring the narrower return type here lets
+     * {@link #validate} and {@link #compileCombinedDatabase} pass the result
+     * straight into {@code new Expression(...)} without a cast.
+     *
      * <p>Bitmask values mirror {@code hs_compile.h}:
      * <pre>
      *  1  = HS_FLAG_CASELESS
@@ -148,8 +160,12 @@ public class HyperscanCompiler {
      * 64  = HS_FLAG_UCP
      * </pre>
      * If the bitmask is 0 (no flags set), CASELESS is added as a safe default.
+     *
+     * <p>Public so {@code LexiconCompileBundleService} can build multi-pattern
+     * {@link Expression} lists for the combined-database endpoint using the
+     * exact same flag-conversion logic as the single-pattern {@link #validate} path.
      */
-    private EnumSet<ExpressionFlag> toExpressionFlags(int bitmask) {
+    public EnumSet<ExpressionFlag> toExpressionFlags(int bitmask) {
         EnumSet<ExpressionFlag> flags = EnumSet.noneOf(ExpressionFlag.class);
         if ((bitmask & HS_FLAG_CASELESS) != 0) {
             flags.add(ExpressionFlag.CASELESS);
@@ -213,5 +229,125 @@ public class HyperscanCompiler {
 
         public boolean isPass()   { return pass; }
         public boolean isFailed() { return !pass; }
+    }
+
+    // ── Combined multi-pattern database (for the /compile/bundle endpoint) ─────
+
+    /**
+     * Compiles a list of {@link Expression}s into a single combined Hyperscan
+     * database and serialises it to a byte array using {@link Database#save}.
+     *
+     * <h2>Why one combined database instead of one-per-term</h2>
+     * <p>{@link #validate} (used by {@code /compile}) creates one ephemeral
+     * single-pattern {@link Database} per term purely to check compile
+     * validity, then discards it. This method is different: it produces the
+     * one persistent multi-pattern database that the Lexicon Scan Engine
+     * loads via {@link Database#load} and scans against millions of messages
+     * with a single native call per message (Hyperscan's multi-pattern mode
+     * is what makes that fast — scanning with N separate single-pattern
+     * databases would be N times slower).
+     *
+     * <h2>Expression IDs</h2>
+     * <p>Each {@link Expression} passed in must already carry a unique
+     * {@code id} (set via the 3-arg {@code Expression(pattern, flags, id)}
+     * constructor). {@code com.gliwka.hyperscan.wrapper.Database} requires
+     * this — if any expression in the list has a null id while others don't,
+     * or if two expressions share the same id, the underlying library throws.
+     * The caller ({@code LexiconCompileBundleService}) assigns
+     * {@code id = index of the term in the original request's terms array},
+     * so a downstream consumer can always map a Hyperscan match id back to
+     * the term that produced it.
+     *
+     * <h2>What {@code save()} actually writes</h2>
+     * <p>{@link Database#save(java.io.OutputStream)} writes BOTH the
+     * expression metadata (id, pattern, flags for every expression) AND the
+     * platform-specific serialised native database into the same stream, in
+     * that order. The returned byte array is therefore fully self-contained —
+     * {@link Database#load(java.io.InputStream)} on the same bytes
+     * reconstructs an equivalent database with no separate metadata file
+     * needed. This is what becomes the single {@code .hdb} file in the zip.
+     *
+     * <h2>Platform portability caveat</h2>
+     * <p>The serialised bytes are <b>not portable across CPU architectures</b>
+     * with different instruction-set features (see Intel's Hyperscan
+     * documentation on {@code hs_serialize_database}). The database must be
+     * loaded on a platform compatible with the one it was compiled on.
+     *
+     * @param expressions PASS expressions to combine; must be non-empty and
+     *                    each must have a unique non-null id
+     * @return {@link CombinedCompileResult#success} with the serialised bytes,
+     *         or {@link CombinedCompileResult#failure} with the Hyperscan
+     *         error and (if identifiable) the id of the expression that
+     *         caused the failure
+     */
+    public CombinedCompileResult compileCombinedDatabase(List<Expression> expressions) {
+        if (expressions == null || expressions.isEmpty()) {
+            return CombinedCompileResult.failure(
+                    "No PASS expressions were supplied — nothing to compile into a combined database",
+                    null);
+        }
+
+        Database db = null;
+        try {
+            db = Database.compile(expressions);
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            db.save(baos);
+            byte[] bytes = baos.toByteArray();
+
+            log.info("Combined Hyperscan database compiled: {} expressions, {} bytes",
+                    expressions.size(), bytes.length);
+            return CombinedCompileResult.success(bytes, expressions.size());
+
+        } catch (CompileErrorException e) {
+            Integer failedId = e.getFailedExpression() != null
+                    ? e.getFailedExpression().getId()
+                    : null;
+            log.error("Combined database compile FAILED at expression id={}: {}",
+                    failedId, e.getMessage());
+            return CombinedCompileResult.failure(
+                    "Combined Hyperscan compile error: " + e.getMessage(), failedId);
+
+        } catch (IOException e) {
+            log.error("Failed to serialise combined database: {}", e.getMessage(), e);
+            return CombinedCompileResult.failure(
+                    "Database serialisation error: " + e.getMessage(), null);
+
+        } finally {
+            if (db != null) {
+                db.close();
+            }
+        }
+    }
+
+    /**
+     * Result of one {@link #compileCombinedDatabase} call.
+     *
+     * @param success            true when the combined database compiled and serialised cleanly
+     * @param databaseBytes      the {@code .hdb} file content (null on failure)
+     * @param databaseSizeBytes  {@code databaseBytes.length} (0 on failure)
+     * @param expressionCount    number of expressions included (0 on failure)
+     * @param failedExpressionId the id of the expression that broke compilation,
+     *                           when Hyperscan was able to identify it; null otherwise
+     *                           (always null when {@code success} is true)
+     * @param errorMessage       human-readable error; null when {@code success} is true
+     */
+    public record CombinedCompileResult(
+            boolean success,
+            byte[]  databaseBytes,
+            long    databaseSizeBytes,
+            int     expressionCount,
+            Integer failedExpressionId,
+            String  errorMessage
+    ) {
+        /** Factory: successful combined compile. */
+        public static CombinedCompileResult success(byte[] bytes, int expressionCount) {
+            return new CombinedCompileResult(true, bytes, bytes.length, expressionCount, null, null);
+        }
+
+        /** Factory: failed combined compile. */
+        public static CombinedCompileResult failure(String error, Integer failedExpressionId) {
+            return new CombinedCompileResult(false, null, 0, 0, failedExpressionId, error);
+        }
     }
 }

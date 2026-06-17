@@ -15,16 +15,16 @@ import java.util.List;
  *   <li>{@code andOperands}    — individual AND operand patterns for post-filter use</li>
  * </ul>
  */
-public class ParseContext {
+class ParseContext {
 
     /** HS_FLAG_CASELESS (1) — always applied. */
-    public static final int HS_FLAG_CASELESS = 1;
+    static final int HS_FLAG_CASELESS = 1;
     /** HS_FLAG_DOTALL (2) — dot matches newlines; needed for AND/NOT and NEAR/FOLLOWEDBY gaps. */
-    public static final int HS_FLAG_DOTALL   = 2;
+    static final int HS_FLAG_DOTALL   = 2;
     /** HS_FLAG_UTF8 (32) — treat pattern as UTF-8; needed for non-ASCII content. */
-    public static final int HS_FLAG_UTF8     = 32;
+    static final int HS_FLAG_UTF8     = 32;
     /** HS_FLAG_UCP (64) — use Unicode character properties; applied alongside UTF8. */
-    public static final int HS_FLAG_UCP      = 64;
+    static final int HS_FLAG_UCP      = 64;
 
     private boolean hasAndOp       = false;
     /** True when NEAR{n} or FOLLOWEDBY{n} was encountered in this expression. */

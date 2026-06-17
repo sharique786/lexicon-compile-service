@@ -1,9 +1,9 @@
 package com.db.macs3.ecomms.spectre.util;
 
 import com.db.macs3.ecomms.spectre.model.ScriptType;
+import org.apache.tika.langdetect.optimaize.OptimaizeLangDetector;
 import org.apache.tika.language.detect.LanguageDetector;
 import org.apache.tika.language.detect.LanguageResult;
-import org.apache.tika.langdetect.optimaize.OptimaizeLangDetector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -1,78 +1,92 @@
 # =============================================================================
-# Dockerfile — Lexicon Compile Service (Chainguard variant)
-# Use this if cgr.dev/chainguard is accessible in your organisation's registry.
+# Dockerfile — Lexicon Compile Service
+# Spring Boot 4.0.6 | JDK 21 | com.gliwka.hyperscan 5.4.0-2.0.0
 #
-# Chainguard JRE:
-#   - Wolfi OS base (glibc, apk) — same package manager as 21-wolfi
-#   - Zero-CVE design: Chainguard patches within hours of disclosure
-#   - Minimal OS footprint — only JRE + required runtime libs, nothing else
-#   - Regularly scored 0 CVEs by Trivy / JFrog Xray
-#   - apk-compatible → works with your org's existing apk mirror
+# 2-stage build (no native Hyperscan compilation needed):
+#   Stage 1: Build Spring Boot 4 layered JAR on JDK 21
+#   Stage 2: Minimal JRE 21 runtime
 #
-# If cgr.dev is not accessible: use Dockerfile.debian12 instead.
+# com.gliwka.hyperscan bundles libhyperscan_jni.so inside the JAR.
+# It is extracted to /tmp at JVM startup — no manual .so deployment required.
 # =============================================================================
-#If maven:3.9-eclipse-temurin-21 is not reachable from your GitHub Actions runner, replace Stage 1 entirely with Wolfi
-#FROM cgr.dev/chainguard/wolfi-base:latest AS maven-builder
-#RUN apk update && apk add --no-cache openjdk-21-jdk maven
-#ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk
-#WORKDIR /build
-#COPY pom.xml ./
-#RUN mvn dependency:go-offline --no-transfer-progress --quiet
-#COPY src ./src
-#RUN mvn package --no-transfer-progress -DskipTests && \
-#    cp target/lexicon-compile-service-*.jar target/app.jar
 
-
-# ── Stage 1: Maven build ──────────────────────────────────────────────────────
-FROM maven:3.9-eclipse-temurin-21 AS maven-builder
+# ── Stage 1: Build ────────────────────────────────────────────────────────────
+FROM eclipse-temurin:21-jdk-jammy AS maven-builder
 
 WORKDIR /build
-COPY pom.xml ./
-RUN mvn dependency:go-offline --no-transfer-progress --quiet
 
-COPY src ./src
-RUN mvn package --no-transfer-progress -DskipTests && \
-    cp target/lexicon-compile-service-*.jar target/app.jar
+# Cache Maven dependencies (invalidated only when pom.xml changes)
+COPY pom.xml .
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -q dependency:go-offline
 
-# ── Stage 2: Native lib extractor (wolfi / apk) ───────────────────────────────
-FROM 21-wolfi AS lib-extractor
+# Build and extract layered JAR
+COPY src src
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -q package -DskipTests \
+    && echo "JAR size:" && ls -lh target/lexicon-compile-service-*.jar
 
-RUN apk upgrade --no-cache && \
-    apk add --no-cache libstdc++ libgomp && \
-    mkdir -p /extracted-libs && \
-    cp -L /usr/lib/libstdc++.so.6 /extracted-libs/ && \
-    cp -L /usr/lib/libgomp.so.1   /extracted-libs/ && \
-    file /extracted-libs/libstdc++.so.6 | grep -q "ELF 64-bit" && \
-    file /extracted-libs/libgomp.so.1   | grep -q "ELF 64-bit" && \
-    echo "Both native libs verified"
+# Extract Spring Boot 4 layers for Docker cache optimisation
+RUN java -Djarmode=layertools \
+    -jar target/lexicon-compile-service-*.jar \
+    extract --destination target/extracted
 
-# ── Stage 3: Final runtime — Chainguard JRE ───────────────────────────────────
-# cgr.dev/chainguard/jre:openjdk-21
-#   - Wolfi OS: glibc 2.39+, apk package manager
-#   - Zero-CVE design (0 known vulnerabilities at build time)
-#   - Chainguard releases security patches within hours of disclosure
-#   - Runs as nonroot by default
-#   - Compatible with Hyperscan native .so (glibc-based, same as Wolfi libs)
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+FROM eclipse-temurin:21-jre-jammy AS runtime
+
+# com.gliwka.hyperscan native runtime requirements:
+#   libstdc++6 and libgomp1 (Hyperscan C library dependencies).
+# No libhyperscan-dev needed — native .so is bundled inside the JAR.
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends \
+        libstdc++6 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user (Cloud Run security best practice)
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
+WORKDIR /app
+
+# Copy Spring Boot 4 layered content in Docker-cache-friendly order:
+#   1. dependencies         → changes rarely (Hyperscan .so lives here)
+#   2. spring-boot-loader   → changes rarely
+#   3. snapshot-dependencies → changes on SNAPSHOT bumps
+#   4. application          → changes every build
+COPY --from=maven-builder /build/target/extracted/dependencies/          ./
+COPY --from=maven-builder /build/target/extracted/spring-boot-loader/    ./
+COPY --from=maven-builder /build/target/extracted/snapshot-dependencies/ ./
+COPY --from=maven-builder /build/target/extracted/application/           ./
+
+RUN chown -R appuser:appuser /app
+USER appuser
+
+# ── Environment ───────────────────────────────────────────────────────────────
+ENV PORT=8080
+ENV SPRING_PROFILES_ACTIVE=cloud-run
+
+# JVM tuning for JDK 21 on Cloud Run:
+#   UseContainerSupport      — reads cgroup CPU/memory limits
+#   MaxRAMPercentage=75.0    — 75% of container RAM for JVM heap
+#   ExitOnOutOfMemoryError   — crash fast; Cloud Run restarts
+#   UseG1GC                  — best general-purpose GC for JDK 21
+#   Virtual threads          — auto-enabled in Spring Boot 4 + Tomcat (no extra flag)
 #
-# ABI compatibility note: since both the extractor (21-wolfi) and the final
-# stage (chainguard, also Wolfi) use the same glibc lineage, the .so files
-# copied from Stage 2 are guaranteed ABI-compatible.
-FROM cgr.dev/chainguard/jre:openjdk-21
-
-COPY --from=lib-extractor /extracted-libs/libstdc++.so.6 /app/native-libs/libstdc++.so.6
-COPY --from=lib-extractor /extracted-libs/libgomp.so.1   /app/native-libs/libgomp.so.1
-COPY --from=maven-builder /build/target/app.jar /app/app.jar
-
-EXPOSE 8080
-
-ENV LD_LIBRARY_PATH=/app/native-libs
-
+# Note: -Djava.library.path NOT needed.
+#       com.gliwka.hyperscan extracts its .so to java.io.tmpdir on first use.
 ENV JAVA_TOOL_OPTIONS="\
   -XX:+UseContainerSupport \
   -XX:MaxRAMPercentage=75.0 \
+  -XX:+ExitOnOutOfMemoryError \
+  -XX:+UseG1GC \
   --enable-preview \
-  -Djava.io.tmpdir=/tmp \
-  -Djava.library.path=/app/native-libs"
+  -Dspring.profiles.active=cloud-run"
 
-# Chainguard uses exec-form ENTRYPOINT (no shell available)
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+EXPOSE ${PORT}
+
+# Spring Boot 4 layered JAR launcher
+# Note: Spring Boot 4 moved JarLauncher to the new module path
+ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]
+
+# Health check for local docker-run testing
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -sf http://localhost:${PORT}/actuator/health || exit 1

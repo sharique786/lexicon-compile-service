@@ -125,16 +125,23 @@ class LexiconCompileServiceTest {
     }
 
     @Test @Order(12)
-    @DisplayName("FAILED term has non-blank errorLog — [unclosed is a truly invalid Hyperscan pattern")
+    @DisplayName("FAILED term has a non-blank diagnostic — [unclosed is caught as a translation error")
     void failedTermHasError() {
         // "(unclosed" is escaped by the translator to "\(unclosed" — a valid Hyperscan literal.
-        // "[unclosed" is an unclosed character class — Hyperscan always rejects it.
+        // "[unclosed" is caught by TermSyntaxTranslator's own hasUnclosedCharClass diagnostic
+        // BEFORE Hyperscan is ever invoked, so this fails at the translation stage:
+        // translationError is populated and errorLog is correctly null (no Hyperscan
+        // compile was attempted). A failed term must always carry a diagnostic message
+        // in one of the two error fields, whichever stage caught it.
         var resp = compile("err_test", "[unclosed");
         var failed = resp.results().stream()
                 .filter(r -> r.compilationStatus() == CompilationStatus.FAILED)
                 .findFirst();
         assertThat(failed).isPresent();
-        assertThat(failed.get().translationError()).isNotBlank();
+        String diagnostic = failed.get().translationError() != null
+                ? failed.get().translationError()
+                : failed.get().errorLog();
+        assertThat(diagnostic).isNotBlank();
     }
 
     @Test @Order(13)

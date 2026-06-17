@@ -1,22 +1,18 @@
 package com.db.macs3.ecomms.spectre.model;
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  TermCompilationResult — result for one term (Java 21 record)
-// ═════════════════════════════════════════════════════════════════════════════
-
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.time.Instant;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 
-/**
- * Per-term compilation result.
- *
- * <p>Input fields are echoed back alongside result fields.
- * {@code errorLog} and {@code translationError} are null on PASS ({@link JsonInclude#NON_NULL}).
- */
-@JsonInclude(JsonInclude.Include.NON_NULL)
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+
 public record TermCompilationResult(
 
         /** Echoed from input. */
@@ -78,13 +74,11 @@ public record TermCompilationResult(
 ) {
     // ── Factory methods ───────────────────────────────────────────────────────
 
-    /**
-     * Creates a PASS result.
-     */
+    /** Creates a PASS result. */
     public static TermCompilationResult pass(CompileRequest.TermInput input,
-                                             String translatedPattern,
-                                             int hyperscanFlags,
-                                             boolean requiresAndPostFilter) {
+                                              String translatedPattern,
+                                              int hyperscanFlags,
+                                              boolean requiresAndPostFilter) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(), input.riskDriverName(),
                 CompilationStatus.PASS,
@@ -93,13 +87,11 @@ public record TermCompilationResult(
                 Instant.now());
     }
 
-    /**
-     * Creates a FAILED result with Hyperscan compile error.
-     */
+    /** Creates a FAILED result with Hyperscan compile error. */
     public static TermCompilationResult failedHyperscan(CompileRequest.TermInput input,
-                                                        String translatedPattern,
-                                                        String errorLog,
-                                                        int hyperscanFlags) {
+                                                         String translatedPattern,
+                                                         String errorLog,
+                                                         int hyperscanFlags) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(), input.riskDriverName(),
                 CompilationStatus.FAILED,
@@ -108,11 +100,9 @@ public record TermCompilationResult(
                 Instant.now());
     }
 
-    /**
-     * Creates a FAILED result due to translation error.
-     */
+    /** Creates a FAILED result due to translation error. */
     public static TermCompilationResult failedTranslation(CompileRequest.TermInput input,
-                                                          String translationError) {
+                                                           String translationError) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(), input.riskDriverName(),
                 CompilationStatus.FAILED,
@@ -121,11 +111,6 @@ public record TermCompilationResult(
                 Instant.now());
     }
 
-    public boolean isPass() {
-        return CompilationStatus.PASS == compilationStatus;
-    }
-
-    public boolean isFailed() {
-        return CompilationStatus.FAILED == compilationStatus;
-    }
+    public boolean isPass()   { return CompilationStatus.PASS   == compilationStatus; }
+    public boolean isFailed() { return CompilationStatus.FAILED == compilationStatus; }
 }

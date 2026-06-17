@@ -382,6 +382,34 @@ public final class TermSyntaxTranslator {
                     + " match it literally, e.g. \"[" + term.substring(1) + "\".");
         }
 
+        // ── User error: NEAR{n} / FOLLOWEDBY{n} missing an operand ────────────────
+        // findTopLevelProximity() only recognises NEAR{n}/FOLLOWEDBY{n} when BOTH
+        // a left and a right operand are present (see its `!left.isEmpty() &&
+        // !right.isEmpty()` check). A term like "NEAR{5} (price)" (no left
+        // operand) or "(manipulate) NEAR{5}" (no right operand) is therefore
+        // never recognised as a proximity construct at all and falls all the way
+        // through to this leaf method — where escapeSpecialChars would silently
+        // turn it into a literal pattern matching the text "NEAR{5}" verbatim.
+        // That pattern would almost never match real communications, silently
+        // making the lexicon term a no-op that never raises an alert. As with
+        // hasUnclosedCharClass above, surface this as a clear diagnostic instead
+        // of masking it. Checked AFTER the quoted-phrase branch so a deliberately
+        // quoted term, e.g. "\"NEAR{5} as literal text\"", still matches literally.
+        Matcher leafNear = NEAR_OP.matcher(term);
+        if (leafNear.find()) {
+            throw new TranslationException(
+                    "NEAR{" + leafNear.group(1) + "} is missing a left and/or right operand in term: '"
+                    + term + "'. Expected format: 'word1 NEAR{n} word2'. To match this text"
+                    + " literally instead, wrap it in quotes, e.g. \"" + term + "\".");
+        }
+        Matcher leafFollowedBy = FOLLOWEDBY_OP.matcher(term);
+        if (leafFollowedBy.find()) {
+            throw new TranslationException(
+                    "FOLLOWEDBY{" + leafFollowedBy.group(1) + "} is missing a left and/or right operand in term: '"
+                    + term + "'. Expected format: 'word1 FOLLOWEDBY{n} word2'. To match this text"
+                    + " literally instead, wrap it in quotes, e.g. \"" + term + "\".");
+        }
+
         // ── Non-ASCII detection (emoji + multilingual) ─────────────────────────
         if (hasNonAscii(term)) {
             ctx.setNeedsUtf8();

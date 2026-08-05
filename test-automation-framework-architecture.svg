@@ -1,0 +1,359 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1300" viewBox="0 0 1700 1300" font-family="Segoe UI, Calibri, Arial, sans-serif">
+<defs>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="2" dy="3" stdDeviation="2.2" flood-color="#1F3864" flood-opacity="0.28"/>
+  </filter>
+  <filter id="shadowBig" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="3" dy="4" stdDeviation="3.5" flood-color="#1F3864" flood-opacity="0.35"/>
+  </filter>
+  <marker id="arrowGrey" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8C9199"/>
+  </marker>
+  <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#548235"/>
+  </marker>
+  <marker id="arrowBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#4472C4"/>
+  </marker>
+  <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#C55A11"/>
+  </marker>
+  <marker id="arrowPurple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#7030A0"/>
+  </marker>
+  <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#1F3864"/>
+    <stop offset="100%" stop-color="#2E528F"/>
+  </linearGradient>
+</defs>
+<rect x="0" y="0" width="1700" height="1300" fill="#FFFFFF"/>
+
+
+<rect x="0" y="0" width="1700" height="66" fill="url(#titleGrad)"/>
+<text x="34" y="30" fill="#FFFFFF" font-size="21" font-weight="700">Test Automation Framework — Architecture</text>
+<text x="34" y="50" fill="#C9D6EE" font-size="12.5">Layered design · Component ⇄ Contract ⇄ E2E ⇄ Reporting · SPECTRE/MACS3 Lexicon Compliance Pipeline</text>
+<text x="1666" y="30" fill="#C9D6EE" font-size="11" text-anchor="end">SPECTRE/MACS3 eCOMMS Compliance Platform</text>
+<text x="1666" y="48" fill="#8FA6CC" font-size="10" text-anchor="end">Test Framework Design Reference — v1</text>
+
+<g id="lanes">
+<rect x="50" y="74" width="1600" height="96" fill="#FBFCFE" stroke="#E4E7EC" stroke-width="1"/>
+<rect x="50" y="74" width="10" height="96" fill="#1F3864"/>
+<text x="34" y="122.0" fill="#1F3864" font-size="12" font-weight="700" text-anchor="middle" transform="rotate(-90 34 122.0)" letter-spacing="1">REPORTING</text>
+<rect x="50" y="180" width="1600" height="118" fill="#F4F6FA" stroke="#E4E7EC" stroke-width="1"/>
+<rect x="50" y="180" width="10" height="118" fill="#C55A11"/>
+<text x="34" y="239.0" fill="#C55A11" font-size="12" font-weight="700" text-anchor="middle" transform="rotate(-90 34 239.0)" letter-spacing="1">E2E ORCHESTRATION</text>
+<rect x="50" y="308" width="1600" height="96" fill="#FBFCFE" stroke="#E4E7EC" stroke-width="1"/>
+<rect x="50" y="308" width="10" height="96" fill="#7030A0"/>
+<text x="34" y="356.0" fill="#7030A0" font-size="12" font-weight="700" text-anchor="middle" transform="rotate(-90 34 356.0)" letter-spacing="1">CONTRACT TEST</text>
+<rect x="50" y="414" width="1600" height="232" fill="#F4F6FA" stroke="#E4E7EC" stroke-width="1"/>
+<rect x="50" y="414" width="10" height="232" fill="#4472C4"/>
+<text x="34" y="530.0" fill="#4472C4" font-size="12" font-weight="700" text-anchor="middle" transform="rotate(-90 34 530.0)" letter-spacing="1">COMPONENT TEST</text>
+<rect x="50" y="656" width="1600" height="168" fill="#FBFCFE" stroke="#E4E7EC" stroke-width="1"/>
+<rect x="50" y="656" width="10" height="168" fill="#0F6B72"/>
+<text x="34" y="740.0" fill="#0F6B72" font-size="12" font-weight="700" text-anchor="middle" transform="rotate(-90 34 740.0)" letter-spacing="1">CORE FIXTURES &amp; UTILITIES</text>
+</g>
+<g filter="url(#shadow)">
+<rect x="317.0" y="94" width="250" height="66" rx="8" ry="8" fill="#FFFFFF" stroke="#1F3864" stroke-width="1.4"/>
+</g>
+<path d="M317.0,102 a8,8 0 0 1 8,-8 h234 a8,8 0 0 1 8,8 v16 h-250 z" fill="#1F3864"/>
+<line x1="327.0" y1="113" x2="327.0" y2="106" stroke="#FFFFFF" stroke-width="2.2"/>
+<line x1="333.0" y1="113" x2="333.0" y2="101" stroke="#FFFFFF" stroke-width="2.2"/>
+<line x1="339.0" y1="113" x2="339.0" y2="104" stroke="#FFFFFF" stroke-width="2.2"/>
+<text x="347.0" y="111.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">REPORTING</text>
+<text x="442.0" y="134" fill="#404040" font-size="11.5" font-weight="700" text-anchor="middle">JUnit XML</text>
+<text x="442.0" y="150" fill="#6B6B6B" font-size="9.4" text-anchor="middle">→ CI Dashboard</text>
+<g filter="url(#shadow)">
+<rect x="589.0" y="94" width="250" height="66" rx="8" ry="8" fill="#FFFFFF" stroke="#1F3864" stroke-width="1.4"/>
+</g>
+<path d="M589.0,102 a8,8 0 0 1 8,-8 h234 a8,8 0 0 1 8,8 v16 h-250 z" fill="#1F3864"/>
+<line x1="599.0" y1="113" x2="599.0" y2="106" stroke="#FFFFFF" stroke-width="2.2"/>
+<line x1="605.0" y1="113" x2="605.0" y2="101" stroke="#FFFFFF" stroke-width="2.2"/>
+<line x1="611.0" y1="113" x2="611.0" y2="104" stroke="#FFFFFF" stroke-width="2.2"/>
+<text x="619.0" y="111.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">REPORTING</text>
+<text x="714.0" y="134" fill="#404040" font-size="11.5" font-weight="700" text-anchor="middle">JaCoCo Coverage</text>
+<text x="714.0" y="150" fill="#6B6B6B" font-size="9.4" text-anchor="middle">70% line / 65% branch floor</text>
+<g filter="url(#shadow)">
+<rect x="861.0" y="94" width="250" height="66" rx="8" ry="8" fill="#FFFFFF" stroke="#1F3864" stroke-width="1.4"/>
+</g>
+<path d="M861.0,102 a8,8 0 0 1 8,-8 h234 a8,8 0 0 1 8,8 v16 h-250 z" fill="#1F3864"/>
+<line x1="871.0" y1="113" x2="871.0" y2="106" stroke="#FFFFFF" stroke-width="2.2"/>
+<line x1="877.0" y1="113" x2="877.0" y2="101" stroke="#FFFFFF" stroke-width="2.2"/>
+<line x1="883.0" y1="113" x2="883.0" y2="104" stroke="#FFFFFF" stroke-width="2.2"/>
+<text x="891.0" y="111.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">REPORTING</text>
+<text x="986.0" y="134" fill="#404040" font-size="11.5" font-weight="700" text-anchor="middle">Decision-Matrix Report</text>
+<text x="986.0" y="150" fill="#6B6B6B" font-size="9.4" text-anchor="middle">per-row coverage, human-readable</text>
+<g filter="url(#shadow)">
+<rect x="1133.0" y="94" width="250" height="66" rx="8" ry="8" fill="#FFFFFF" stroke="#1F3864" stroke-width="1.4"/>
+</g>
+<path d="M1133.0,102 a8,8 0 0 1 8,-8 h234 a8,8 0 0 1 8,8 v16 h-250 z" fill="#1F3864"/>
+<path d="M1149.0,100 l6,2.5 v5 c0,4 -2.7,6.5 -6,7.5 c-3.3,-1 -6,-3.5 -6,-7.5 v-5 z" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1163.0" y="111.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">REPORTING</text>
+<text x="1258.0" y="134" fill="#404040" font-size="11.5" font-weight="700" text-anchor="middle">Flaky-Test Tracker</text>
+<text x="1258.0" y="150" fill="#6B6B6B" font-size="9.4" text-anchor="middle">quarantine, not silent retry</text>
+<g filter="url(#shadow)">
+<rect x="271.0" y="204" width="270" height="84" rx="8" ry="8" fill="#FCE4D6" stroke="#C55A11" stroke-width="1.4"/>
+</g>
+<path d="M271.0,212 a8,8 0 0 1 8,-8 h254 a8,8 0 0 1 8,8 v16 h-270 z" fill="#C55A11"/>
+<circle cx="287.0" cy="217" r="4.2" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="293.2" y1="217.0" x2="295.4" y2="217.0" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="291.4" y1="221.4" x2="292.9" y2="222.9" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="287.0" y1="223.2" x2="287.0" y2="225.4" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="282.6" y1="221.4" x2="281.1" y2="222.9" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="280.8" y1="217.0" x2="278.6" y2="217.0" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="282.6" y1="212.6" x2="281.1" y2="211.1" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="287.0" y1="210.8" x2="287.0" y2="208.6" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="291.4" y1="212.6" x2="292.9" y2="211.1" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="301.0" y="221.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">E2E</text>
+<text x="406.0" y="244" fill="#404040" font-size="11.3" font-weight="700" text-anchor="middle">Scenario Runner</text>
+<text x="406.0" y="260" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Data-driven catalog (Sec. 8.2)</text>
+<g filter="url(#shadow)">
+<rect x="567.0" y="204" width="270" height="84" rx="8" ry="8" fill="#FCE4D6" stroke="#C55A11" stroke-width="1.4"/>
+</g>
+<path d="M567.0,212 a8,8 0 0 1 8,-8 h254 a8,8 0 0 1 8,8 v16 h-270 z" fill="#C55A11"/>
+<circle cx="577.0" cy="221" r="2.2" fill="#FFFFFF"/>
+<circle cx="583.0" cy="213" r="2.2" fill="#FFFFFF"/>
+<circle cx="589.0" cy="221" r="2.2" fill="#FFFFFF"/>
+<path d="M577.0,221 L583.0,213 L589.0,221" fill="none" stroke="#FFFFFF" stroke-width="1.3"/>
+<text x="597.0" y="221.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">E2E</text>
+<text x="702.0" y="244" fill="#404040" font-size="11.3" font-weight="700" text-anchor="middle">Ephemeral BQ/GCS Provisioning</text>
+<text x="702.0" y="260" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Isolated dataset + prefix per run</text>
+<g filter="url(#shadow)">
+<rect x="863.0" y="204" width="270" height="84" rx="8" ry="8" fill="#FCE4D6" stroke="#C55A11" stroke-width="1.4"/>
+</g>
+<path d="M863.0,212 a8,8 0 0 1 8,-8 h254 a8,8 0 0 1 8,8 v16 h-270 z" fill="#C55A11"/>
+<circle cx="873.0" cy="221" r="2.2" fill="#FFFFFF"/>
+<circle cx="879.0" cy="213" r="2.2" fill="#FFFFFF"/>
+<circle cx="885.0" cy="221" r="2.2" fill="#FFFFFF"/>
+<path d="M873.0,221 L879.0,213 L885.0,221" fill="none" stroke="#FFFFFF" stroke-width="1.3"/>
+<text x="893.0" y="221.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">E2E</text>
+<text x="998.0" y="244" fill="#404040" font-size="11.3" font-weight="700" text-anchor="middle">Airflow Test-DAG Trigger Client</text>
+<text x="998.0" y="260" fill="#6B6B6B" font-size="9.4" text-anchor="middle">POLICY_TEST as harness mechanism</text>
+<g filter="url(#shadow)">
+<rect x="1159.0" y="204" width="270" height="84" rx="8" ry="8" fill="#FCE4D6" stroke="#C55A11" stroke-width="1.4"/>
+</g>
+<path d="M1159.0,212 a8,8 0 0 1 8,-8 h254 a8,8 0 0 1 8,8 v16 h-270 z" fill="#C55A11"/>
+<line x1="1169.0" y1="223" x2="1169.0" y2="216" stroke="#FFFFFF" stroke-width="2.2"/>
+<line x1="1175.0" y1="223" x2="1175.0" y2="211" stroke="#FFFFFF" stroke-width="2.2"/>
+<line x1="1181.0" y1="223" x2="1181.0" y2="214" stroke="#FFFFFF" stroke-width="2.2"/>
+<text x="1189.0" y="221.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">E2E</text>
+<text x="1294.0" y="244" fill="#404040" font-size="11.3" font-weight="700" text-anchor="middle">Output Reconciliation</text>
+<text x="1294.0" y="260" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Assertions against 5 BQ output tables</text>
+<g filter="url(#shadow)">
+<rect x="540.0" y="328" width="620" height="62" rx="8" ry="8" fill="#EAE0F2" stroke="#7030A0" stroke-width="1.4"/>
+</g>
+<path d="M540.0,336 a8,8 0 0 1 8,-8 h604 a8,8 0 0 1 8,8 v16 h-620 z" fill="#7030A0"/>
+<circle cx="552.0" cy="341" r="4" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<circle cx="560.0" cy="341" r="4" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="570.0" y="345.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">CONTRACT VERIFIER</text>
+<text x="850.0" y="368" fill="#404040" font-size="12.5" font-weight="700" text-anchor="middle">Golden Bundle Publish / Replay Verifier</text>
+<text x="850.0" y="384" fill="#6B6B6B" font-size="9.4" text-anchor="middle">manifest ⇄ .hdb consistency · runs on EVERY change to either component</text>
+<g filter="url(#shadow)">
+<rect x="70.0" y="450" width="750" height="190" rx="10" ry="10" fill="#FFFFFF" stroke="#4472C4" stroke-width="2" stroke-dasharray="none"/>
+</g>
+<rect x="86.0" y="439" width="218.4" height="22" rx="5" fill="#4472C4"/>
+<text x="195.2" y="454" fill="#FFFFFF" font-size="11" font-weight="700" text-anchor="middle">LEXICON COMPILATION SERVICE</text>
+<g filter="url(#shadow)">
+<rect x="880.0" y="450" width="750" height="190" rx="10" ry="10" fill="#FFFFFF" stroke="#1F3864" stroke-width="2" stroke-dasharray="none"/>
+</g>
+<rect x="896.0" y="439" width="182.4" height="22" rx="5" fill="#1F3864"/>
+<text x="987.2" y="454" fill="#FFFFFF" font-size="11" font-weight="700" text-anchor="middle">SCANNER + ALERT ENGINE</text>
+<g filter="url(#shadow)">
+<rect x="86.0" y="490" width="226" height="130" rx="8" ry="8" fill="#D9E2F3" stroke="#4472C4" stroke-width="1.4"/>
+</g>
+<path d="M86.0,498 a8,8 0 0 1 8,-8 h210 a8,8 0 0 1 8,8 v16 h-226 z" fill="#4472C4"/>
+<rect x="96.0" y="497" width="12" height="12" rx="2" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<path d="M99.0,503 l2,2.5 l4,-5" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="116.0" y="507.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3"></text>
+<text x="199.0" y="530" fill="#404040" font-size="11.2" font-weight="700" text-anchor="middle">Unit Tests</text>
+<text x="199.0" y="546" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Translator, flags,</text>
+<text x="199.0" y="559" fill="#6B6B6B" font-size="9.4" text-anchor="middle">script detector</text>
+<g filter="url(#shadow)">
+<rect x="332.0" y="490" width="226" height="130" rx="8" ry="8" fill="#D9E2F3" stroke="#4472C4" stroke-width="1.4"/>
+</g>
+<path d="M332.0,498 a8,8 0 0 1 8,-8 h210 a8,8 0 0 1 8,8 v16 h-226 z" fill="#4472C4"/>
+<path d="M345.0,497 v4 l-4,7 a1.5,1.5 0 0 0 1.5,2 h9 a1.5,1.5 0 0 0 1.5,-2 l-4,-7 v-4" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<line x1="343.5" y1="497" x2="352.5" y2="497" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="362.0" y="507.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3"></text>
+<text x="445.0" y="530" fill="#404040" font-size="11.2" font-weight="700" text-anchor="middle">API Contract-Shape</text>
+<text x="445.0" y="546" fill="#6B6B6B" font-size="9.4" text-anchor="middle">/compile, /csv, /bundle</text>
+<text x="445.0" y="559" fill="#6B6B6B" font-size="9.4" text-anchor="middle">req/resp schema</text>
+<g filter="url(#shadow)">
+<rect x="578.0" y="490" width="226" height="130" rx="8" ry="8" fill="#D9E2F3" stroke="#4472C4" stroke-width="1.4"/>
+</g>
+<path d="M578.0,498 a8,8 0 0 1 8,-8 h210 a8,8 0 0 1 8,8 v16 h-226 z" fill="#4472C4"/>
+<path d="M594.0,496 l6,2.5 v5 c0,4 -2.7,6.5 -6,7.5 c-3.3,-1 -6,-3.5 -6,-7.5 v-5 z" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="608.0" y="507.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3"></text>
+<text x="691.0" y="530" fill="#404040" font-size="11.2" font-weight="700" text-anchor="middle">Hyperscan Correctness</text>
+<text x="691.0" y="546" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Real native lib,</text>
+<text x="691.0" y="559" fill="#6B6B6B" font-size="9.4" text-anchor="middle">not mocked</text>
+<g filter="url(#shadow)">
+<rect x="896.0" y="490" width="226" height="130" rx="8" ry="8" fill="#D9E2F3" stroke="#1F3864" stroke-width="1.4"/>
+</g>
+<path d="M896.0,498 a8,8 0 0 1 8,-8 h210 a8,8 0 0 1 8,8 v16 h-226 z" fill="#1F3864"/>
+<rect x="906.0" y="497" width="12" height="12" rx="2" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<path d="M909.0,503 l2,2.5 l4,-5" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="926.0" y="507.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3"></text>
+<text x="1009.0" y="530" fill="#404040" font-size="11.2" font-weight="700" text-anchor="middle">Unit Tests</text>
+<text x="1009.0" y="546" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Decision tree, matcher,</text>
+<text x="1009.0" y="559" fill="#6B6B6B" font-size="9.4" text-anchor="middle">redaction logic</text>
+<g filter="url(#shadow)">
+<rect x="1142.0" y="490" width="226" height="130" rx="8" ry="8" fill="#D9E2F3" stroke="#1F3864" stroke-width="1.4"/>
+</g>
+<path d="M1142.0,498 a8,8 0 0 1 8,-8 h210 a8,8 0 0 1 8,8 v16 h-226 z" fill="#1F3864"/>
+<path d="M1155.0,497 v4 l-4,7 a1.5,1.5 0 0 0 1.5,2 h9 a1.5,1.5 0 0 0 1.5,-2 l-4,-7 v-4" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<line x1="1153.5" y1="497" x2="1162.5" y2="497" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1172.0" y="507.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3"></text>
+<text x="1255.0" y="530" fill="#404040" font-size="11.2" font-weight="700" text-anchor="middle">Spark Local Integration</text>
+<text x="1255.0" y="546" fill="#6B6B6B" font-size="9.4" text-anchor="middle">local[*], real Hyperscan</text>
+<text x="1255.0" y="559" fill="#6B6B6B" font-size="9.4" text-anchor="middle">compiled in-memory</text>
+<g filter="url(#shadow)">
+<rect x="1388.0" y="490" width="226" height="130" rx="8" ry="8" fill="#D9E2F3" stroke="#1F3864" stroke-width="1.4"/>
+</g>
+<path d="M1388.0,498 a8,8 0 0 1 8,-8 h210 a8,8 0 0 1 8,8 v16 h-226 z" fill="#1F3864"/>
+<path d="M1404.0,496 l6,2.5 v5 c0,4 -2.7,6.5 -6,7.5 c-3.3,-1 -6,-3.5 -6,-7.5 v-5 z" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1418.0" y="507.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3"></text>
+<text x="1501.0" y="530" fill="#404040" font-size="11.2" font-weight="700" text-anchor="middle">Nested-Schema Validation</text>
+<text x="1501.0" y="546" fill="#6B6B6B" font-size="9.4" text-anchor="middle">evaluated_lexicons[]</text>
+<text x="1501.0" y="559" fill="#6B6B6B" font-size="9.4" text-anchor="middle">shape, pre-BQ-write</text>
+<g filter="url(#shadow)">
+<rect x="70" y="680" width="280" height="128" rx="8" ry="8" fill="#DCEEEF" stroke="#0F6B72" stroke-width="1.4"/>
+</g>
+<path d="M70,688 a8,8 0 0 1 8,-8 h264 a8,8 0 0 1 8,8 v16 h-280 z" fill="#0F6B72"/>
+<circle cx="86" cy="693" r="4.2" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="92.2" y1="693.0" x2="94.4" y2="693.0" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="90.4" y1="697.4" x2="91.9" y2="698.9" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="86.0" y1="699.2" x2="86.0" y2="701.4" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="81.6" y1="697.4" x2="80.1" y2="698.9" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="79.8" y1="693.0" x2="77.6" y2="693.0" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="81.6" y1="688.6" x2="80.1" y2="687.1" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="86.0" y1="686.8" x2="86.0" y2="684.6" stroke="#FFFFFF" stroke-width="1.6"/>
+<line x1="90.4" y1="688.6" x2="91.9" y2="687.1" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="100" y="697.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">SHARED FIXTURE</text>
+<text x="210.0" y="720" fill="#404040" font-size="11.8" font-weight="700" text-anchor="middle">HDB-on-Demand Compiler</text>
+<text x="210.0" y="736" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Real Hyperscan, in-memory,</text>
+<text x="210.0" y="749" fill="#6B6B6B" font-size="9.4" text-anchor="middle">no static binaries</text>
+<g filter="url(#shadow)">
+<rect x="390" y="680" width="280" height="128" rx="8" ry="8" fill="#DCEEEF" stroke="#0F6B72" stroke-width="1.4"/>
+</g>
+<path d="M390,688 a8,8 0 0 1 8,-8 h264 a8,8 0 0 1 8,8 v16 h-280 z" fill="#0F6B72"/>
+<path d="M403,687 v4 l-4,7 a1.5,1.5 0 0 0 1.5,2 h9 a1.5,1.5 0 0 0 1.5,-2 l-4,-7 v-4" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<line x1="401.5" y1="687" x2="410.5" y2="687" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="420" y="697.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">SHARED FIXTURE</text>
+<text x="530.0" y="720" fill="#404040" font-size="11.8" font-weight="700" text-anchor="middle">Multi-Language &amp; Emoji Corpus</text>
+<text x="530.0" y="736" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Latin, CJK, Hangul, Arabic,</text>
+<text x="530.0" y="749" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Hebrew, Thai, Devanagari</text>
+<g filter="url(#shadow)">
+<rect x="710" y="680" width="280" height="128" rx="8" ry="8" fill="#DCEEEF" stroke="#0F6B72" stroke-width="1.4"/>
+</g>
+<path d="M710,688 a8,8 0 0 1 8,-8 h264 a8,8 0 0 1 8,8 v16 h-280 z" fill="#0F6B72"/>
+<circle cx="720" cy="697" r="2.2" fill="#FFFFFF"/>
+<circle cx="726" cy="689" r="2.2" fill="#FFFFFF"/>
+<circle cx="732" cy="697" r="2.2" fill="#FFFFFF"/>
+<path d="M720,697 L726,689 L732,697" fill="none" stroke="#FFFFFF" stroke-width="1.3"/>
+<text x="740" y="697.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">SHARED FIXTURE</text>
+<text x="850.0" y="720" fill="#404040" font-size="11.8" font-weight="700" text-anchor="middle">Synthetic Message Corpus</text>
+<text x="850.0" y="736" fill="#6B6B6B" font-size="9.4" text-anchor="middle">JSON, mirrors</text>
+<text x="850.0" y="749" fill="#6B6B6B" font-size="9.4" text-anchor="middle">AVRO schema</text>
+<g filter="url(#shadow)">
+<rect x="1030" y="680" width="280" height="128" rx="8" ry="8" fill="#DCEEEF" stroke="#0F6B72" stroke-width="1.4"/>
+</g>
+<path d="M1030,688 a8,8 0 0 1 8,-8 h264 a8,8 0 0 1 8,8 v16 h-280 z" fill="#0F6B72"/>
+<circle cx="1042" cy="693" r="4" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<circle cx="1050" cy="693" r="4" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="1060" y="697.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">SHARED FIXTURE</text>
+<text x="1170.0" y="720" fill="#404040" font-size="11.8" font-weight="700" text-anchor="middle">BQ / GCS Test-Double Layer</text>
+<text x="1170.0" y="736" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Mocked client +</text>
+<text x="1170.0" y="749" fill="#6B6B6B" font-size="9.4" text-anchor="middle">ephemeral live</text>
+<g filter="url(#shadow)">
+<rect x="1350" y="680" width="280" height="128" rx="8" ry="8" fill="#DCEEEF" stroke="#0F6B72" stroke-width="1.4"/>
+</g>
+<path d="M1350,688 a8,8 0 0 1 8,-8 h264 a8,8 0 0 1 8,8 v16 h-280 z" fill="#0F6B72"/>
+<path d="M1366,686 l6,2.5 v5 c0,4 -2.7,6.5 -6,7.5 c-3.3,-1 -6,-3.5 -6,-7.5 v-5 z" fill="none" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="1380" y="697.5" fill="#FFFFFF" font-size="10" font-weight="700" letter-spacing="0.3">SHARED FIXTURE</text>
+<text x="1490.0" y="720" fill="#404040" font-size="11.8" font-weight="700" text-anchor="middle">Golden Lexicon Rule Set</text>
+<text x="1490.0" y="736" fill="#6B6B6B" font-size="9.4" text-anchor="middle">Versioned,</text>
+<text x="1490.0" y="749" fill="#6B6B6B" font-size="9.4" text-anchor="middle">analyst-reviewable</text>
+<g id="connectors">
+<path d="M850.0,656 L850.0,648 L445.0,648 L445.0,640" fill="none" stroke="#548235" stroke-width="1.8" marker-end="url(#arrowGreen)"/>
+<path d="M850.0,656 L850.0,648 L1255.0,648 L1255.0,640" fill="none" stroke="#548235" stroke-width="1.8" marker-end="url(#arrowGreen)"/>
+<path d="M445.0,450 L445.0,406 L738.4,406 L738.4,390" fill="none" stroke="#4472C4" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+<path d="M1255.0,450 L1255.0,406 L961.6,406 L961.6,390" fill="none" stroke="#4472C4" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+<path d="M850.0,328 L850.0,300 L702.0,300 L702.0,288" fill="none" stroke="#7030A0" stroke-width="1.8" marker-end="url(#arrowPurple)"/>
+<path d="M850.0,328 L850.0,300 L998.0,300 L998.0,288" fill="none" stroke="#7030A0" stroke-width="1.8" marker-end="url(#arrowPurple)"/>
+<path d="M702.0,204 L702.0,172 L442.0,172 L442.0,160" fill="none" stroke="#C55A11" stroke-width="1.8" marker-end="url(#arrowAmber)"/>
+<path d="M998.0,204 L998.0,172 L1258.0,172 L1258.0,160" fill="none" stroke="#C55A11" stroke-width="1.8" marker-end="url(#arrowAmber)"/>
+</g>
+<rect x="50" y="844" width="1600" height="168" fill="#F4F6FA" stroke="#E4E7EC" stroke-width="1"/>
+<rect x="50" y="844" width="10" height="168" fill="#3B3F44"/>
+<text x="34" y="928.0" fill="#3B3F44" font-size="12" font-weight="700" text-anchor="middle" transform="rotate(-90 34 928.0)" letter-spacing="1">CI/CD GATES</text>
+<g filter="url(#shadow)"><rect x="70" y="864" width="372" height="130" rx="8" fill="#EDEEF0" stroke="#3B3F44" stroke-width="1.6"/></g>
+<text x="86" y="884" fill="#3B3F44" font-size="9.5" font-weight="700" letter-spacing="0.5">ON PULL REQUEST</text>
+<text x="86" y="904" fill="#404040" font-size="13.5" font-weight="700">PR Gate</text>
+<text x="86" y="926" fill="#6B6B6B" font-size="9.6">• Unit tests (3-OS matrix)</text>
+<text x="86" y="944" fill="#6B6B6B" font-size="9.6">• Component integration</text>
+<text x="86" y="962" fill="#6B6B6B" font-size="9.6">• Contract verification</text>
+<line x1="446" y1="929" x2="462" y2="929" stroke="#8C9199" stroke-width="2.2" marker-end="url(#arrowGrey)"/>
+<g filter="url(#shadow)"><rect x="466" y="864" width="372" height="130" rx="8" fill="#D9E2F3" stroke="#4472C4" stroke-width="1.6"/></g>
+<text x="482" y="884" fill="#4472C4" font-size="9.5" font-weight="700" letter-spacing="0.5">ON MERGE TO MAIN</text>
+<text x="482" y="904" fill="#404040" font-size="13.5" font-weight="700">Merge Gate</text>
+<text x="482" y="926" fill="#6B6B6B" font-size="9.6">• Everything in PR Gate, plus:</text>
+<text x="482" y="944" fill="#6B6B6B" font-size="9.6">• Subset of E2E scenarios</text>
+<text x="482" y="962" fill="#6B6B6B" font-size="9.6">• JaCoCo coverage gate (70/65%)</text>
+<line x1="842" y1="929" x2="858" y2="929" stroke="#8C9199" stroke-width="2.2" marker-end="url(#arrowGrey)"/>
+<g filter="url(#shadow)"><rect x="862" y="864" width="372" height="130" rx="8" fill="#FCE4D6" stroke="#C55A11" stroke-width="1.6"/></g>
+<text x="878" y="884" fill="#C55A11" font-size="9.5" font-weight="700" letter-spacing="0.5">NIGHTLY SCHEDULE</text>
+<text x="878" y="904" fill="#404040" font-size="13.5" font-weight="700">Nightly Gate</text>
+<text x="878" y="926" fill="#6B6B6B" font-size="9.6">• Full E2E scenario catalog</text>
+<text x="878" y="944" fill="#6B6B6B" font-size="9.6">• Performance / load pipelines</text>
+<text x="878" y="962" fill="#6B6B6B" font-size="9.6">• Dependency &amp; container scans</text>
+<line x1="1238" y1="929" x2="1254" y2="929" stroke="#8C9199" stroke-width="2.2" marker-end="url(#arrowGrey)"/>
+<g filter="url(#shadow)"><rect x="1258" y="864" width="372" height="130" rx="8" fill="#EAE0F2" stroke="#7030A0" stroke-width="1.6"/></g>
+<text x="1274" y="884" fill="#7030A0" font-size="9.5" font-weight="700" letter-spacing="0.5">PRE-RELEASE</text>
+<text x="1274" y="904" fill="#404040" font-size="13.5" font-weight="700">Release Gate</text>
+<text x="1274" y="926" fill="#6B6B6B" font-size="9.6">• Full regression + chaos suite</text>
+<text x="1274" y="944" fill="#6B6B6B" font-size="9.6">• Staging (prod-mirror) run</text>
+<text x="1274" y="962" fill="#6B6B6B" font-size="9.6">• Manual compliance sign-off</text>
+<g filter="url(#shadow)"><rect x="50" y="1032" width="640" height="210" rx="8" fill="#FFFFFF" stroke="#C9CDD4" stroke-width="1.2"/></g>
+<rect x="50" y="1032" width="640" height="26" rx="8" fill="#1F3864"/>
+<rect x="50" y="1045" width="640" height="13" fill="#1F3864"/>
+<text x="66" y="1050" fill="#FFFFFF" font-size="12" font-weight="700">LEGEND</text>
+<rect x="66" y="1076" width="26" height="17" rx="3" fill="#DCEEEF" stroke="#0F6B72" stroke-width="1.4"/><rect x="66" y="1076" width="26" height="6" rx="3" fill="#0F6B72"/><text x="100" y="1089" fill="#404040" font-size="10">Shared fixture (foundation layer)</text>
+<rect x="66" y="1104" width="26" height="17" rx="3" fill="#D9E2F3" stroke="#4472C4" stroke-width="1.4"/><rect x="66" y="1104" width="26" height="6" rx="3" fill="#4472C4"/><text x="100" y="1117" fill="#404040" font-size="10">Compilation Service test artifact</text>
+<rect x="66" y="1132" width="26" height="17" rx="3" fill="#D9E2F3" stroke="#1F3864" stroke-width="1.4"/><rect x="66" y="1132" width="26" height="6" rx="3" fill="#1F3864"/><text x="100" y="1145" fill="#404040" font-size="10">Scanner/Alert Engine test artifact</text>
+<rect x="66" y="1160" width="26" height="17" rx="3" fill="#EAE0F2" stroke="#7030A0" stroke-width="1.4"/><rect x="66" y="1160" width="26" height="6" rx="3" fill="#7030A0"/><text x="100" y="1173" fill="#404040" font-size="10">Contract verifier</text>
+<rect x="66" y="1188" width="26" height="17" rx="3" fill="#FCE4D6" stroke="#C55A11" stroke-width="1.4"/><rect x="66" y="1188" width="26" height="6" rx="3" fill="#C55A11"/><text x="100" y="1201" fill="#404040" font-size="10">E2E orchestration artifact</text>
+<line x1="390" y1="1084" x2="418" y2="1084" stroke="#548235" stroke-width="2" marker-end="url(#arrowGreen)"/><text x="426" y="1088" fill="#404040" font-size="10">Fixtures feed component tests</text>
+<line x1="390" y1="1112" x2="418" y2="1112" stroke="#4472C4" stroke-width="2" marker-end="url(#arrowBlue)"/><text x="426" y="1116" fill="#404040" font-size="10">Component tests feed contract layer</text>
+<line x1="390" y1="1140" x2="418" y2="1140" stroke="#7030A0" stroke-width="2" marker-end="url(#arrowPurple)"/><text x="426" y="1144" fill="#404040" font-size="10">Contract layer feeds E2E</text>
+<line x1="390" y1="1168" x2="418" y2="1168" stroke="#C55A11" stroke-width="2" marker-end="url(#arrowAmber)"/><text x="426" y="1172" fill="#404040" font-size="10">E2E results feed reporting</text>
+<line x1="390" y1="1196" x2="418" y2="1196" stroke="#8C9199" stroke-width="2" marker-end="url(#arrowGrey)"/><text x="426" y="1200" fill="#404040" font-size="10">CI/CD gate progression</text>
+<line x1="66" y1="1210" x2="674" y2="1210" stroke="#E4E7EC" stroke-width="1"/>
+<text x="66" y="1225" fill="#6B6B6B" font-size="9" font-style="italic">Box width narrows toward the top of the stack, echoing the test pyramid at right.</text>
+<g filter="url(#shadow)"><rect x="730" y="1032" width="920" height="210" rx="8" fill="#FFFFFF" stroke="#C9CDD4" stroke-width="1.2"/></g>
+<rect x="730" y="1032" width="920" height="26" rx="8" fill="#3B3F44"/>
+<rect x="730" y="1045" width="920" height="13" fill="#3B3F44"/>
+<text x="746" y="1050" fill="#FFFFFF" font-size="12" font-weight="700">ADAPTED TEST PYRAMID — WHY BOX WIDTH NARROWS TOWARD THE TOP</text>
+<path d="M865.92,1074.0 L894.08,1074.0 L924,1101.0 L836,1101.0 Z" fill="#1F3864" opacity="0.85" stroke="#FFFFFF" stroke-width="1.5"/>
+<path d="M836,1104.0 L924,1104.0 L968,1131.0 L792,1131.0 Z" fill="#C55A11" opacity="0.85" stroke="#FFFFFF" stroke-width="1.5"/>
+<path d="M792,1134.0 L968,1134.0 L1012,1161.0 L748,1161.0 Z" fill="#7030A0" opacity="0.85" stroke="#FFFFFF" stroke-width="1.5"/>
+<path d="M748,1164.0 L1012,1164.0 L1058,1191.0 L702,1191.0 Z" fill="#4472C4" opacity="0.85" stroke="#FFFFFF" stroke-width="1.5"/>
+<path d="M702,1194.0 L1058,1194.0 L1108,1221.0 L652,1221.0 Z" fill="#0F6B72" opacity="0.85" stroke="#FFFFFF" stroke-width="1.5"/>
+<text x="880" y="1064" fill="#6B6B6B" font-size="9" text-anchor="middle" font-style="italic">fewer, slower, higher confidence</text>
+<rect x="1110" y="1072" width="14" height="14" fill="#1F3864" opacity="0.85"/>
+<text x="1132" y="1082" fill="#404040" font-size="11">Manual / UAT</text>
+<rect x="1110" y="1098" width="14" height="14" fill="#C55A11" opacity="0.85"/>
+<text x="1132" y="1108" fill="#404040" font-size="11">E2E</text>
+<rect x="1110" y="1124" width="14" height="14" fill="#7030A0" opacity="0.85"/>
+<text x="1132" y="1134" fill="#404040" font-size="11">Contract</text>
+<rect x="1110" y="1150" width="14" height="14" fill="#4472C4" opacity="0.85"/>
+<text x="1132" y="1160" fill="#404040" font-size="11">Component Integration</text>
+<rect x="1110" y="1176" width="14" height="14" fill="#0F6B72" opacity="0.85"/>
+<text x="1132" y="1186" fill="#404040" font-size="11">Unit</text>
+<text x="1110" y="1218" fill="#6B6B6B" font-size="9.4" font-style="italic">more, faster, run on every commit</text>
+<text x="1390" y="1088" fill="#404040" font-size="9.6">Layer width in the</text>
+<text x="1390" y="1103" fill="#404040" font-size="9.6">architecture above</text>
+<text x="1390" y="1118" fill="#404040" font-size="9.6">mirrors this pyramid —</text>
+<text x="1390" y="1133" fill="#404040" font-size="9.6">Reporting and E2E boxes</text>
+<text x="1390" y="1148" fill="#404040" font-size="9.6">are deliberately narrower</text>
+<text x="1390" y="1163" fill="#404040" font-size="9.6">than the fixture layer.</text>
+</svg>

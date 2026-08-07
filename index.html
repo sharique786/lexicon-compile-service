@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Lexicon Pattern Scanner</title>
+<style>
+:root{--lp:#1565c0;--lpd:#0d47a1;--la:#f57c00;--ls:#2e7d32;--le:#c62828;--lw:#e65100;--lsf:#fff;--lbg:#f0f4f8;--lb:#cbd5e1;--lt:#1e293b;--lm:#64748b;--lmk:#fff176;--lmb:#f9a825;--ldk:#e0e0e0;--ldb:#9e9e9e;--lr:8px;--lsh:0 1px 4px rgba(0,0,0,.12);}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Segoe UI',Arial,sans-serif;background:var(--lbg);color:var(--lt);font-size:15px;line-height:1.6;}
+.la{max-width:1200px;margin:0 auto;padding:24px 16px 48px;}
+.lhdr{margin-bottom:28px;}
+.lhdr h1{font-size:26px;font-weight:600;color:var(--lp);display:flex;align-items:center;gap:10px;}
+.lhdr h1::before{content:"🔍";font-size:22px;}
+.lhdr p{color:var(--lm);font-size:14px;margin-top:4px;}
+.lgrid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;}
+@media(max-width:700px){.lgrid{grid-template-columns:1fr;}}
+.lpanel{background:var(--lsf);border-radius:var(--lr);border:1px solid var(--lb);padding:20px;box-shadow:var(--lsh);}
+.lpanel h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--lm);margin-bottom:14px;}
+.lpanel.lfull{grid-column:1/-1;}
+.ltog{display:flex;border:1px solid var(--lb);border-radius:6px;overflow:hidden;margin-bottom:14px;width:fit-content;}
+.ltog button{padding:6px 16px;font-size:13px;border:none;background:none;cursor:pointer;color:var(--lm);transition:all .15s;}
+.ltog button.act{background:var(--lp);color:#fff;font-weight:500;}
+.ltog button:hover:not(.act){background:var(--lbg);color:var(--lt);}
+.lttype{display:flex;gap:16px;margin-bottom:14px;padding:10px 12px;background:var(--lbg);border-radius:6px;border:1px solid var(--lb);}
+.lttype label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--lt);cursor:pointer;font-weight:500;}
+.lttype input[type=radio]{accent-color:var(--lp);cursor:pointer;width:15px;height:15px;}
+.lttype .lttdesc{font-size:11px;color:var(--lm);font-weight:400;margin-left:2px;}
+.lta{width:100%;height:180px;padding:12px;font-size:13px;font-family:'Consolas','Courier New',monospace;border:1px solid var(--lb);border-radius:6px;resize:vertical;line-height:1.5;color:var(--lt);background:#fafafa;transition:border .2s;}
+.lta.lsm{height:110px;}
+.lta:focus{outline:none;border-color:var(--lp);box-shadow:0 0 0 3px rgba(21,101,192,.12);}
+.lta::placeholder{color:#94a3b8;}
+.lhint{font-size:12px;color:var(--lm);margin-top:6px;}
+.ldz{border:2px dashed var(--lb);border-radius:var(--lr);padding:36px 20px;text-align:center;cursor:pointer;transition:all .2s;background:#fafafa;min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;}
+.ldz.lsm{min-height:110px;padding:20px;}
+.ldz.over{border-color:var(--lp);background:#e3f2fd;}
+.ldz input[type=file]{display:none;}
+.ldz .di{font-size:32px;flex-shrink:0;}
+.ldz .dl{font-size:14px;color:var(--lm);flex-shrink:0;}
+.ldz .dl span{color:var(--lp);cursor:pointer;text-decoration:underline;}
+.ldz .dc{font-size:12px;color:var(--ls);font-weight:500;margin-top:4px;max-height:60px;overflow-y:auto;flex-shrink:0;width:100%;}
+.ldz .dh{font-size:11px;color:#94a3b8;flex-shrink:0;}
+.lcheckrow{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px;cursor:pointer;}
+.lcheckrow input{accent-color:var(--lp);width:16px;height:16px;cursor:pointer;}
+.lmeta{display:flex;align-items:center;gap:12px;margin-bottom:16px;}
+.lmeta label{font-size:13px;color:var(--lm);white-space:nowrap;}
+.lmeta input{flex:1;max-width:280px;padding:7px 12px;font-size:13px;border:1px solid var(--lb);border-radius:6px;color:var(--lt);}
+.lmeta input:focus{outline:none;border-color:var(--lp);}
+.lacts{display:flex;align-items:center;gap:12px;margin-bottom:28px;flex-wrap:wrap;}
+.lbtn{padding:10px 28px;font-size:15px;font-weight:500;background:var(--lp);color:#fff;border:none;border-radius:6px;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:8px;}
+.lbtn:hover:not(:disabled){background:var(--lpd);}
+.lbtn:disabled{opacity:.6;cursor:not-allowed;}
+.lbtn2{padding:10px 20px;font-size:14px;background:transparent;border:1px solid var(--lb);border-radius:6px;cursor:pointer;color:var(--lm);transition:all .2s;}
+.lbtn2:hover{background:var(--lbg);color:var(--lt);}
+.lbtn3{padding:10px 20px;font-size:14px;background:var(--ls);color:#fff;border:none;border-radius:6px;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px;}
+.lbtn3:hover{background:#1b5e20;}
+.lspin{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:lspin .7s linear infinite;}
+@keyframes lspin{to{transform:rotate(360deg);}}
+.lban{padding:12px 16px;border-radius:var(--lr);font-size:14px;margin-bottom:20px;display:flex;align-items:flex-start;gap:10px;}
+.lban.err{background:#ffeaea;border:1px solid #f5c6c6;color:var(--le);}
+.lban.wrn{background:#fff8e1;border:1px solid #ffe082;color:var(--lw);}
+.lres{animation:lfade .3s ease;}
+@keyframes lfade{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+.lrh{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px;}
+.lrh h2{font-size:18px;font-weight:600;color:var(--lt);}
+.lst{padding:4px 12px;border-radius:20px;font-size:13px;font-weight:500;}
+.lst.mt{background:#e8f5e9;color:var(--ls);}
+.lst.to{background:var(--lbg);color:var(--lm);}
+.lst.fl{background:#ffebee;color:var(--le);}
+.lst.dr{background:#e3f2fd;color:#1565c0;}
+.lst.rt{background:#ede7f6;color:#4527a0;}
+.lmsgblock{background:var(--lsf);border:1px solid var(--lb);border-radius:var(--lr);margin-bottom:24px;box-shadow:var(--lsh);overflow:hidden;}
+.lmsgtitle{padding:12px 20px;background:#eef2f7;border-bottom:1px solid var(--lb);font-size:14px;font-weight:600;color:var(--lt);display:flex;align-items:center;gap:10px;justify-content:space-between;}
+.lmsgtitle .lmn{display:flex;align-items:center;gap:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lmsgtitle .lmn::before{content:"📄";}
+.lsec{border-top:1px solid var(--lb);}
+.lsech{padding:12px 20px;border-bottom:1px solid var(--lb);font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--lm);background:var(--lbg);display:flex;align-items:center;justify-content:space-between;}
+.lhmsg{padding:20px;font-family:'Consolas','Courier New',monospace;font-size:13px;white-space:pre-wrap;word-break:break-word;line-height:1.8;max-height:350px;overflow-y:auto;}
+.lhmsg mark.lex-match{background:var(--lmk);border-bottom:2px solid var(--lmb);border-radius:2px;padding:0 1px;}
+.lhmsg mark.lex-match-disclaimer{background:var(--ldk);border-bottom:2px dashed var(--ldb);border-radius:2px;padding:0 1px;color:#555;}
+.ltgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:16px;}
+.ltc{border-radius:8px;border:1px solid var(--lb);overflow:hidden;font-size:13px;transition:box-shadow .2s;}
+.ltc:hover{box-shadow:0 4px 12px rgba(0,0,0,.10);}
+.ltc.hm{border-left:4px solid var(--ls);}
+.ltc.nm{border-left:4px solid var(--lb);}
+.ltc.fl{border-left:4px solid var(--le);}
+.ltc.pf{border-left:4px solid var(--la);}
+.ltc.dc{border-left:4px solid var(--ldb);}
+.ltch{padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.ltch.hm{background:#f1f8f1;}
+.ltch.nm{background:#fafafa;}
+.ltch.fl{background:#fff5f5;}
+.ltch.pf{background:#fff8f0;}
+.ltch.dc{background:#f5f5f5;}
+.ltn{font-weight:600;color:var(--lt);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lbdg{padding:2px 9px;border-radius:12px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;}
+.lbdg.pa{background:#c8e6c9;color:#1b5e20;}
+.lbdg.fl{background:#ffcdd2;color:#b71c1c;}
+.lbdg.nh{background:#eceff1;color:#546e7a;}
+.lbdg.po{background:#ffe0b2;color:#bf360c;}
+.lbdg.dc{background:var(--ldk);color:#424242;}
+.ltcb{padding:10px 14px 12px;}
+.lpat{font-family:'Consolas','Courier New',monospace;font-size:11px;color:#546e7a;background:#f1f5f9;padding:4px 8px;border-radius:4px;margin-bottom:8px;word-break:break-all;}
+.lmts{display:flex;flex-wrap:wrap;gap:6px;}
+.lmpill{background:var(--lmk);border:1px solid var(--lmb);border-radius:12px;padding:2px 10px;font-family:monospace;font-size:12px;color:#4a3000;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lmpill.dcpill{background:var(--ldk);border:1px solid var(--ldb);color:#424242;}
+.lmpill.dcpill::after{content:" (disclaimer)";font-style:italic;font-size:10px;}
+.lnote{font-size:11px;color:var(--la);margin-top:6px;font-style:italic;padding-top:6px;border-top:1px solid #ffe0b2;}
+.lnote.dcnote{color:#616161;border-top-color:var(--ldk);}
+.lerr{font-size:12px;color:var(--le);margin-top:4px;}
+.lemp{text-align:center;padding:40px 20px;color:var(--lm);}
+.lemp .ei{font-size:40px;display:block;margin-bottom:12px;}
+.hidden{display:none!important;}
+</style>
+</head>
+<body>
+<div class="la">
+<div class="lhdr">
+  <h1>Lexicon Pattern Scanner</h1>
+  <p>Compile lexicon terms via the Lexicon Compile Service, then scan one or more messages with Intel Hyperscan.</p>
+</div>
+<div id="lban" class="lban err hidden"><span>&#9888;</span><span id="lbmsg"></span></div>
+<div class="lgrid">
+  <div class="lpanel">
+    <h2>Lexicon Terms</h2>
+    <div class="lttype" role="radiogroup" aria-label="Request type">
+      <label><input type="radio" name="termType" value="NATURAL_LANGUAGE" checked onchange="setTermType(this.value)"/> Natural Language <span class="lttdesc">(translated via Compile Service)</span></label>
+      <label><input type="radio" name="termType" value="REGEX" onchange="setTermType(this.value)"/> Regex <span class="lttdesc">(compiled directly, as-is)</span></label>
+    </div>
+    <div class="ltog" role="group">
+      <button class="act" onclick="setTM('text')" id="bt1">Type Terms</button>
+      <button onclick="setTM('csv')" id="bt2">Upload CSV</button>
+    </div>
+    <div id="ttm">
+      <textarea id="ti" class="lta" placeholder="insider AND trading&#10;price NEAR{5} manipulation&#10;&quot;front running&quot;&#10;pump OR dump&#10;💰 OR 🤫" oninput="validateForm()"></textarea>
+      <p class="lhint" id="thint">Operators: OR · AND · AND NOT · NOT · NEAR{n} · FOLLOWEDBY{n} · wildcard* · &quot;phrase&quot; · emoji · Korean/Arabic/Chinese</p>
+    </div>
+    <div id="tcm" class="hidden">
+      <div class="ldz" id="cd" onclick="document.getElementById('cf').click()"
+           ondragover="dragOver(event,'cd')" ondragleave="dragLeave('cd')" ondrop="dropSingle(event,'cf','cc')">
+        <input type="file" id="cf" accept=".csv" onchange="showSingleFile(this,'cc');validateForm();"/>
+        <span class="di">&#128196;</span>
+        <div class="dl">Drop CSV or <span>browse</span></div>
+        <div class="dc hidden" id="cc"></div>
+        <div class="dh" id="chint">Format: term_id, term_description, risk_driver</div>
+      </div>
+    </div>
+  </div>
+  <div class="lpanel">
+    <h2>Communication Message(s)</h2>
+    <div class="ltog" role="group">
+      <button class="act" onclick="setMM('text')" id="bm1">Type / Paste</button>
+      <button onclick="setMM('file')" id="bm2">Upload File(s)</button>
+    </div>
+    <div id="mtm">
+      <textarea id="mi" class="lta" placeholder="Paste the communication message here (email, chat, Bloomberg, etc.)&#10;&#10;Supports multi-language: English, Korean, Chinese, Arabic, Hebrew, emoji." oninput="validateForm()"></textarea>
+    </div>
+    <div id="mfm" class="hidden">
+      <div class="ldz" id="md" onclick="document.getElementById('mf').click()"
+           ondragover="dragOver(event,'md')" ondragleave="dragLeave('md')" ondrop="dropMulti(event,'mf','mc')">
+        <input type="file" id="mf" accept=".txt,.eml,.msg,.html,.json,.log" multiple onchange="showMultiFiles(this,'mc');validateForm();"/>
+        <span class="di">&#128172;</span>
+        <div class="dl">Drop one or more files or <span>browse</span></div>
+        <div class="dc hidden" id="mc"></div>
+        <div class="dh">Supported: .txt · .eml · .msg · .html · .log — each file is scanned as its own message</div>
+      </div>
+    </div>
+  </div>
+  <div class="lpanel lfull">
+    <h2>Disclaimer Exclusion <span class="lttdesc" style="text-transform:none;">— optional</span></h2>
+    <label class="lcheckrow"><input type="checkbox" id="dcEnabled" onchange="toggleDisclaimerPanel()"/>
+      Exclude lexicon matches found only in disclaimer text from alerting (e.g. "confidential" in a standard email footer)</label>
+    <div id="dcBody" class="hidden">
+      <div class="ltog" role="group">
+        <button class="act" onclick="setDM('text')" id="bd1">Type Disclaimer(s)</button>
+        <button onclick="setDM('csv')" id="bd2">Upload CSV</button>
+      </div>
+      <div id="dtm">
+        <textarea id="di" class="lta lsm" placeholder="This e-mail and any files transmitted with it are confidential...&#10;&#10;(separate multiple disclaimers with one blank line — a single disclaimer may itself span several lines)" oninput="validateForm()"></textarea>
+        <p class="lhint">Separate multiple disclaimers with a blank line — matched by exact text (after HTML/whitespace normalisation), not line-by-line.</p>
+      </div>
+      <div id="dcm" class="hidden">
+        <div class="ldz lsm" id="ddz" onclick="document.getElementById('df').click()"
+             ondragover="dragOver(event,'ddz')" ondragleave="dragLeave('ddz')" ondrop="dropSingle(event,'df','dfc')">
+          <input type="file" id="df" accept=".csv" onchange="showSingleFile(this,'dfc');validateForm();"/>
+          <span class="di">&#128196;</span>
+          <div class="dl">Drop CSV or <span>browse</span></div>
+          <div class="dc hidden" id="dfc"></div>
+          <div class="dh">Format: id, disclaimer_text</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="lmeta">
+  <label for="rn">Session name</label>
+  <input type="text" id="rn" placeholder="scanner-test-run" maxlength="80"/>
+</div>
+<div class="lacts">
+  <button class="lbtn" id="sb" onclick="runScan()" disabled>
+    <span id="sbl">Run Scan</span>
+    <span class="lspin hidden" id="ssp"></span>
+  </button>
+  <button class="lbtn2" onclick="clearAll()">Clear</button>
+  <button class="lbtn3 hidden" id="rbtn" onclick="downloadReport()">&#128190; Download Report (CSV)</button>
+</div>
+<div id="res" class="lres hidden">
+  <div class="lrh">
+    <h2>Results</h2>
+    <span class="lst rt" id="rrt"></span>
+    <span class="lst mt" id="rm"></span>
+    <span class="lst to" id="rt"></span>
+    <span class="lst fl hidden" id="rf"></span>
+    <span class="lst to" id="rmc"></span>
+    <span class="lst dr" id="rd"></span>
+  </div>
+  <div id="wb" class="lban wrn hidden"><span>&#9888;</span><span id="wt"></span></div>
+  <div id="messages"></div>
+</div>
+</div>
+<script>
+let tm='text',mm='text',dm='text',termType='NATURAL_LANGUAGE',disclaimerEnabled=false;
+let lastScanResponse=null;
+
+function setTermType(v){
+  termType=v;
+  const isRegex = v==='REGEX';
+  document.getElementById('thint').textContent = isRegex
+    ? 'Enter a Hyperscan-compatible PCRE pattern directly (no translation is performed).'
+    : 'Operators: OR · AND · AND NOT · NOT · NEAR{n} · FOLLOWEDBY{n} · wildcard* · "phrase" · emoji · Korean/Arabic/Chinese';
+  document.getElementById('chint').textContent = isRegex
+    ? 'Format: term_id, term_description (raw regex pattern)'
+    : 'Format: term_id, term_description, risk_driver';
+  validateForm();
+}
+function setTM(m){tm=m;document.getElementById('ttm').classList.toggle('hidden',m!='text');document.getElementById('tcm').classList.toggle('hidden',m!='csv');document.getElementById('bt1').classList.toggle('act',m=='text');document.getElementById('bt2').classList.toggle('act',m=='csv');validateForm();}
+function setMM(m){mm=m;document.getElementById('mtm').classList.toggle('hidden',m!='text');document.getElementById('mfm').classList.toggle('hidden',m!='file');document.getElementById('bm1').classList.toggle('act',m=='text');document.getElementById('bm2').classList.toggle('act',m=='file');validateForm();}
+function setDM(m){dm=m;document.getElementById('dtm').classList.toggle('hidden',m!='text');document.getElementById('dcm').classList.toggle('hidden',m!='csv');document.getElementById('bd1').classList.toggle('act',m=='text');document.getElementById('bd2').classList.toggle('act',m=='csv');validateForm();}
+function toggleDisclaimerPanel(){disclaimerEnabled=document.getElementById('dcEnabled').checked;document.getElementById('dcBody').classList.toggle('hidden',!disclaimerEnabled);validateForm();}
+
+function dragOver(e,z){e.preventDefault();document.getElementById(z).classList.add('over');}
+function dragLeave(z){document.getElementById(z).classList.remove('over');}
+function dropSingle(e,fieldId,labelId){e.preventDefault();dragLeave(fieldId==='cf'?'cd':(fieldId==='df'?'ddz':fieldId));const i=document.getElementById(fieldId);if(e.dataTransfer.files.length){const d=new DataTransfer();d.items.add(e.dataTransfer.files[0]);i.files=d.files;showSingleFile(i,labelId);validateForm();}}
+function dropMulti(e,fieldId,labelId){e.preventDefault();dragLeave('md');const i=document.getElementById(fieldId);if(e.dataTransfer.files.length){const d=new DataTransfer();for(const f of e.dataTransfer.files)d.items.add(f);i.files=d.files;showMultiFiles(i,labelId);validateForm();}}
+
+function showSingleFile(input,labelId){
+  const el=document.getElementById(labelId);
+  if(input.files&&input.files[0]){el.textContent='✓ '+input.files[0].name;el.classList.remove('hidden');}
+  else{el.classList.add('hidden');}
+  // Requirement: a selected-but-empty CSV file must show an explicit error immediately.
+  if(input.files&&input.files[0]&&input.files[0].size===0){sb2('The selected CSV file is empty.');}
+  else{hb();}
+}
+function showMultiFiles(input,labelId){
+  const el=document.getElementById(labelId);
+  if(input.files&&input.files.length){
+    const names=Array.from(input.files).map(f=>f.name+(f.size===0?' (empty!)':'')).join(', ');
+    el.textContent='✓ '+input.files.length+' file'+(input.files.length!==1?'s':'')+' selected: '+names;
+    el.classList.remove('hidden');
+    const anyEmpty=Array.from(input.files).some(f=>f.size===0);
+    if(anyEmpty){sb2('One or more selected files are empty. Every uploaded message file must contain text.');}
+    else{hb();}
+  } else {
+    el.classList.add('hidden');
+  }
+}
+function sb2(msg,type='err'){const b=document.getElementById('lban');b.className='lban '+type;document.getElementById('lbmsg').textContent=msg;b.classList.remove('hidden');b.scrollIntoView({behavior:'smooth',block:'nearest'});}
+function hb(){document.getElementById('lban').classList.add('hidden');}
+function eh(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+
+/** The "Run Scan" button is disabled — not just error-on-click — until terms and message(s) are provided. */
+function validateForm(){
+  const termsOk = (tm==='text')
+    ? document.getElementById('ti').value.trim().length>0
+    : (document.getElementById('cf').files.length>0 && document.getElementById('cf').files[0].size>0);
+  const messageOk = (mm==='text')
+    ? document.getElementById('mi').value.trim().length>0
+    : document.getElementById('mf').files.length>0;
+  const disclaimerOk = !disclaimerEnabled || (dm==='text'
+    ? document.getElementById('di').value.trim().length>0
+    : (document.getElementById('df').files.length>0 && document.getElementById('df').files[0].size>0));
+  document.getElementById('sb').disabled = !(termsOk && messageOk && disclaimerOk);
+  return termsOk && messageOk && disclaimerOk;
+}
+
+async function runScan(){
+  hb();
+  if(!validateForm()){return;}
+  const btn=document.getElementById('sb'),lbl=document.getElementById('sbl'),sp=document.getElementById('ssp');
+  const fd=new FormData();
+  fd.append('inputMode',tm.toUpperCase());fd.append('termType',termType);fd.append('messageMode',mm.toUpperCase());
+  fd.append('ruleName',document.getElementById('rn').value.trim()||'scanner-test-run');
+  if(tm=='text'){const t=document.getElementById('ti').value.trim();if(!t){sb2('Please enter at least one lexicon term.');return;}fd.append('terms',t);}
+  else{const f=document.getElementById('cf').files[0];if(!f){sb2('Please upload a CSV file.');return;}if(f.size===0){sb2('The uploaded CSV file is empty.');return;}fd.append('csvFile',f);}
+  if(mm=='text'){const m=document.getElementById('mi').value.trim();if(!m){sb2('Please enter or paste a message to scan.');return;}fd.append('messageText',m);}
+  else{const files=document.getElementById('mf').files;if(!files.length){sb2('Please upload at least one message file.');return;}for(const f of files){fd.append('messageFiles',f);}}
+  fd.append('disclaimerInputMode', disclaimerEnabled ? dm.toUpperCase() : 'NONE');
+  if(disclaimerEnabled){
+    if(dm=='text'){const dt=document.getElementById('di').value.trim();if(!dt){sb2('Please enter disclaimer text, or uncheck disclaimer exclusion.');return;}fd.append('disclaimers',dt);}
+    else{const f=document.getElementById('df').files[0];if(!f){sb2('Please upload a disclaimer CSV file.');return;}fd.append('disclaimerCsvFile',f);}
+  }
+  btn.disabled=true;lbl.textContent='Scanning\u2026';sp.classList.remove('hidden');
+  document.getElementById('res').classList.add('hidden');document.getElementById('rbtn').classList.add('hidden');
+  try{
+    const r=await fetch('/api/scan',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok||d.status==='ERROR'){sb2(d.errorMessage||'Scan failed. Is the Lexicon Compile Service running?','err');return;}
+    lastScanResponse=d;
+    render(d);
+    document.getElementById('res').classList.remove('hidden');
+    document.getElementById('rbtn').classList.remove('hidden');
+    document.getElementById('res').scrollIntoView({behavior:'smooth'});
+  }catch(e){sb2('Network error: '+e.message,'err');}
+  finally{btn.disabled=!validateForm();lbl.textContent='Run Scan';sp.classList.add('hidden');}
+}
+
+function render(d){
+  document.getElementById('rrt').textContent=d.termType||'';
+  document.getElementById('rm').textContent=d.matchedTerms+' matched';
+  document.getElementById('rt').textContent='of '+d.totalTerms+' term(s)';
+  document.getElementById('rmc').textContent=d.totalMessages+' message'+(d.totalMessages!==1?'s':'');
+  document.getElementById('rd').textContent=d.scanDurationMs+' ms';
+  const fl=document.getElementById('rf');
+  if(d.failedTerms>0){fl.textContent=d.failedTerms+' failed';fl.classList.remove('hidden');}else{fl.classList.add('hidden');}
+  const wb=document.getElementById('wb');
+  if(d.warnings&&d.warnings.length){document.getElementById('wt').textContent=d.warnings.join(' ');wb.classList.remove('hidden');}else{wb.classList.add('hidden');}
+
+  const container=document.getElementById('messages');
+  const msgs=d.messageResults||[];
+  if(!msgs.length){container.innerHTML='<div class="lemp"><span class="ei">&#128269;</span><p>No messages scanned.</p></div>';return;}
+
+  container.innerHTML=msgs.map(renderMessageBlock).join('');
+}
+
+function renderMessageBlock(msg){
+  const totalMatches=(msg.termResults||[]).reduce((s,t)=>s+(t.matches?.length||0),0);
+  const alertMatches=(msg.termResults||[]).reduce((s,t)=>s+(t.matches||[]).filter(m=>!m.inDisclaimer).length,0);
+  const dcCount=(msg.disclaimerSpans||[]).length;
+  const dcBadge=dcCount>0?`<span class="lst dr" style="margin-left:6px;">${dcCount} disclaimer region${dcCount!==1?'s':''} detected</span>`:'';
+
+  const termCards=(msg.termResults||[]).length
+    ? (msg.termResults||[]).map(renderTermCard).join('')
+    : '<div class="lemp"><span class="ei">&#128269;</span><p>No terms.</p></div>';
+
+  return `<div class="lmsgblock">
+    <div class="lmsgtitle"><span class="lmn" title="${eh(msg.messageId)}">${eh(msg.messageId)}</span>
+      <span style="font-size:12px;font-weight:400;color:var(--lm);">${alertMatches} alert-worthy match${alertMatches!==1?'es':''} · ${totalMatches} total match${totalMatches!==1?'es':''}${dcBadge}</span>
+    </div>
+    <div class="lsec">
+      <div class="lsech"><span>Highlighted Message</span></div>
+      <div class="lhmsg">${msg.htmlHighlightedMessage||''}</div>
+    </div>
+    <div class="lsec">
+      <div class="lsech"><span>Term Results</span><span style="font-size:12px;color:var(--lm)">${(msg.termResults||[]).length} term(s)</span></div>
+      <div class="ltgrid">${termCards}</div>
+    </div>
+  </div>`;
+}
+
+function renderTermCard(t){
+  const F=t.compilationStatus==='FAILED',H=t.hasMatches,DC=t.hasDisclaimerOnlyMatches,P=t.requiresAndPostFilter;
+  let cc,hc,bd;
+  if(F){cc='fl';hc='fl';bd='<span class="lbdg fl">FAILED</span>';}
+  else if(DC){cc='dc';hc='dc';bd='<span class="lbdg dc">DISCLAIMER ONLY</span>';}
+  else if(!H){cc='nm';hc='nm';bd='<span class="lbdg nh">NO HIT</span>';}
+  else if(P){cc='pf';hc='pf';bd='<span class="lbdg po">AND MATCH</span>';}
+  else{cc='hm';hc='hm';bd='<span class="lbdg pa">MATCHED</span>';}
+  const pat=t.translatedPattern?`<div class="lpat" title="Hyperscan PCRE">${eh(t.translatedPattern)}</div>`:'';
+  const pills=(t.matches||[]).map(m=>
+    `<span class="lmpill${m.inDisclaimer?' dcpill':''}" title="${m.startCharIndex}-${m.endCharIndex}${m.inDisclaimer?' — not counted as an alert (found in disclaimer)':''}">${eh(m.matchedText)}</span>`
+  ).join('');
+  const body=pills?`<div class="lmts">${pills}</div>`:(F?`<p class="lerr">${eh(t.compilationError||'')}</p>`:'');
+  const note=t.postFilterNote?`<p class="lnote">&#8505; ${eh(t.postFilterNote)}</p>`:'';
+  const dcNote=DC?'<p class="lnote dcnote">&#8505; All match(es) for this term were found only in disclaimer text and are not counted as an alert.</p>':'';
+  return`<div class="ltc ${cc}"><div class="ltch ${hc}"><span class="ltn" title="${eh(t.termDescription)}">${eh(t.termDescription)}</span>${bd}</div><div class="ltcb">${pat}${body}${note}${dcNote}</div></div>`;
+}
+
+/**
+ * Builds the downloadable report client-side from the already-fetched scan
+ * response — one row per (message, term, match), plus one row per term with
+ * no match (so every term/message combination is represented even when
+ * nothing fired), matching the requirement's column list: lexicon term,
+ * translated regex, compilation status, request type, matched text, alert
+ * flag, and disclaimer flag. A "Message" column is included too since a
+ * report spanning multiple scanned messages would otherwise be ambiguous
+ * about which message each row came from.
+ */
+function downloadReport(){
+  if(!lastScanResponse){return;}
+  const d=lastScanResponse;
+  const rows=[['Message','Lexicon Term','Translated Regex','Compilation Status','Request Type','Matched Text','Flag for Alert','Was it Disclaimer?']];
+  (d.messageResults||[]).forEach(msg=>{
+    (msg.termResults||[]).forEach(t=>{
+      if(t.compilationStatus==='FAILED'){
+        rows.push([msg.messageId,t.termDescription,'','FAILED',d.termType||'',t.compilationError||'','No','N/A']);
+      } else if(!t.matches||t.matches.length===0){
+        rows.push([msg.messageId,t.termDescription,t.translatedPattern||'','PASS',d.termType||'','','No','N/A']);
+      } else {
+        t.matches.forEach(m=>{
+          rows.push([msg.messageId,t.termDescription,t.translatedPattern||'','PASS',d.termType||'',
+                     m.matchedText,m.inDisclaimer?'No':'Yes',m.inDisclaimer?'Yes':'No']);
+        });
+      }
+    });
+  });
+  const csvEscape=v=>{v=String(v==null?'':v);return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;};
+  const csv=rows.map(r=>r.map(csvEscape).join(',')).join('\r\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='lexicon-scan-report-'+(d.scanId||'report')+'.csv';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function clearAll(){
+  ['ti','mi','rn','di'].forEach(i=>document.getElementById(i).value='');
+  ['cf','mf','df'].forEach(i=>document.getElementById(i).value='');
+  ['cc','mc','dfc'].forEach(i=>document.getElementById(i).classList.add('hidden'));
+  document.querySelector('input[name=termType][value=NATURAL_LANGUAGE]').checked=true;
+  setTermType('NATURAL_LANGUAGE');
+  document.getElementById('dcEnabled').checked=false;
+  disclaimerEnabled=false;
+  document.getElementById('dcBody').classList.add('hidden');
+  lastScanResponse=null;
+  document.getElementById('res').classList.add('hidden');
+  document.getElementById('rbtn').classList.add('hidden');
+  hb();setTM('text');setMM('text');setDM('text');
+  validateForm();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+</script>
+</body>
+</html>

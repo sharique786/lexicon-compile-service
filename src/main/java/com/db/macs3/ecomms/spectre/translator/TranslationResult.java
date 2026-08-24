@@ -57,30 +57,32 @@ import java.util.List;
 public sealed interface TranslationResult
         permits TranslationResult.Success, TranslationResult.Error {
 
-    /** Returns true when translation succeeded. */
+    /**
+     * Returns true when translation succeeded.
+     */
     boolean isSuccess();
 
     /**
      * Successful translation.
      *
-     * @param hsPatterns              the required side's Hyperscan PCRE pattern(s) — see class
-     *                                Javadoc. Never null or empty for a {@code Success}.
-     * @param hsFlags                 bitmask: 1=CASELESS, 32=UTF8, 64=UCP
-     * @param requiresExclusionCheck  true when this term used AND NOT — the
-     *                                caller MUST also check the excluded side
-     * @param exclusionPatterns       the excluded side's Hyperscan PCRE pattern(s). Null
-     *                                (not just empty) when {@code requiresExclusionCheck} is
-     *                                false; never null or empty when it is true.
-     * @param warnings                non-fatal issues worth surfacing to the caller — never null,
-     *                                may be empty. Always includes an explicit entry whenever
-     *                                decomposition applied to either side, and whenever the term
-     *                                relied on chained NEAR/FOLLOWEDBY without explicit parentheses
-     *                                (see {@code ExpressionParser}).
+     * @param hsPatterns             the required side's Hyperscan PCRE pattern(s) — see class
+     *                               Javadoc. Never null or empty for a {@code Success}.
+     * @param hsFlags                bitmask: 1=CASELESS, 32=UTF8, 64=UCP
+     * @param requiresExclusionCheck true when this term used AND NOT — the
+     *                               caller MUST also check the excluded side
+     * @param exclusionPatterns      the excluded side's Hyperscan PCRE pattern(s). Null
+     *                               (not just empty) when {@code requiresExclusionCheck} is
+     *                               false; never null or empty when it is true.
+     * @param warnings               non-fatal issues worth surfacing to the caller — never null,
+     *                               may be empty. Always includes an explicit entry whenever
+     *                               decomposition applied to either side, and whenever the term
+     *                               relied on chained NEAR/FOLLOWEDBY without explicit parentheses
+     *                               (see {@code ExpressionParser}).
      */
     record Success(
             List<String> hsPatterns,
-            int          hsFlags,
-            boolean      requiresExclusionCheck,
+            int hsFlags,
+            boolean requiresExclusionCheck,
             List<String> exclusionPatterns,
             List<String> warnings
     ) implements TranslationResult {
@@ -99,8 +101,12 @@ public sealed interface TranslationResult
             }
         }
 
-        /** @return true always */
-        public boolean isSuccess() { return true; }
+        /**
+         * @return true always
+         */
+        public boolean isSuccess() {
+            return true;
+        }
     }
 
     /**
@@ -110,34 +116,48 @@ public sealed interface TranslationResult
      */
     record Error(String message) implements TranslationResult {
 
-        /** @return false always */
-        public boolean isSuccess() { return false; }
+        /**
+         * @return false always
+         */
+        public boolean isSuccess() {
+            return false;
+        }
     }
 
     // ── Factories ────────────────────────────────────────────────────────────
 
-    /** Factory: successful translation with no AND-NOT exclusion, no warnings. */
+    /**
+     * Factory: successful translation with no AND-NOT exclusion, no warnings.
+     */
     static TranslationResult success(List<String> patterns, int flags) {
         return new Success(patterns, flags, false, null, List.of());
     }
 
-    /** Factory: successful translation with no AND-NOT exclusion, carrying warnings. */
+    /**
+     * Factory: successful translation with no AND-NOT exclusion, carrying warnings.
+     */
     static TranslationResult successWithWarnings(List<String> patterns, int flags, List<String> warnings) {
         return new Success(patterns, flags, false, null, List.copyOf(warnings));
     }
 
-    /** Factory: successful translation WITH an AND-NOT exclusion, no warnings. */
+    /**
+     * Factory: successful translation WITH an AND-NOT exclusion, no warnings.
+     */
     static TranslationResult successWithExclusion(List<String> patterns, int flags, List<String> exclusionPatterns) {
         return new Success(patterns, flags, true, exclusionPatterns, List.of());
     }
 
-    /** Factory: successful translation WITH an AND-NOT exclusion, carrying warnings. */
+    /**
+     * Factory: successful translation WITH an AND-NOT exclusion, carrying warnings.
+     */
     static TranslationResult successWithExclusionAndWarnings(
             List<String> patterns, int flags, List<String> exclusionPatterns, List<String> warnings) {
         return new Success(patterns, flags, true, exclusionPatterns, List.copyOf(warnings));
     }
 
-    /** Factory: failed translation. */
+    /**
+     * Factory: failed translation.
+     */
     static TranslationResult error(String message) {
         return new Error(message);
     }

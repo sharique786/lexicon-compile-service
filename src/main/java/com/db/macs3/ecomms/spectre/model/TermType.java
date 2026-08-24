@@ -27,10 +27,14 @@ import com.fasterxml.jackson.annotation.JsonValue;
  */
 public enum TermType {
 
-    /** Operator-language syntax, translated via {@code TermSyntaxTranslator}. Formerly {@code "Standard"}. */
+    /**
+     * Operator-language syntax, translated via {@code TermSyntaxTranslator}. Formerly {@code "Standard"}.
+     */
     NATURAL_LANGUAGE("Natural Language"),
 
-    /** Already-valid PCRE, compiled verbatim with no translation. Formerly {@code "NLT"}. */
+    /**
+     * Already-valid PCRE, compiled verbatim with no translation. Formerly {@code "NLT"}.
+     */
     REGEX("Regex");
 
     private final String jsonValue;
@@ -39,7 +43,9 @@ public enum TermType {
         this.jsonValue = jsonValue;
     }
 
-    /** The exact string used in JSON request/response bodies, e.g. {@code "termType": "Natural Language"}. */
+    /**
+     * The exact string used in JSON request/response bodies, e.g. {@code "termType": "Natural Language"}.
+     */
     @JsonValue
     public String jsonValue() {
         return jsonValue;

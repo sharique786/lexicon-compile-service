@@ -20,23 +20,41 @@ package com.db.macs3.ecomms.spectre.translator;
  */
 public sealed interface Token {
 
-    /** {@code (} */
-    record LParen() implements Token {}
+    /**
+     * {@code (}
+     */
+    record LParen() implements Token {
+    }
 
-    /** {@code )} */
-    record RParen() implements Token {}
+    /**
+     * {@code )}
+     */
+    record RParen() implements Token {
+    }
 
-    /** The literal keyword {@code OR} (exact case). */
-    record Or() implements Token {}
+    /**
+     * The literal keyword {@code OR} (exact case).
+     */
+    record Or() implements Token {
+    }
 
-    /** The literal keyword {@code AND} (exact case) — NOT immediately followed by {@code NOT}. */
-    record And() implements Token {}
+    /**
+     * The literal keyword {@code AND} (exact case) — NOT immediately followed by {@code NOT}.
+     */
+    record And() implements Token {
+    }
 
-    /** The two-word literal keyword {@code AND NOT} (exact case), tokenised as a single unit. */
-    record AndNot() implements Token {}
+    /**
+     * The two-word literal keyword {@code AND NOT} (exact case), tokenised as a single unit.
+     */
+    record AndNot() implements Token {
+    }
 
-    /** The literal keyword {@code NOT} (exact case), or a leading {@code !}. */
-    record Not() implements Token {}
+    /**
+     * The literal keyword {@code NOT} (exact case), or a leading {@code !}.
+     */
+    record Not() implements Token {
+    }
 
     /**
      * The literal keyword {@code NEAR} immediately followed by {@code {n}} with
@@ -45,16 +63,21 @@ public sealed interface Token {
      * ({@code NEAR{0}}, {@code NEAR{-1}}, {@code NEAR{10}}, {@code NEAR {1}}, etc.)
      * are rejected before the parser ever sees them.
      */
-    record Near(int distance) implements Token {}
+    record Near(int distance) implements Token {
+    }
 
-    /** The literal keyword {@code FOLLOWEDBY} immediately followed by {@code {n}}; same validation as {@link Near}. */
-    record FollowedBy(int distance) implements Token {}
+    /**
+     * The literal keyword {@code FOLLOWEDBY} immediately followed by {@code {n}}; same validation as {@link Near}.
+     */
+    record FollowedBy(int distance) implements Token {
+    }
 
     /**
      * A double-quoted phrase, e.g. {@code "please don't forward"}.
      * {@code text} is the content BETWEEN the quotes, not yet PCRE-escaped.
      */
-    record QuotedPhrase(String text) implements Token {}
+    record QuotedPhrase(String text) implements Token {
+    }
 
     /**
      * A single whitespace-free run of text: a word, a wildcarded word
@@ -62,5 +85,6 @@ public sealed interface Token {
      * {@code ?} (e.g. {@code he?d}). Not yet PCRE-escaped — that happens in
      * {@link PatternCodeGenerator}.
      */
-    record Word(String text) implements Token {}
+    record Word(String text) implements Token {
+    }
 }

@@ -32,13 +32,14 @@ import java.util.List;
  */
 final class PatternDecomposer {
 
-    private PatternDecomposer() {}
+    private PatternDecomposer() {
+    }
 
     /**
      * @param ast a NEAR/FOLLOWEDBY tree (or any AST — a non-proximity root
      *            simply returns a single-element list containing {@code ast} itself)
      * @return the leaf subtrees, in left-to-right order as they appear in the
-     *         original term text
+     * original term text
      */
     static List<Ast> collectLeaves(Ast ast) {
         List<Ast> leaves = new ArrayList<>();
@@ -64,7 +65,7 @@ final class PatternDecomposer {
             // to before decomposition existed. Seeing through it here means that single
             // excluded operand's OWN proximity structure (if any) is still visible to
             // decomposition, rather than the Or wrapper being treated as one opaque leaf.
-            case Ast.Or or when or.operands().size() == 1 -> collectLeavesInto(or.operands().get(0), leavesOut);
+            case Ast.Or or when or.operands().size() == 1 -> collectLeavesInto(or.operands().getFirst(), leavesOut);
 
             default -> leavesOut.add(ast);
         }

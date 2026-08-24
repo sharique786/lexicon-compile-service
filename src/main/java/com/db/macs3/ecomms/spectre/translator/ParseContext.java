@@ -37,12 +37,18 @@ package com.db.macs3.ecomms.spectre.translator;
  */
 class ParseContext {
 
-    /** HS_FLAG_CASELESS (1) — always applied. */
+    /**
+     * HS_FLAG_CASELESS (1) — always applied.
+     */
     static final int HS_FLAG_CASELESS = 1;
-    /** HS_FLAG_UTF8 (32) — treat pattern as UTF-8; needed for non-ASCII content. */
-    static final int HS_FLAG_UTF8     = 32;
-    /** HS_FLAG_UCP (64) — use Unicode character properties; applied alongside UTF8. */
-    static final int HS_FLAG_UCP      = 64;
+    /**
+     * HS_FLAG_UTF8 (32) — treat pattern as UTF-8; needed for non-ASCII content.
+     */
+    static final int HS_FLAG_UTF8 = 32;
+    /**
+     * HS_FLAG_UCP (64) — use Unicode character properties; applied alongside UTF8.
+     */
+    static final int HS_FLAG_UCP = 64;
 
     /**
      * Maximum operands allowed in a single AND (or the required side of an
@@ -58,10 +64,14 @@ class ParseContext {
     static final int MAX_AND_OPERANDS = 5;
 
     private boolean needsUtf8 = false;
-    private String  exclusionPattern = null;
+    private String exclusionPattern = null;
 
-    /** Mark that a non-ASCII character was encountered. */
-    void setNeedsUtf8() { this.needsUtf8 = true; }
+    /**
+     * Mark that a non-ASCII character was encountered.
+     */
+    void setNeedsUtf8() {
+        this.needsUtf8 = true;
+    }
 
     /**
      * Records the Hyperscan-valid pattern that must NOT match the same
@@ -71,15 +81,27 @@ class ParseContext {
      * ONE exclusion pattern (via OR) before this is called; see
      * {@link PatternCodeGenerator#generateAndNot}.
      */
-    void setExclusionPattern(String pattern) { this.exclusionPattern = pattern; }
+    void setExclusionPattern(String pattern) {
+        this.exclusionPattern = pattern;
+    }
 
-    boolean isNeedsUtf8() { return needsUtf8; }
+    boolean isNeedsUtf8() {
+        return needsUtf8;
+    }
 
-    /** @return the exclusion pattern, or {@code null} when this term has no AND NOT. */
-    String getExclusionPattern() { return exclusionPattern; }
+    /**
+     * @return the exclusion pattern, or {@code null} when this term has no AND NOT.
+     */
+    String getExclusionPattern() {
+        return exclusionPattern;
+    }
 
-    /** @return true when {@link #getExclusionPattern()} is non-null and must be checked by the caller. */
-    boolean requiresExclusionCheck() { return exclusionPattern != null; }
+    /**
+     * @return true when {@link #getExclusionPattern()} is non-null and must be checked by the caller.
+     */
+    boolean requiresExclusionCheck() {
+        return exclusionPattern != null;
+    }
 
     /**
      * Computes the Hyperscan flag bitmask from accumulated context.

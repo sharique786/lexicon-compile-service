@@ -5,7 +5,6 @@ import com.db.macs3.ecomms.spectre.model.TypedCompileRequest;
 import com.db.macs3.ecomms.spectre.service.CsvCompileService;
 import com.db.macs3.ecomms.spectre.service.LexiconCompileBundleService;
 import com.db.macs3.ecomms.spectre.service.LexiconCompileService;
-import tools.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,8 +12,14 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -55,19 +60,19 @@ public class LexiconCompileController {
 
     private static final Logger log = LoggerFactory.getLogger(LexiconCompileController.class);
 
-    private final LexiconCompileService       compileService;
-    private final CsvCompileService           csvCompileService;
+    private final LexiconCompileService compileService;
+    private final CsvCompileService csvCompileService;
     private final LexiconCompileBundleService bundleService;
-    private final ObjectMapper                objectMapper;
+    private final ObjectMapper objectMapper;
 
     public LexiconCompileController(LexiconCompileService compileService,
-                                     CsvCompileService csvCompileService,
-                                     LexiconCompileBundleService bundleService,
-                                     ObjectMapper objectMapper) {
-        this.compileService    = compileService;
+                                    CsvCompileService csvCompileService,
+                                    LexiconCompileBundleService bundleService,
+                                    ObjectMapper objectMapper) {
+        this.compileService = compileService;
         this.csvCompileService = csvCompileService;
-        this.bundleService     = bundleService;
-        this.objectMapper      = objectMapper;
+        this.bundleService = bundleService;
+        this.objectMapper = objectMapper;
     }
 
     // ── POST /api/lexicon/compile ─────────────────────────────────────────────
@@ -93,7 +98,7 @@ public class LexiconCompileController {
      * @return compile response with per-term results
      */
     @PostMapping(
-            value    = "/compile",
+            value = "/compile",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
@@ -122,7 +127,7 @@ public class LexiconCompileController {
      * @return compile response with per-term results and a generated {@code request_id}
      */
     @PostMapping(
-            value    = "/compile/csv",
+            value = "/compile/csv",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
@@ -182,10 +187,10 @@ public class LexiconCompileController {
      *
      * @param request validated typed-compile request
      * @return zip file (application/zip) with the JSON results and the
-     *         combined Hyperscan database
+     * combined Hyperscan database
      */
     @PostMapping(
-            value    = "/compile/bundle",
+            value = "/compile/bundle",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = "application/zip"
     )
@@ -218,7 +223,7 @@ public class LexiconCompileController {
      * {@code .hdb} database entry or a {@code NO_DATABASE.txt} explanation.
      */
     private byte[] buildBundleZip(String ruleName,
-                                   LexiconCompileBundleService.CompileBundleResult bundle)
+                                  LexiconCompileBundleService.CompileBundleResult bundle)
             throws IOException {
 
         String safeName = sanitizeFilename(ruleName);
@@ -246,7 +251,9 @@ public class LexiconCompileController {
         return zipBuffer.toByteArray();
     }
 
-    /** Replaces anything outside {@code [a-zA-Z0-9._-]} with {@code _} for safe zip/file names. */
+    /**
+     * Replaces anything outside {@code [a-zA-Z0-9._-]} with {@code _} for safe zip/file names.
+     */
     private String sanitizeFilename(String name) {
         if (name == null || name.isBlank()) {
             return "lexicon_rule";
@@ -264,13 +271,13 @@ public class LexiconCompileController {
     @GetMapping(value = "/health", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> engineHealth() {
         var info = new LinkedHashMap<String, Object>();
-        info.put("status",           "UP");
-        info.put("engineMode",       compileService.getEngineMode());
+        info.put("status", "UP");
+        info.put("engineMode", compileService.getEngineMode());
         info.put("hyperscanLibrary", "com.gliwka.hyperscan");
         info.put("hyperscanVersion", "5.4.0-2.0.0");
-        info.put("springBoot",       "4.0.6");
-        info.put("jdk",              "21");
-        info.put("compressionMode",  "GZIP request + response");
+        info.put("springBoot", "4.0.6");
+        info.put("jdk", "21");
+        info.put("compressionMode", "GZIP request + response");
         info.put("supportedOperators",
                 List.of("OR", "AND", "AND NOT", "NOT", "NEAR{n}", "FOLLOWEDBY{n}"));
         info.put("supportedLanguages",

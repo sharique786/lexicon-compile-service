@@ -46,29 +46,42 @@ import java.util.Set;
  */
 public final class ScriptDetector {
 
-    private ScriptDetector() {}
+    private ScriptDetector() {
+    }
 
     // ── Internal category enum ─────────────────────────────────────────────
     // Coarser than Unicode script; aligned to gap-strategy requirements.
 
     private enum Category {
-        /** CJK logographs: Chinese (Simplified/Traditional), Japanese Kanji. */
+        /**
+         * CJK logographs: Chinese (Simplified/Traditional), Japanese Kanji.
+         */
         CJK,
-        /** Japanese syllabaries: Hiragana, Katakana. */
+        /**
+         * Japanese syllabaries: Hiragana, Katakana.
+         */
         KANA,
-        /** Korean Hangul syllable blocks. */
+        /**
+         * Korean Hangul syllable blocks.
+         */
         HANGUL,
-        /** Arabic script and Arabic-script languages (Farsi, Urdu, etc.). */
+        /**
+         * Arabic script and Arabic-script languages (Farsi, Urdu, etc.).
+         */
         ARABIC,
-        /** Hebrew script. */
+        /**
+         * Hebrew script.
+         */
         HEBREW,
-        /** Other RTL scripts: Thaana (Dhivehi), N'Ko, Samaritan, Mandaic. */
+        /**
+         * Other RTL scripts: Thaana (Dhivehi), N'Ko, Samaritan, Mandaic.
+         */
         OTHER_RTL,
         /**
          * Space-free Southeast Asian scripts.
          * Thai, Lao, and Myanmar do not use whitespace between words.
          * Note: Tibetan uses tsheg marks between syllables but does use spaces
-         *       between words and therefore belongs in INDIC, not here.
+         * between words and therefore belongs in INDIC, not here.
          */
         THAI,
         /**
@@ -78,7 +91,9 @@ public final class ScriptDetector {
          * All use whitespace between words → word-based gap applies.
          */
         INDIC,
-        /** Latin-family and related European scripts (Greek, Cyrillic, etc.). */
+        /**
+         * Latin-family and related European scripts (Greek, Cyrillic, etc.).
+         */
         LATIN
     }
 
@@ -89,10 +104,12 @@ public final class ScriptDetector {
      *
      * @param text lexicon term (may include regex fragments)
      * @return detected {@link ScriptType}; {@link ScriptType#LATIN} when the
-     *         text contains only ASCII characters or is null/blank
+     * text contains only ASCII characters or is null/blank
      */
     public static ScriptType detect(String text) {
-        if (text == null || text.isBlank()) return ScriptType.LATIN;
+        if (text == null || text.isBlank()) {
+            return ScriptType.LATIN;
+        }
         return resolveType(scanCategories(text));
     }
 
@@ -161,7 +178,9 @@ public final class ScriptDetector {
      */
     private static Set<Category> scanCategories(String text) {
         Set<Category> found = EnumSet.noneOf(Category.class);
-        if (text == null) return found;
+        if (text == null) {
+            return found;
+        }
 
         for (int i = 0; i < text.length(); ) {
             int cp = text.codePointAt(i);
@@ -176,10 +195,14 @@ public final class ScriptDetector {
                 continue;
             }
 
-            if (isInvisible(cp)) continue;  // skip combining marks, ZWJ/ZWNJ, BOM…
+            if (isInvisible(cp)) {
+                continue;  // skip combining marks, ZWJ/ZWNJ, BOM…
+            }
 
             Category cat = toCategory(cp);
-            if (cat != null) found.add(cat);
+            if (cat != null) {
+                found.add(cat);
+            }
         }
         return found;
     }
@@ -197,49 +220,58 @@ public final class ScriptDetector {
         int script = UScript.getScript(cp);
 
         // CJK logographic
-        if (script == UScript.HAN || script == UScript.BOPOMOFO)
+        if (script == UScript.HAN || script == UScript.BOPOMOFO) {
             return Category.CJK;
+        }
 
         // Japanese syllabaries
-        if (script == UScript.HIRAGANA || script == UScript.KATAKANA)
+        if (script == UScript.HIRAGANA || script == UScript.KATAKANA) {
             return Category.KANA;
+        }
 
         // Korean
-        if (script == UScript.HANGUL)
+        if (script == UScript.HANGUL) {
             return Category.HANGUL;
+        }
 
         // Arabic script (Farsi/Urdu/Pashto also use Arabic script)
-        if (script == UScript.ARABIC)
+        if (script == UScript.ARABIC) {
             return Category.ARABIC;
+        }
 
         // Hebrew
-        if (script == UScript.HEBREW)
+        if (script == UScript.HEBREW) {
             return Category.HEBREW;
+        }
 
         // Other RTL scripts
-        if (script == UScript.THAANA   || script == UScript.NKO
-         || script == UScript.SAMARITAN|| script == UScript.MANDAIC)
+        if (script == UScript.THAANA || script == UScript.NKO
+                || script == UScript.SAMARITAN || script == UScript.MANDAIC) {
             return Category.OTHER_RTL;
+        }
 
         // Space-free Southeast Asian (Thai, Lao, Myanmar have NO word spaces)
-        if (script == UScript.THAI || script == UScript.LAO || script == UScript.MYANMAR)
+        if (script == UScript.THAI || script == UScript.LAO || script == UScript.MYANMAR) {
             return Category.THAI;
+        }
 
         // Space-delimited Indic scripts (words ARE separated by whitespace)
         // Tibetan: uses tsheg between syllables but spaces between words → INDIC
         if (script == UScript.DEVANAGARI || script == UScript.BENGALI
-         || script == UScript.GURMUKHI   || script == UScript.GUJARATI
-         || script == UScript.ORIYA      || script == UScript.TAMIL
-         || script == UScript.TELUGU     || script == UScript.KANNADA
-         || script == UScript.MALAYALAM  || script == UScript.SINHALA
-         || script == UScript.TIBETAN)
+                || script == UScript.GURMUKHI || script == UScript.GUJARATI
+                || script == UScript.ORIYA || script == UScript.TAMIL
+                || script == UScript.TELUGU || script == UScript.KANNADA
+                || script == UScript.MALAYALAM || script == UScript.SINHALA
+                || script == UScript.TIBETAN) {
             return Category.INDIC;
+        }
 
         // Latin-family and closely related European scripts
-        if (script == UScript.LATIN    || script == UScript.GREEK
-         || script == UScript.CYRILLIC || script == UScript.ARMENIAN
-         || script == UScript.GEORGIAN)
+        if (script == UScript.LATIN || script == UScript.GREEK
+                || script == UScript.CYRILLIC || script == UScript.ARMENIAN
+                || script == UScript.GEORGIAN) {
             return Category.LATIN;
+        }
 
         return null; // emoji, symbols, private-use, historic scripts → ignore
     }
@@ -262,19 +294,21 @@ public final class ScriptDetector {
      * and must not trigger the char-based MIXED_CJK path.
      */
     private static ScriptType resolveType(Set<Category> found) {
-        if (found.isEmpty()) return ScriptType.LATIN;
+        if (found.isEmpty()) {
+            return ScriptType.LATIN;
+        }
 
-        final boolean hasCjk    = found.contains(Category.CJK);
-        final boolean hasKana   = found.contains(Category.KANA);
+        final boolean hasCjk = found.contains(Category.CJK);
+        final boolean hasKana = found.contains(Category.KANA);
         final boolean hasHangul = found.contains(Category.HANGUL);
-        final boolean hasThai   = found.contains(Category.THAI);
-        final boolean hasIndic  = found.contains(Category.INDIC);
+        final boolean hasThai = found.contains(Category.THAI);
+        final boolean hasIndic = found.contains(Category.INDIC);
         final boolean hasArabic = found.contains(Category.ARABIC)
-                               || found.contains(Category.OTHER_RTL);
+                || found.contains(Category.OTHER_RTL);
         final boolean hasHebrew = found.contains(Category.HEBREW);
-        final boolean hasLatin  = found.contains(Category.LATIN);
+        final boolean hasLatin = found.contains(Category.LATIN);
 
-        final boolean hasRtl       = hasArabic || hasHebrew;
+        final boolean hasRtl = hasArabic || hasHebrew;
         // INDIC is NOT included here — Indic scripts use spaces between words
         final boolean hasSpaceFree = hasCjk || hasKana || hasHangul || hasThai;
 
@@ -294,50 +328,61 @@ public final class ScriptDetector {
         //   "insider"      → {}        → LATIN (via isEmpty guard above)
 
         if (hasCjk && !hasKana && !hasHangul && !hasThai
-                   && !hasRtl  && !hasLatin  && !hasIndic)
+                && !hasRtl && !hasLatin && !hasIndic) {
             return ScriptType.CJK;
+        }
 
         if (hasKana && !hasCjk && !hasHangul && !hasThai
-                    && !hasRtl && !hasLatin  && !hasIndic)
+                && !hasRtl && !hasLatin && !hasIndic) {
             return ScriptType.KANA;
+        }
 
         if (hasHangul && !hasCjk && !hasKana && !hasThai
-                      && !hasRtl && !hasLatin && !hasIndic)
+                && !hasRtl && !hasLatin && !hasIndic) {
             return ScriptType.HANGUL;
+        }
 
         if (hasThai && !hasCjk && !hasKana && !hasHangul
-                    && !hasRtl && !hasLatin && !hasIndic)
+                && !hasRtl && !hasLatin && !hasIndic) {
             return ScriptType.THAI;
+        }
 
-        if (hasArabic && !hasHebrew && !hasSpaceFree && !hasLatin && !hasIndic)
+        if (hasArabic && !hasHebrew && !hasSpaceFree && !hasLatin && !hasIndic) {
             return ScriptType.ARABIC;
+        }
 
-        if (hasHebrew && !hasArabic && !hasSpaceFree && !hasLatin && !hasIndic)
+        if (hasHebrew && !hasArabic && !hasSpaceFree && !hasLatin && !hasIndic) {
             return ScriptType.HEBREW;
+        }
 
         // Pure Indic: Hindi, Tamil, Bengali, etc. with no other scripts.
         // Returns DEVANAGARI as the representative word-based Indic type.
-        if (hasIndic && !hasSpaceFree && !hasRtl && !hasLatin)
+        if (hasIndic && !hasSpaceFree && !hasRtl && !hasLatin) {
             return ScriptType.DEVANAGARI;
+        }
 
-        if (hasLatin && !hasSpaceFree && !hasRtl && !hasIndic)
+        if (hasLatin && !hasSpaceFree && !hasRtl && !hasIndic) {
             return ScriptType.LATIN;
+        }
 
         // ── Mixed-script cases ────────────────────────────────────────────────
         //
         // When a space-free script is present alongside anything else, char-based
         // gap is mandatory (the space-free side cannot rely on whitespace).
-        if (hasSpaceFree)
+        if (hasSpaceFree) {
             return ScriptType.MIXED_CJK;
+        }
 
         // RTL + space-delimited (Latin/Indic): both sides use spaces → word-based
         // gap still applies, but UTF8+UCP flags are required.
-        if (hasRtl && (hasLatin || hasIndic))
+        if (hasRtl && (hasLatin || hasIndic)) {
             return ScriptType.MIXED_RTL;
+        }
 
         // Multiple RTL scripts (e.g. Arabic + Hebrew, Arabic + Thaana)
-        if (hasRtl)
+        if (hasRtl) {
             return ScriptType.MIXED;
+        }
 
         // Latin + Indic (both space-delimited) → conservative word-based
         return ScriptType.MIXED;
@@ -345,11 +390,13 @@ public final class ScriptDetector {
 
     // ── Private: RTL helpers ──────────────────────────────────────────────
 
-    /** True when the category set contains any RTL script. */
+    /**
+     * True when the category set contains any RTL script.
+     */
     private static boolean containsRtl(Set<Category> cats) {
         return cats.contains(Category.ARABIC)
-            || cats.contains(Category.HEBREW)
-            || cats.contains(Category.OTHER_RTL);
+                || cats.contains(Category.HEBREW)
+                || cats.contains(Category.OTHER_RTL);
     }
 
     /**
@@ -360,15 +407,15 @@ public final class ScriptDetector {
     private static boolean isPurelyRtlSet(Set<Category> cats) {
         boolean hasAnyRtl = containsRtl(cats);
         boolean hasNonRtl = cats.contains(Category.LATIN)
-                         || cats.contains(Category.CJK)
-                         || cats.contains(Category.KANA)
-                         || cats.contains(Category.HANGUL)
-                         || cats.contains(Category.THAI)
-                         || cats.contains(Category.INDIC);
+                || cats.contains(Category.CJK)
+                || cats.contains(Category.KANA)
+                || cats.contains(Category.HANGUL)
+                || cats.contains(Category.THAI)
+                || cats.contains(Category.INDIC);
         return hasAnyRtl && !hasNonRtl;
     }
 
-    /**
+    /*
      * Returns {@code true} for Unicode code points that should be ignored
      * during script detection:
      * <ul>
@@ -381,10 +428,12 @@ public final class ScriptDetector {
      */
     private static boolean isInvisible(int cp) {
         if (cp == 0x200C || cp == 0x200D
-         || cp == 0x200E || cp == 0x200F
-         || cp == 0xFEFF) return true;
+                || cp == 0x200E || cp == 0x200F
+                || cp == 0xFEFF) {
+            return true;
+        }
         int type = Character.getType(cp);
         return type == Character.NON_SPACING_MARK
-            || type == Character.COMBINING_SPACING_MARK;
+                || type == Character.COMBINING_SPACING_MARK;
     }
 }

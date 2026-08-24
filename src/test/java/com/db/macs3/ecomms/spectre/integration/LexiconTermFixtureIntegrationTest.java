@@ -9,17 +9,14 @@ import com.db.macs3.ecomms.spectre.service.CsvCompileService;
 import com.db.macs3.ecomms.spectre.service.LexiconCompileBundleService;
 import com.db.macs3.ecomms.spectre.service.LexiconCompileService;
 import com.db.macs3.ecomms.spectre.translator.TermSyntaxTranslator;
-import tools.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -187,7 +184,7 @@ class LexiconTermFixtureIntegrationTest {
         // Verbatim compilation — no operator-language translation should have occurred.
         var literalRegex = findResult(response, "regex::1");
         assertThat(literalRegex.translatedPattern()).hasSize(1);
-        assertThat(literalRegex.translatedPattern().get(0)).isEqualTo("(?:insider|trading)");
+        assertThat(literalRegex.translatedPattern().getFirst()).isEqualTo("(?:insider|trading)");
 
         var invalidRegex = findResult(response, "regex::4");
         assertThat(invalidRegex.compilationStatus()).isEqualTo(CompilationStatus.FAILED);

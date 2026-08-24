@@ -72,25 +72,25 @@ public class LexiconCompileBundleService {
 
     private static final Logger log = LoggerFactory.getLogger(LexiconCompileBundleService.class);
 
-    private final LexiconCompileService        compileService;
-    private final HyperscanCompiler            compiler;
-    private final HyperscanCombinationHandler  combinationHandler;
-    private final Counter                      naturalLanguageTermCounter;
-    private final Counter                      regexTermCounter;
-    private final Counter                      databaseBuiltCounter;
-    private final Counter                      databaseFailedCounter;
+    private final LexiconCompileService compileService;
+    private final HyperscanCompiler compiler;
+    private final HyperscanCombinationHandler combinationHandler;
+    private final Counter naturalLanguageTermCounter;
+    private final Counter regexTermCounter;
+    private final Counter databaseBuiltCounter;
+    private final Counter databaseFailedCounter;
 
     public LexiconCompileBundleService(LexiconCompileService compileService,
-                                        HyperscanCompiler compiler,
-                                        HyperscanCombinationHandler combinationHandler,
-                                        MeterRegistry meterRegistry) {
-        this.compileService             = compileService;
-        this.compiler                    = compiler;
-        this.combinationHandler         = combinationHandler;
+                                       HyperscanCompiler compiler,
+                                       HyperscanCombinationHandler combinationHandler,
+                                       MeterRegistry meterRegistry) {
+        this.compileService = compileService;
+        this.compiler = compiler;
+        this.combinationHandler = combinationHandler;
         this.naturalLanguageTermCounter = meterRegistry.counter("lexicon.compile.bundle.natural_language");
-        this.regexTermCounter            = meterRegistry.counter("lexicon.compile.bundle.regex");
-        this.databaseBuiltCounter       = meterRegistry.counter("lexicon.compile.bundle.database.built");
-        this.databaseFailedCounter      = meterRegistry.counter("lexicon.compile.bundle.database.failed");
+        this.regexTermCounter = meterRegistry.counter("lexicon.compile.bundle.regex");
+        this.databaseBuiltCounter = meterRegistry.counter("lexicon.compile.bundle.database.built");
+        this.databaseFailedCounter = meterRegistry.counter("lexicon.compile.bundle.database.failed");
     }
 
     /**
@@ -117,8 +117,8 @@ public class LexiconCompileBundleService {
 
         boolean isRegexType = request.isRegexType();
 
-        List<TermCompilationResult> termResults    = new ArrayList<>(request.getTerms().size());
-        List<Expression> passingExpressions        = new ArrayList<>(request.getTerms().size());
+        List<TermCompilationResult> termResults = new ArrayList<>(request.getTerms().size());
+        List<Expression> passingExpressions = new ArrayList<>(request.getTerms().size());
 
         for (TypedCompileRequest.TermInput termInput : request.getTerms()) {
 
@@ -137,7 +137,8 @@ public class LexiconCompileBundleService {
                         combinationHandler.addExpressions(termResult, termNumber, idAllocator, passingExpressions);
                 termResult = (assignment.hyperscanExpressionId() != null)
                         ? termResult.withHyperscanExpressionId(assignment.hyperscanExpressionId())
-                        : termResult.withExpressionIds(assignment.requiredExpressionIds(), assignment.excludedExpressionIds());
+                        : termResult.withExpressionIds(assignment.requiredExpressionIds(),
+                        assignment.excludedExpressionIds());
             }
             termResults.add(termResult);
         }
@@ -159,7 +160,9 @@ public class LexiconCompileBundleService {
 
     // ── Term id validation ───────────────────────────────────────────────────────
 
-    /** Matches the platform-wide {@code <rule_name>::<term_number>} termId convention. */
+    /**
+     * Matches the platform-wide {@code <rule_name>::<term_number>} termId convention.
+     */
     private static final Pattern TERM_ID_PATTERN = Pattern.compile("^.*::(\\d+)$");
 
     /**
@@ -172,7 +175,7 @@ public class LexiconCompileBundleService {
      *
      * @return termId → term number, one entry per term in the request
      * @throws InvalidTermIdException naming every malformed or duplicate
-     *                                 termId found, if any
+     *                                termId found, if any
      */
     private Map<String, Integer> validateTermIds(TypedCompileRequest request) {
         Map<String, Integer> termNumberByTermId = new LinkedHashMap<>();
@@ -201,8 +204,8 @@ public class LexiconCompileBundleService {
         if (!malformed.isEmpty()) {
             throw new InvalidTermIdException(
                     "termId must end with '::<n>' where n is a non-negative integer (the platform's "
-                    + "term-number convention, e.g. 'lexicon_rule_name::1') — required for /compile/bundle's "
-                    + "Hyperscan expression id scheme. Malformed termId(s): " + malformed);
+                            + "term-number convention, e.g. 'lexicon_rule_name::1') — required for /compile/bundle's "
+                            + "Hyperscan expression id scheme. Malformed termId(s): " + malformed);
         }
 
         List<String> duplicateDetails = termIdsByNumber.entrySet().stream()
@@ -212,8 +215,8 @@ public class LexiconCompileBundleService {
         if (!duplicateDetails.isEmpty()) {
             throw new InvalidTermIdException(
                     "Every termId's term number must be unique within a /compile/bundle request — "
-                    + "two terms sharing a term number would collide at the same Hyperscan expression id. "
-                    + "Duplicate(s): " + duplicateDetails);
+                            + "two terms sharing a term number would collide at the same Hyperscan expression id. "
+                            + "Duplicate(s): " + duplicateDetails);
         }
 
         return termNumberByTermId;
@@ -242,20 +245,20 @@ public class LexiconCompileBundleService {
         return validation.isPass()
                 ? TermCompilationResult.pass(termInput, List.of(pattern), hyperscanFlags)
                 : TermCompilationResult.failedHyperscan(
-                        termInput, List.of(pattern), validation.errorMessage(), hyperscanFlags);
+                termInput, List.of(pattern), validation.errorMessage(), hyperscanFlags);
     }
 
     // ── Combined database ────────────────────────────────────────────────────
 
     private CompileBundleResult buildDatabasePortion(CompileResponse jsonResponse,
-                                                       List<Expression> passingExpressions) {
+                                                     List<Expression> passingExpressions) {
         if (passingExpressions.isEmpty()) {
             log.warn("No PASS terms for rule '{}' — no combined database will be built",
                     jsonResponse.lexiconRuleName());
             return new CompileBundleResult(jsonResponse, null,
                     "No Hyperscan database file was produced because zero terms reached "
-                  + "PASS status. See the JSON results for per-term compilationStatus and "
-                  + "errorLog/translationError details.");
+                            + "PASS status. See the JSON results for per-term compilationStatus and "
+                            + "errorLog/translationError details.");
         }
 
         HyperscanCompiler.CombinedCompileResult combinedResult =
@@ -293,7 +296,8 @@ public class LexiconCompileBundleService {
                         || containsId(r.requiredExpressionIds(), failedExpressionId)
                         || containsId(r.excludedExpressionIds(), failedExpressionId))
                 .findFirst()
-                .map(r -> "\nThe term '" + r.termId() + "' (\"" + r.termDescription() + "\") caused the combined "
+                .map(r -> "\nThe term '" + r.termId() +
+                        "' (\"" + r.termDescription() + "\") caused the combined "
                         + "compile to fail at Hyperscan expression id " + failedExpressionId
                         + ", even though it passed individual validation. See the JSON results for that term's details.")
                 .orElse("\nThe failing Hyperscan expression id was " + failedExpressionId
@@ -310,20 +314,22 @@ public class LexiconCompileBundleService {
     /**
      * Carries the two zip-file payloads back to the controller.
      *
-     * @param jsonResponse            identical shape to {@code /compile}'s response —
-     *                                this is what gets written as the zip's JSON entry
-     * @param hyperscanDatabaseBytes  the combined {@code .hdb} file content, or
-     *                                {@code null} when no database could be built
-     * @param databaseNote            explanation written into {@code NO_DATABASE.txt}
-     *                                when {@code hyperscanDatabaseBytes} is null;
-     *                                null when a database was built successfully
+     * @param jsonResponse           identical shape to {@code /compile}'s response —
+     *                               this is what gets written as the zip's JSON entry
+     * @param hyperscanDatabaseBytes the combined {@code .hdb} file content, or
+     *                               {@code null} when no database could be built
+     * @param databaseNote           explanation written into {@code NO_DATABASE.txt}
+     *                               when {@code hyperscanDatabaseBytes} is null;
+     *                               null when a database was built successfully
      */
     public record CompileBundleResult(
             CompileResponse jsonResponse,
-            byte[]          hyperscanDatabaseBytes,
-            String          databaseNote
+            byte[] hyperscanDatabaseBytes,
+            String databaseNote
     ) {
-        /** @return true when a combined Hyperscan database was produced. */
+        /**
+         * @return true when a combined Hyperscan database was produced.
+         */
         public boolean hasDatabase() {
             return hyperscanDatabaseBytes != null && hyperscanDatabaseBytes.length > 0;
         }

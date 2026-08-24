@@ -2,7 +2,6 @@ package com.db.macs3.ecomms.spectre.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -99,14 +98,15 @@ public class TypedCompileRequest {
             @NotBlank(message = "termDescription must not be blank")
             String termDescription
 
-    ) {}
+    ) {
+    }
 
     // ── Derived helpers ────────────────────────────────────────────────────────
 
     /**
      * @return {@code true} when {@link #termType} is {@link TermType#REGEX},
-     *         meaning every term's description is a raw PCRE pattern
-     *         requiring no operator-language translation.
+     * meaning every term's description is a raw PCRE pattern
+     * requiring no operator-language translation.
      */
     public boolean isRegexType() {
         return termType == TermType.REGEX;
@@ -114,12 +114,35 @@ public class TypedCompileRequest {
 
     // ── Accessors ─────────────────────────────────────────────────────────────
 
-    public String getRequestId()                { return requestId; }
-    public void   setRequestId(String v)        { this.requestId = v; }
-    public String getLexiconRuleName()          { return lexiconRuleName; }
-    public void   setLexiconRuleName(String v)  { this.lexiconRuleName = v; }
-    public TermType getTermType()                { return termType; }
-    public void   setTermType(TermType v)       { this.termType = v; }
-    public List<TermInput> getTerms()           { return terms; }
-    public void   setTerms(List<TermInput> v)   { this.terms = v; }
+    public String getRequestId() {
+        return requestId;
+    }
+
+    public void setRequestId(String v) {
+        this.requestId = v;
+    }
+
+    public String getLexiconRuleName() {
+        return lexiconRuleName;
+    }
+
+    public void setLexiconRuleName(String v) {
+        this.lexiconRuleName = v;
+    }
+
+    public TermType getTermType() {
+        return termType;
+    }
+
+    public void setTermType(TermType v) {
+        this.termType = v;
+    }
+
+    public List<TermInput> getTerms() {
+        return terms;
+    }
+
+    public void setTerms(List<TermInput> v) {
+        this.terms = v;
+    }
 }

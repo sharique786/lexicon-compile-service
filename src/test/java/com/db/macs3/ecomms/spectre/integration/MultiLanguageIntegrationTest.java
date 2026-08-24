@@ -3,7 +3,12 @@ package com.db.macs3.ecomms.spectre.integration;
 import com.db.macs3.ecomms.spectre.hyperscan.HyperscanCompiler;
 import com.db.macs3.ecomms.spectre.translator.TermSyntaxTranslator;
 import com.db.macs3.ecomms.spectre.translator.TranslationResult;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.util.regex.Pattern;
 
@@ -45,11 +50,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MultiLanguageIntegrationTest {
 
     private TermSyntaxTranslator translator;
-    private HyperscanCompiler    compiler;
+    private HyperscanCompiler compiler;
 
     @BeforeEach
     void setUp() {
-        compiler   = new HyperscanCompiler();
+        compiler = new HyperscanCompiler();
         translator = new TermSyntaxTranslator(compiler);
         compiler.selfTest();
     }
@@ -81,10 +86,10 @@ class MultiLanguageIntegrationTest {
         // This exercises the Hyperscan JNI code path (Database.compile),
         // confirming the pattern is valid PCRE for the Hyperscan engine.
         HyperscanCompiler.ValidationResult hsResult =
-                compiler.validate(success.hsPatterns().get(0), success.hsFlags());
+                compiler.validate(success.hsPatterns().getFirst(), success.hsFlags());
         assertThat(hsResult.isPass())
                 .as("Hyperscan compile failed for pattern '%s': %s",
-                        success.hsPatterns().get(0), hsResult.errorMessage())
+                        success.hsPatterns().getFirst(), hsResult.errorMessage())
                 .isTrue();
 
         // ── Step 3: Match using Java regex ─────────────────────────────────────
@@ -101,7 +106,7 @@ class MultiLanguageIntegrationTest {
         if ((success.hsFlags() & HyperscanCompiler.HS_FLAG_UTF8) != 0) {
             javaFlags |= Pattern.UNICODE_CHARACTER_CLASS;
         }
-        Pattern pattern = Pattern.compile(success.hsPatterns().get(0), javaFlags);
+        Pattern pattern = Pattern.compile(success.hsPatterns().getFirst(), javaFlags);
         return pattern.matcher(messageText).find();
     }
 
@@ -114,21 +119,22 @@ class MultiLanguageIntegrationTest {
             To: jane.smith@fund.com
             Subject: Q3 Strategy Follow-up
             Date: Mon, 15 Jan 2024 09:23:11 +0000
-
+            
             Jane,
-
+            
             Following our discussion yesterday, we need to think carefully about how we
             can manipulate the stock price through coordinated buying before the earnings
             announcement. The spread between bid and ask is currently 12 bps which gives
             us room to work with.
-
+            
             Also, please don't forward this email to compliance or legal.
-
+            
             Regards,
             John
             """;
 
-    @Test @Order(1)
+    @Test
+    @Order(1)
     @DisplayName("English email: NEAR{5} — 'manipulate the stock price' → MATCH")
     void englishNearMatch() throws Exception {
         assertThat(matches(
@@ -136,7 +142,8 @@ class MultiLanguageIntegrationTest {
                 OUTLOOK_EMAIL_1)).isTrue();
     }
 
-    @Test @Order(2)
+    @Test
+    @Order(2)
     @DisplayName("English email: NEAR{5} — spread also within distance → MATCH")
     void englishNearSpreadMatch() throws Exception {
         assertThat(matches(
@@ -144,7 +151,8 @@ class MultiLanguageIntegrationTest {
                 "The spread manipulation was clear from the order flow.")).isTrue();
     }
 
-    @Test @Order(3)
+    @Test
+    @Order(3)
     @DisplayName("English email: quoted phrase OR — 'please don't forward' → MATCH")
     void englishQuotedPhraseMatch() throws Exception {
         assertThat(matches(
@@ -152,14 +160,16 @@ class MultiLanguageIntegrationTest {
                 OUTLOOK_EMAIL_1)).isTrue();
     }
 
-    @Test @Order(4)
+    @Test
+    @Order(4)
     @DisplayName("English email: FOLLOWEDBY{5} — 'don't ... compliance' → MATCH")
     void englishFollowedByMatch() throws Exception {
         // "don't forward this email to compliance" — 4 words in between
         assertThat(matches("don't FOLLOWEDBY{5} compliance", OUTLOOK_EMAIL_1)).isTrue();
     }
 
-    @Test @Order(5)
+    @Test
+    @Order(5)
     @DisplayName("English email: AND — OR pre-scan matches 'insider' or 'announcement'")
     void englishAndMatch() throws Exception {
         // AND translates to (?:insider|announcement) — OR pre-scan pattern;
@@ -169,7 +179,8 @@ class MultiLanguageIntegrationTest {
                 "The insider information about the upcoming announcement was misused.")).isTrue();
     }
 
-    @Test @Order(6)
+    @Test
+    @Order(6)
     @DisplayName("English email: AND NOT — positive part 'price' → MATCH")
     void englishAndNotMatch() throws Exception {
         // AND NOT returns positive operand only; scan engine excludes NOT at runtime
@@ -178,7 +189,8 @@ class MultiLanguageIntegrationTest {
                 "We plan to manipulate the price of the stock.")).isTrue();
     }
 
-    @Test @Order(7)
+    @Test
+    @Order(7)
     @DisplayName("English email: unrelated content → NO MATCH for price+manipulation")
     void englishNoMatch() throws Exception {
         assertThat(matches(
@@ -197,25 +209,29 @@ class MultiLanguageIntegrationTest {
             [09:18] 이서연: 내부자 거래는 불법이에요. 조심해야 해요.
             """;
 
-    @Test @Order(20)
+    @Test
+    @Order(20)
     @DisplayName("Korean chat: OR — 비밀 OR 내부자 거래 → MATCH")
     void koreanOrMatch() throws Exception {
         assertThat(matches("비밀 OR 내부자 거래", SYMPHONY_CHAT_KOREAN)).isTrue();
     }
 
-    @Test @Order(21)
+    @Test
+    @Order(21)
     @DisplayName("Korean chat: exact phrase — '내부자 거래' → MATCH")
     void koreanExactPhraseMatch() throws Exception {
         assertThat(matches("내부자 거래", SYMPHONY_CHAT_KOREAN)).isTrue();
     }
 
-    @Test @Order(22)
+    @Test
+    @Order(22)
     @DisplayName("Korean chat: AND OR pre-scan — 비밀 AND 내부자 → MATCH")
     void koreanAndMatch() throws Exception {
         assertThat(matches("비밀 AND 내부자", SYMPHONY_CHAT_KOREAN)).isTrue();
     }
 
-    @Test @Order(23)
+    @Test
+    @Order(23)
     @DisplayName("Korean chat: unrelated English term → NO MATCH")
     void koreanNoMatch() throws Exception {
         assertThat(matches("hello world", SYMPHONY_CHAT_KOREAN)).isFalse();
@@ -232,24 +248,27 @@ class MultiLanguageIntegrationTest {
             Trader2 [14:25]: 💰 💰 big move incoming don't tell compliance
             """;
 
-    @Test @Order(30)
+    @Test
+    @Order(30)
     @DisplayName("Bloomberg emoji chat: 💰 OR 🤫 OR 🤐 → MATCH")
     void emojiOrMatch() throws Exception {
         assertThat(matches("💰 OR 🤫 OR 🤐", BLOOMBERG_CHAT)).isTrue();
     }
 
-    @Test @Order(31)
+    @Test
+    @Order(31)
     @DisplayName("Bloomberg emoji chat: a BARE single emoji with no operator is REJECTED — 'no letter " +
-                 "or digit anywhere' validation (Tokenizer), unrelated to this redesign. FLAGGED: this " +
-                 "may be worth reconsidering, since a lexicon author might legitimately want a single " +
-                 "emoji (e.g. \uD83D\uDCB0 alone) as a compliance-surveillance signal; \"\uD83D\uDCB0 OR \uD83E\uDD2B OR \uD83E\uDD10\" only " +
-                 "passes today because the word \"OR\" itself supplies a letter.")
+            "or digit anywhere' validation (Tokenizer), unrelated to this redesign. FLAGGED: this " +
+            "may be worth reconsidering, since a lexicon author might legitimately want a single " +
+            "emoji (e.g. \uD83D\uDCB0 alone) as a compliance-surveillance signal; \"\uD83D\uDCB0 OR \uD83E\uDD2B OR \uD83E\uDD10\" only " +
+            "passes today because the word \"OR\" itself supplies a letter.")
     void singleEmojiRejected() throws Exception {
         TranslationResult result = translator.translate("💰");
         assertThat(result.isSuccess()).isFalse();
     }
 
-    @Test @Order(32)
+    @Test
+    @Order(32)
     @DisplayName("Bloomberg chat: tip NEAR{4} announcement — 4 intervening tokens (💰, act, now, before)")
     void englishNearInBloombergChat() throws Exception {
         // BLOOMBERG_CHAT has exactly 4 tokens between "tip" and "announcement":
@@ -269,13 +288,15 @@ class MultiLanguageIntegrationTest {
             王芳 [10:33]: 同意。股价操纵是非常敏感的话题。
             """;
 
-    @Test @Order(40)
+    @Test
+    @Order(40)
     @DisplayName("Chinese Teams: 内幕交易 OR 操纵市场 → MATCH")
     void chineseOrMatch() throws Exception {
         assertThat(matches("内幕交易 OR 操纵市场", TEAMS_CHINESE)).isTrue();
     }
 
-    @Test @Order(41)
+    @Test
+    @Order(41)
     @DisplayName("Chinese Teams: 内幕 AND 股价 (OR pre-scan) → MATCH")
     void chineseAndMatch() throws Exception {
         assertThat(matches("内幕 AND 股价", TEAMS_CHINESE)).isTrue();
@@ -292,13 +313,15 @@ class MultiLanguageIntegrationTest {
             فاطمة [11:03]: هذا مخالفة للوائح المالية.
             """;
 
-    @Test @Order(50)
+    @Test
+    @Order(50)
     @DisplayName("Arabic Teams: مخالفة OR استثمار داخلي → MATCH")
     void arabicOrMatch() throws Exception {
         assertThat(matches("مخالفة OR استثمار داخلي", TEAMS_ARABIC)).isTrue();
     }
 
-    @Test @Order(51)
+    @Test
+    @Order(51)
     @DisplayName("Arabic Teams: single term مخالفة → MATCH")
     void arabicSingleTermMatch() throws Exception {
         assertThat(matches("مخالفة", TEAMS_ARABIC)).isTrue();
@@ -312,17 +335,18 @@ class MultiLanguageIntegrationTest {
             מאת: david@bank.co.il
             אל: sarah@fund.co.il
             נושא: מידע רגיש
-
+            
             שרה,
-
+            
             יש לי מידע על מסחר פנים שיכול להיות שימושי.
             אנחנו יכולים להשתמש בזה לפני ההכרזה.
             מניפולציה בשוק יכולה להניב רווחים גדולים.
-
+            
             דוד
             """;
 
-    @Test @Order(60)
+    @Test
+    @Order(60)
     @DisplayName("Hebrew Outlook email: מסחר פנים OR מניפולציה → MATCH")
     void hebrewOrMatch() throws Exception {
         assertThat(matches("מסחר פנים OR מניפולציה", OUTLOOK_HEBREW)).isTrue();
@@ -336,24 +360,26 @@ class MultiLanguageIntegrationTest {
             Von: hans.mueller@bank.de
             An: anna.schneider@fonds.de
             Betreff: Vertraulich - Übernahmeangebot
-
+            
             Liebe Anna,
-
+            
             Ich habe Informationen über eine bevorstehende Übernahme erhalten.
             Insiderhandel könnte hier eine Möglichkeit sein, aber Vorsicht ist geboten.
             Die Akquisition wird den Aktienkurs stark beeinflussen.
-
+            
             Mit freundlichen Grüßen,
             Hans
             """;
 
-    @Test @Order(70)
+    @Test
+    @Order(70)
     @DisplayName("German Outlook email: Übernahme OR Insiderhandel → MATCH")
     void germanOrMatch() throws Exception {
         assertThat(matches("Übernahme OR Insiderhandel", OUTLOOK_GERMAN)).isTrue();
     }
 
-    @Test @Order(71)
+    @Test
+    @Order(71)
     @DisplayName("German Outlook email: Übernahme AND Akquisition (OR pre-scan) → MATCH")
     void germanAndMatch() throws Exception {
         assertThat(matches("Übernahme AND Akquisition", OUTLOOK_GERMAN)).isTrue();
@@ -363,7 +389,8 @@ class MultiLanguageIntegrationTest {
     // SCENARIO 8: Teams chat — Turkish
     // ═════════════════════════════════════════════════════════════════════════
 
-    @Test @Order(80)
+    @Test
+    @Order(80)
     @DisplayName("Turkish Teams: içeriden bilgi OR piyasa manipülasyonu → MATCH")
     void turkishMatch() throws Exception {
         String teamsTurkish =
@@ -375,7 +402,8 @@ class MultiLanguageIntegrationTest {
     // SCENARIO 9: Bloomberg — Japanese
     // ═════════════════════════════════════════════════════════════════════════
 
-    @Test @Order(90)
+    @Test
+    @Order(90)
     @DisplayName("Japanese Bloomberg: 株価操作 OR インサイダー取引 → MATCH")
     void japaneseMatch() throws Exception {
         String bloombergJp =
@@ -387,14 +415,16 @@ class MultiLanguageIntegrationTest {
     // SCENARIO 10: Leet-speak in Symphony chat
     // ═════════════════════════════════════════════════════════════════════════
 
-    @Test @Order(100)
+    @Test
+    @Order(100)
     @DisplayName("Leet-speak: 1ns1d3r OR insider → MATCH in mixed text")
     void leetSpeakMatch() throws Exception {
         String chat = "got that 1ns1d3r info about tomorrow's announcement";
         assertThat(matches("1ns1d3r OR insider", chat)).isTrue();
     }
 
-    @Test @Order(101)
+    @Test
+    @Order(101)
     @DisplayName("Leet-speak: fr0nt* wildcard → MATCH 'fr0nt-running'")
     void leetWildcardMatch() throws Exception {
         String chat = "this is a fr0nt-running situation";
@@ -405,14 +435,16 @@ class MultiLanguageIntegrationTest {
     // SCENARIO 11: Multi-language single message
     // ═════════════════════════════════════════════════════════════════════════
 
-    @Test @Order(110)
+    @Test
+    @Order(110)
     @DisplayName("Mixed English+Korean+emoji: insider OR 내부자 OR 💰 → MATCH")
     void mixedLanguageMatch() throws Exception {
         String mixedMsg = "We have 💰 insider info about the 내부자 거래 opportunity.";
         assertThat(matches("insider OR 내부자 OR 💰", mixedMsg)).isTrue();
     }
 
-    @Test @Order(111)
+    @Test
+    @Order(111)
     @DisplayName("Wildcard 'insider*' matches variants 'insider information' and 'insiders'")
     void wildcardMatchesVariants() throws Exception {
         assertThat(matches("insider*", "insider information shared")).isTrue();
@@ -420,7 +452,8 @@ class MultiLanguageIntegrationTest {
         assertThat(matches("insider*", "this has nothing relevant")).isFalse();
     }
 
-    @Test @Order(112)
+    @Test
+    @Order(112)
     @DisplayName("Apostrophe in term: \"can't forward\" → MATCH exact text")
     void apostropheMatch() throws Exception {
         assertThat(matches("can't forward",

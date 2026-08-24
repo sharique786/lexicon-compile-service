@@ -15,14 +15,17 @@ package com.db.macs3.ecomms.spectre.translator;
  */
 final class LexiconOperatorKeyword {
 
-    private LexiconOperatorKeyword() {}
+    private LexiconOperatorKeyword() {
+    }
 
-    static final String OR          = "OR";
-    static final String AND         = "AND";
-    static final String NOT         = "NOT";
-    static final String NEAR        = "NEAR";
-    static final String FOLLOWEDBY  = "FOLLOWEDBY";
+    static final String OR = "OR";
+    static final String AND = "AND";
+    static final String NOT = "NOT";
+    static final String NEAR = "NEAR";
+    static final String FOLLOWEDBY = "FOLLOWEDBY";
 
-    /** The two-word combination recognised as a single AND-NOT operator. */
+    /**
+     * The two-word combination recognised as a single AND-NOT operator.
+     */
     static final String AND_NOT_DISPLAY = AND + " " + NOT;
 }

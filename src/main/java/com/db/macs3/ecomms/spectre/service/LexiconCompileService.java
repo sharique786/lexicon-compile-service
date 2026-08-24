@@ -41,15 +41,15 @@ public class LexiconCompileService {
     private static final Logger log = LoggerFactory.getLogger(LexiconCompileService.class);
 
     private final TermSyntaxTranslator translator;
-    private final HyperscanCompiler    compiler;
-    private final Counter              passCounter;
-    private final Counter              failCounter;
+    private final HyperscanCompiler compiler;
+    private final Counter passCounter;
+    private final Counter failCounter;
 
     public LexiconCompileService(TermSyntaxTranslator translator,
-                                  HyperscanCompiler compiler,
-                                  MeterRegistry meterRegistry) {
-        this.translator  = translator;
-        this.compiler    = compiler;
+                                 HyperscanCompiler compiler,
+                                 MeterRegistry meterRegistry) {
+        this.translator = translator;
+        this.compiler = compiler;
         this.passCounter = meterRegistry.counter("lexicon.compile.pass");
         this.failCounter = meterRegistry.counter("lexicon.compile.failed");
     }
@@ -128,8 +128,7 @@ public class LexiconCompileService {
         }
 
         return switch (translation) {
-            case TranslationResult.Error err ->
-                    TermCompilationResult.failedTranslation(term, err.message());
+            case TranslationResult.Error err -> TermCompilationResult.failedTranslation(term, err.message());
 
             case TranslationResult.Success success -> TermCompilationResult.pass(
                     term, success.hsPatterns(), success.hsFlags(),

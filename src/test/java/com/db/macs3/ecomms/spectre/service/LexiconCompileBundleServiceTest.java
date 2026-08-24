@@ -12,7 +12,12 @@ import com.gliwka.hyperscan.wrapper.Database;
 import com.gliwka.hyperscan.wrapper.Match;
 import com.gliwka.hyperscan.wrapper.Scanner;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -49,11 +54,11 @@ class LexiconCompileBundleServiceTest {
 
     @BeforeEach
     void setUp() {
-        var compiler   = new HyperscanCompiler();
+        var compiler = new HyperscanCompiler();
         var translator = new TermSyntaxTranslator(compiler);
         compiler.selfTest();
         var compileService = new LexiconCompileService(translator, compiler, new SimpleMeterRegistry());
-        var handler        = new HyperscanCombinationHandler(compiler);
+        var handler = new HyperscanCombinationHandler(compiler);
         bundleService = new LexiconCompileBundleService(compileService, compiler, handler, new SimpleMeterRegistry());
     }
 
@@ -74,24 +79,34 @@ class LexiconCompileBundleServiceTest {
     }
 
     // Convenience: Natural Language or Regex helpers just carry description
-    private record TermSpec(String description) {}
-    private static TermSpec term(String desc) { return new TermSpec(desc); }
+    private record TermSpec(String description) {
+    }
 
-    /** Shorthand: all-Natural-Language request */
+    private static TermSpec term(String desc) {
+        return new TermSpec(desc);
+    }
+
+    /**
+     * Shorthand: all-Natural-Language request
+     */
     private TypedCompileRequest naturalLanguage(String ruleName, String... descs) {
         TermSpec[] specs = new TermSpec[descs.length];
         for (int i = 0; i < descs.length; i++) specs[i] = term(descs[i]);
         return request(ruleName, TermType.NATURAL_LANGUAGE, specs);
     }
 
-    /** Shorthand: all-Regex request */
+    /**
+     * Shorthand: all-Regex request
+     */
     private TypedCompileRequest regex(String ruleName, String... descs) {
         TermSpec[] specs = new TermSpec[descs.length];
         for (int i = 0; i < descs.length; i++) specs[i] = term(descs[i]);
         return request(ruleName, TermType.REGEX, specs);
     }
 
-    /** Scans {@code text} against {@code db} and returns the matched expression ids. */
+    /**
+     * Scans {@code text} against {@code db} and returns the matched expression ids.
+     */
     private List<Integer> scanMatchesIds(Database db, String text) {
         List<Integer> ids = new ArrayList<>();
         try (Scanner scanner = new Scanner()) {
@@ -117,7 +132,7 @@ class LexiconCompileBundleServiceTest {
      * since native Hyperscan COMBINATION is no longer used for AND NOT terms.
      */
     private boolean evaluateAndNot(java.util.Collection<Integer> matchedIds,
-                                    List<Integer> requiredIds, List<Integer> excludedIds) {
+                                   List<Integer> requiredIds, List<Integer> excludedIds) {
         boolean allRequiredPresent = requiredIds != null && !requiredIds.isEmpty()
                 && matchedIds.containsAll(requiredIds);
         boolean allExcludedPresent = excludedIds != null && !excludedIds.isEmpty()
@@ -127,12 +142,13 @@ class LexiconCompileBundleServiceTest {
 
     private static final String NESTED_TOO_COMPLEX_TERM =
             "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) FOLLOWEDBY{4} "
-            + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
-            + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
+                    + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
+                    + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
 
     // ── Spec example from the requirements ────────────────────────────────────
 
-    @Test @Order(1)
+    @Test
+    @Order(1)
     @DisplayName("Spec example: Natural Language request → PASS, combined DB built, request_id/termType echoed")
     void specExampleNaturalLanguage() {
         var req = naturalLanguage("lexicon_research_1",
@@ -150,7 +166,8 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.jsonResponse().termType()).isEqualTo("Natural Language");
     }
 
-    @Test @Order(2)
+    @Test
+    @Order(2)
     @DisplayName("Spec example: Regex request → PASS, combined DB built, request_id/termType echoed")
     void specExampleRegex() {
         var req = regex("lexicon_research_1", "(?:price|spread|stock)");
@@ -167,7 +184,8 @@ class LexiconCompileBundleServiceTest {
 
     // ── JSON shape ──────────────────────────────────────────────────────────
 
-    @Test @Order(10)
+    @Test
+    @Order(10)
     @DisplayName("JSON response: request_id and termType present; hyperscanVersion absent (bundle-specific shape)")
     void jsonShapeMatchesCompile() {
         var req = naturalLanguage("shape_test", "price OR spread");
@@ -180,86 +198,93 @@ class LexiconCompileBundleServiceTest {
         assertThat(json.termType()).isEqualTo("Natural Language");
         assertThat(json.hyperscanVersion()).isNull();
         assertThat(json.results()).hasSize(1);
-        assertThat(json.results().get(0).termId()).isEqualTo("shape_test::1");
+        assertThat(json.results().getFirst().termId()).isEqualTo("shape_test::1");
     }
 
     // ── Natural Language term branch ──────────────────────────────────────────────────
 
-    @Test @Order(20)
+    @Test
+    @Order(20)
     @DisplayName("Natural Language term: NEAR{5} translated exactly like /compile")
     void naturalLanguageTermTranslated() {
         var req = naturalLanguage("std_test", "(manipulate) NEAR{5} (price)");
         var bundle = bundleService.buildBundle(req);
 
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
         assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.translatedPattern().get(0)).contains("manipulate").contains("price");
-        assertThat(result.translatedPattern().get(0)).contains("\\s+\\S+");
+        assertThat(result.translatedPattern().getFirst()).contains("manipulate").contains("price");
+        assertThat(result.translatedPattern().getFirst()).contains("\\s+\\S+");
     }
 
-    @Test @Order(21)
+    @Test
+    @Order(21)
     @DisplayName("Natural Language term with invalid syntax → FAILED with translationError, no DB entry")
     void naturalLanguageTermTranslationFailure() {
         var req = naturalLanguage("std_fail_test", "NEAR{5} (price)"); // missing left operand
         var bundle = bundleService.buildBundle(req);
 
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.FAILED);
     }
 
     // ── Regex term branch ────────────────────────────────────────────────────────
 
-    @Test @Order(30)
+    @Test
+    @Order(30)
     @DisplayName("Regex term: raw PCRE compiled verbatim, NOT passed through the translator")
     void regexTermCompiledVerbatim() {
         var req = regex("nlt_test", "(?:price|spread|stock)");
         var bundle = bundleService.buildBundle(req);
 
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
         assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.translatedPattern().get(0)).isEqualTo("(?:price|spread|stock)");
+        assertThat(result.translatedPattern().getFirst()).isEqualTo("(?:price|spread|stock)");
     }
 
-    @Test @Order(31)
+    @Test
+    @Order(31)
     @DisplayName("Regex term with invalid regex syntax → FAILED with Hyperscan errorLog")
     void regexTermInvalidRegex() {
         var req = regex("nlt_invalid_test", "[unclosed");
         var bundle = bundleService.buildBundle(req);
 
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.FAILED);
         assertThat(result.errorLog()).isNotBlank();
         assertThat(result.requiresExclusionCheck()).isFalse();
     }
 
-    @Test @Order(32)
+    @Test
+    @Order(32)
     @DisplayName("Regex term with non-Latin script gets UTF8/UCP flags automatically")
     void regexTermNonLatinFlags() {
         var req = regex("nlt_korean_test", "(?:내부자|거래)");
         var bundle = bundleService.buildBundle(req);
 
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
         assertThat(result.hyperscanFlags() & 32).isEqualTo(32); // UTF8
         assertThat(result.hyperscanFlags() & 64).isEqualTo(64); // UCP
     }
 
-    @Test @Order(33)
+    @Test
+    @Order(33)
     @DisplayName("Regex term with operator-language syntax (not a real regex) is treated literally, never translated")
     void regexTermNeverTranslated() {
         var req = regex("nlt_literal_test", "price NEAR.{5} stock");
         var bundle = bundleService.buildBundle(req);
 
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.translatedPattern().get(0)).isEqualTo("price NEAR.{5} stock");
+        assertThat(result.translatedPattern().getFirst()).isEqualTo("price NEAR.{5} stock");
     }
 
     // ── All-Regex and all-Natural-Language scenarios ────────────────────────────────────
 
-    @Test @Order(40)
+    @Test
+    @Order(40)
     @DisplayName("All-Regex request: every term compiled verbatim, DB contains all")
     void allRegexRequest() {
         var req = regex("all_nlt_test",
@@ -271,7 +296,8 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hasDatabase()).isTrue();
     }
 
-    @Test @Order(41)
+    @Test
+    @Order(41)
     @DisplayName("All-Natural Language request: behaves identically to /compile for every term")
     void allNaturalLanguageRequest() {
         var req = naturalLanguage("all_std_test",
@@ -287,7 +313,8 @@ class LexiconCompileBundleServiceTest {
 
     // ── Mixed pass/fail scenarios ──────────────────────────────
 
-    @Test @Order(50)
+    @Test
+    @Order(50)
     @DisplayName("Mixed PASS/FAILED within a Regex request: combined DB built from PASS subset only, with id gaps")
     void mixedPassFailedDbBuiltFromPassOnly() throws IOException {
         var req = regex("mixed_test",
@@ -309,7 +336,8 @@ class LexiconCompileBundleServiceTest {
         }
     }
 
-    @Test @Order(51)
+    @Test
+    @Order(51)
     @DisplayName("Zero PASS terms: no database built, clear explanatory note returned")
     void zeroPassTermsNoDatabase() {
         var req = regex("zero_pass_test", "[unclosed", "[also_unclosed");
@@ -324,7 +352,8 @@ class LexiconCompileBundleServiceTest {
 
     // ── Combined database integrity (round-trip load + scan) ───────────────────
 
-    @Test @Order(60)
+    @Test
+    @Order(60)
     @DisplayName("Combined DB round-trip: save() then load() reconstructs a working multi-pattern database")
     void combinedDatabaseRoundTrip() throws IOException {
         var req = regex("roundtrip_test",
@@ -335,7 +364,7 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hasDatabase()).isTrue();
 
         try (Database db = Database.load(new ByteArrayInputStream(bundle.hyperscanDatabaseBytes()))) {
-            List<Integer> priceMatches   = scanMatchesIds(db, "the price went up");
+            List<Integer> priceMatches = scanMatchesIds(db, "the price went up");
             List<Integer> insiderMatches = scanMatchesIds(db, "an insider tip was shared");
 
             assertThat(priceMatches).contains(1);
@@ -343,9 +372,10 @@ class LexiconCompileBundleServiceTest {
         }
     }
 
-    @Test @Order(61)
+    @Test
+    @Order(61)
     @DisplayName("Expression id equals the term's PARSED TERM NUMBER (from termId's '::n' suffix), " +
-                 "not its array position in the request")
+            "not its array position in the request")
     void expressionIdEqualsTermNumber() throws IOException {
         var req = regex("id_mapping_test",
                 "alpha_pattern",   // termId "id_mapping_test::1" -> term number 1
@@ -362,23 +392,24 @@ class LexiconCompileBundleServiceTest {
 
     // ── AND NOT: native Hyperscan logical combination ─────────────────
 
-    @Test @Order(70)
+    @Test
+    @Order(70)
     @DisplayName("AND NOT term: no single hyperscanExpressionId any more — every required/excluded " +
-                 "pattern gets its own individually-reportable id instead, since native combination " +
-                 "is confirmed unreliable for AND NOT (see HyperscanCombinationHandler class Javadoc)")
+            "pattern gets its own individually-reportable id instead, since native combination " +
+            "is confirmed unreliable for AND NOT (see HyperscanCombinationHandler class Javadoc)")
     void andNotTerm_getsOwnTermNumberAsExpressionId() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("((don't forward) AND NOT (compliance OR legal))"));
 
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
         assertThat(result.requiresExclusionCheck()).isTrue();
         assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.translatedPattern().get(0)).isEqualTo("don't forward");
+        assertThat(result.translatedPattern().getFirst()).isEqualTo("don't forward");
         assertThat(result.exclusionPattern()).hasSize(1);
-        assertThat(result.exclusionPattern().get(0)).contains("compliance").contains("legal");
+        assertThat(result.exclusionPattern().getFirst()).contains("compliance").contains("legal");
 
         // AND NOT terms report via requiredExpressionIds/excludedExpressionIds now, not a
         // single hyperscanExpressionId -- there is no native combination expression at all.
@@ -389,32 +420,35 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hasDatabase()).isTrue();
     }
 
-    @Test @Order(71)
+    @Test
+    @Order(71)
     @DisplayName("A plain term (no AND NOT) gets hyperscanExpressionId equal to its own term number, " +
-                 "not its array position")
+            "not its array position")
     void plainTerm_getsOwnTermNumberAsExpressionId() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE, term("insider OR trading"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.requiresExclusionCheck()).isFalse();
         assertThat(result.hyperscanExpressionId()).isEqualTo(1);
     }
 
-    @Test @Order(72)
+    @Test
+    @Order(72)
     @DisplayName("Plain AND (no NOT) also gets its own term number as expression id — self-contained, no combination needed")
     void plainAndTerm_selfContained_ownTermNumberAsExpressionId() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE, term("price AND rigging"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.requiresExclusionCheck()).isFalse();
         assertThat(result.hyperscanExpressionId()).isEqualTo(1);
     }
 
-    @Test @Order(73)
+    @Test
+    @Order(73)
     @DisplayName("Mixed request: plain/AND terms get their own term number as hyperscanExpressionId; " +
-                 "the AND NOT term gets requiredExpressionIds/excludedExpressionIds instead")
+            "the AND NOT term gets requiredExpressionIds/excludedExpressionIds instead")
     void mixedRequest_correctIdsForEachTerm() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("insider OR trading"),          // term number 1, plain
@@ -426,7 +460,7 @@ class LexiconCompileBundleServiceTest {
 
         assertThat(results).allMatch(TermCompilationResult::isPass);
         // Non-AND-NOT terms: reportable id is always the term's own number.
-        assertThat(results.get(0).hyperscanExpressionId()).isEqualTo(1);
+        assertThat(results.getFirst().hyperscanExpressionId()).isEqualTo(1);
         assertThat(results.get(1).hyperscanExpressionId()).isEqualTo(2);
         // The AND NOT term: no single hyperscanExpressionId -- required/excluded ids instead.
         assertThat(results.get(2).hyperscanExpressionId()).isNull();
@@ -436,26 +470,28 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hasDatabase()).isTrue();
     }
 
-    @Test @Order(74)
+    @Test
+    @Order(74)
     @DisplayName("FAILED terms have no hyperscanExpressionId — nothing was compiled into the database for them")
     void failedTerm_hasNoExpressionId() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE, term("\"unclosed quote"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isFailed()).isTrue();
         assertThat(result.hyperscanExpressionId()).isNull();
     }
 
-    @Test @Order(75)
+    @Test
+    @Order(75)
     @DisplayName("Chained AND NOT (A AND NOT B AND NOT C) still combines into ONE excluded side " +
-                 "(B OR C) at the translation stage — no native combination id any more, but the " +
-                 "excluded operands are still correctly unified into exclusionPattern")
+            "(B OR C) at the translation stage — no native combination id any more, but the " +
+            "excluded operands are still correctly unified into exclusionPattern")
     void chainedAndNot_stillOneCombinationId() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("(a) AND NOT (b) AND NOT (c)"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.requiresExclusionCheck()).isTrue();
         assertThat(result.hyperscanExpressionId()).isNull();
@@ -467,12 +503,13 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hasDatabase()).isTrue();
     }
 
-    @Test @Order(76)
+    @Test
+    @Order(76)
     @DisplayName("REGEX-type terms never require exclusion checks — no combination expression involved")
     void regexTerm_neverRequiresExclusionCheck() {
         var req = request("test-rule", TermType.REGEX, term("(?:insider|trading)"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.requiresExclusionCheck()).isFalse();
         assertThat(result.hyperscanExpressionId()).isEqualTo(1);
@@ -480,7 +517,8 @@ class LexiconCompileBundleServiceTest {
 
     // ── SOM_LEFTMOST: applied automatically to plain expressions, never to QUIET ones ──
 
-    @Test @Order(80)
+    @Test
+    @Order(80)
     @DisplayName("A plain (non-combination) expression compiles and matches correctly, with SOM_LEFTMOST applied automatically")
     void plainExpression_compilesAndMatchesWithSom() throws IOException {
         var req = regex("som_default_test", "(?:price|spread|stock)");
@@ -492,11 +530,12 @@ class LexiconCompileBundleServiceTest {
         }
     }
 
-    @Test @Order(81)
+    @Test
+    @Order(81)
     @DisplayName("REGRESSION: the exact shape from the reported bug — a decomposed term feeding a " +
-                 "combination — compiles successfully with no caller-supplied flag needed. Previously " +
-                 "this failed with \"HS_FLAG_QUIET is not supported in combination with HS_FLAG_SOM_LEFTMOST\" " +
-                 "because SOM_LEFTMOST was applied to every expression unconditionally, including QUIET ones.")
+            "combination — compiles successfully with no caller-supplied flag needed. Previously " +
+            "this failed with \"HS_FLAG_QUIET is not supported in combination with HS_FLAG_SOM_LEFTMOST\" " +
+            "because SOM_LEFTMOST was applied to every expression unconditionally, including QUIET ones.")
     void decomposedTerm_compilesSuccessfully_noSomFlagNeeded() throws IOException {
         var req = new TypedCompileRequest();
         req.setRequestId("regression-test");
@@ -505,7 +544,7 @@ class LexiconCompileBundleServiceTest {
         req.setTerms(List.of(new TypedCompileRequest.TermInput("t::1", NESTED_TOO_COMPLEX_TERM)));
 
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
         assertThat(result.translatedPattern()).hasSize(3); // decomposed into 3 leaves, as in the report
@@ -518,13 +557,14 @@ class LexiconCompileBundleServiceTest {
         }
     }
 
-    @Test @Order(82)
+    @Test
+    @Order(82)
     @DisplayName("REGRESSION FIX: an AND NOT term no longer uses native Hyperscan COMBINATION at all " +
-                 "(confirmed unreliable — Hyperscan's own documented eager, progressive combination " +
-                 "evaluation can fire a mixed positive/negative formula before the negated pattern has " +
-                 "had a chance to appear later in the same text). Every required/excluded pattern now " +
-                 "compiles as its own plain, individually-reportable expression, and the caller " +
-                 "evaluates the boolean condition itself after the whole scan completes.")
+            "(confirmed unreliable — Hyperscan's own documented eager, progressive combination " +
+            "evaluation can fire a mixed positive/negative formula before the negated pattern has " +
+            "had a chance to appear later in the same text). Every required/excluded pattern now " +
+            "compiles as its own plain, individually-reportable expression, and the caller " +
+            "evaluates the boolean condition itself after the whole scan completes.")
     void andNotTerm_compilesSuccessfully_noSomFlagNeeded() throws IOException {
         var req = new TypedCompileRequest();
         req.setRequestId("regression-andnot-test");
@@ -534,7 +574,7 @@ class LexiconCompileBundleServiceTest {
                 "t::1", "((don't forward) AND NOT (compliance OR legal))")));
 
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
         assertThat(bundle.hasDatabase()).isTrue();
@@ -552,10 +592,11 @@ class LexiconCompileBundleServiceTest {
         }
     }
 
-    @Test @Order(84)
+    @Test
+    @Order(84)
     @DisplayName("REGRESSION: the exact scenario from the reported bug — required term appearing " +
-                 "BEFORE the excluded term in the text — no longer produces a false positive, since " +
-                 "there is no native combination left to fire eagerly/prematurely")
+            "BEFORE the excluded term in the text — no longer produces a false positive, since " +
+            "there is no native combination left to fire eagerly/prematurely")
     void andNotTerm_requiredBeforeExcluded_noFalsePositive() throws IOException {
         var req = new TypedCompileRequest();
         req.setRequestId("regression-order-test");
@@ -565,7 +606,7 @@ class LexiconCompileBundleServiceTest {
                 "t::1", "insider AND NOT disclosed")));
 
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.isPass()).isTrue();
 
         try (Database db = Database.load(new ByteArrayInputStream(bundle.hyperscanDatabaseBytes()))) {
@@ -580,9 +621,10 @@ class LexiconCompileBundleServiceTest {
         }
     }
 
-    @Test @Order(83)
+    @Test
+    @Order(83)
     @DisplayName("TypedCompileRequest no longer has a trackMatchPosition field — verified structurally, " +
-                 "not just by absence of compile errors")
+            "not just by absence of compile errors")
     void trackMatchPositionFieldRemoved() {
         var methods = TypedCompileRequest.class.getDeclaredMethods();
         boolean anyTrackMatchPositionMethod = java.util.Arrays.stream(methods)
@@ -592,13 +634,14 @@ class LexiconCompileBundleServiceTest {
 
     // ── Decomposition: over-complex terms compiled as leaves + native COMBINATION ──
 
-    @Test @Order(90)
+    @Test
+    @Order(90)
     @DisplayName("DECOMPOSITION: a term too complex for one pattern compiles as independent QUIET " +
-                 "leaves plus one native COMBINATION expression, instead of failing")
+            "leaves plus one native COMBINATION expression, instead of failing")
     void decomposedTerm_compilesAsLeavesPlusCombination() throws IOException {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE, term(NESTED_TOO_COMPLEX_TERM));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
         assertThat(result.translatedPattern()).hasSize(3); // decomposed into 3 leaves
@@ -606,16 +649,17 @@ class LexiconCompileBundleServiceTest {
         assertThat(result.hyperscanExpressionId()).isEqualTo(1); // still the term's own number
     }
 
-    @Test @Order(91)
+    @Test
+    @Order(91)
     @DisplayName("DECOMPOSITION + AND NOT, excluded side decomposed: post-scan evaluation applies " +
-                 "the same AND convention correctly — exclude only when ALL decomposed excluded " +
-                 "leaves are present, not merely one. No native combination is used for this AND NOT " +
-                 "term at all — see HyperscanCombinationHandler class Javadoc.")
+            "the same AND convention correctly — exclude only when ALL decomposed excluded " +
+            "leaves are present, not merely one. No native combination is used for this AND NOT " +
+            "term at all — see HyperscanCombinationHandler class Javadoc.")
     void decomposedExcludedSide_appliesDeMorgansLawCorrectly() throws IOException {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("insider AND NOT (" + NESTED_TOO_COMPLEX_TERM + ")"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
         assertThat(result.translatedPattern()).hasSize(1);   // required side simple
@@ -643,19 +687,20 @@ class LexiconCompileBundleServiceTest {
             var matched2 = scanMatchesIds(db, messageMissingOneExcludedLeaf);
             assertThat(evaluateAndNot(matched2, result.requiredExpressionIds(), result.excludedExpressionIds()))
                     .as("required present AND only SOME excluded leaves present (not all) -> MUST match, "
-                        + "since the excluded condition (ALL leaves) was not fully satisfied")
+                            + "since the excluded condition (ALL leaves) was not fully satisfied")
                     .isTrue();
         }
     }
 
-    @Test @Order(92)
+    @Test
+    @Order(92)
     @DisplayName("DECOMPOSITION + AND NOT, required side decomposed: every required leaf and the " +
-                 "(non-decomposed) excluded pattern each get their own individually-reportable id")
+            "(non-decomposed) excluded pattern each get their own individually-reportable id")
     void decomposedRequiredSide_withSimpleExcluded() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("(" + NESTED_TOO_COMPLEX_TERM + ") AND NOT excluded"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
         assertThat(result.translatedPattern()).hasSize(3);
@@ -665,15 +710,16 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hasDatabase()).isTrue();
     }
 
-    @Test @Order(93)
+    @Test
+    @Order(93)
     @DisplayName("DECOMPOSITION on both sides of an AND NOT term compiles successfully, every leaf " +
-                 "on both sides getting its own individually-reportable id")
+            "on both sides getting its own individually-reportable id")
     void decomposedBothSides() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("(" + NESTED_TOO_COMPLEX_TERM + ") AND NOT ("
                         + NESTED_TOO_COMPLEX_TERM.replace("word", "term") + ")"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
         assertThat(result.translatedPattern()).hasSize(3);
@@ -683,78 +729,87 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hasDatabase()).isTrue();
     }
 
-    @Test @Order(94)
+    @Test
+    @Order(94)
     @DisplayName("A simple AND NOT term's exclusionPattern is unaffected by the decomposition feature — " +
-                 "still a single-entry list with the pre-decomposition pattern text")
+            "still a single-entry list with the pre-decomposition pattern text")
     void simpleAndNot_unaffectedByDecompositionFeature() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("((don't forward) AND NOT (compliance OR legal))"));
         var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.translatedPattern()).hasSize(1);
         assertThat(result.exclusionPattern()).hasSize(1);
-        assertThat(result.exclusionPattern().get(0)).isEqualTo("(?:(?:compliance|legal))");
+        assertThat(result.exclusionPattern().getFirst()).isEqualTo("(?:(?:compliance|legal))");
     }
 
     // ── HyperscanCombinationHandler-specific: the COMBINATION/QUIET flag constraint ──
     // Native COMBINATION is now used ONLY for pure decomposition (no AND NOT) — see class
     // Javadoc for why AND NOT no longer uses it at all.
 
-    @Test @Order(100)
+    @Test
+    @Order(100)
     @DisplayName("A pure-decomposition (no AND NOT) combination expression's flags are EXACTLY " +
-                 "{COMBINATION} — never CASELESS/UTF8/UCP/DOTALL/SOM_LEFTMOST mixed in, matching " +
-                 "Hyperscan's own constraint on combination expressions")
+            "{COMBINATION} — never CASELESS/UTF8/UCP/DOTALL/SOM_LEFTMOST mixed in, matching " +
+            "Hyperscan's own constraint on combination expressions")
     void combinationExpressionFlagsAreExactlyCombination() throws IOException {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE, term(NESTED_TOO_COMPLEX_TERM));
-        bundleService.buildBundle(req);
+        LexiconCompileBundleService.CompileBundleResult compileBundleResult = bundleService.buildBundle(req);
+        Database database = Database.load(new ByteArrayInputStream(compileBundleResult.hyperscanDatabaseBytes()));
 
-        List<com.gliwka.hyperscan.wrapper.Expression> compiled = Database.lastCompiledExpressions;
-        var combo = compiled.stream().filter(e -> e.getId() == 1).findFirst().orElseThrow();
-        assertThat(combo.getFlags()).hasSize(1);
-        assertThat(combo.getFlags().toString()).contains("COMBINATION");
+        try (Scanner scanner = new Scanner()) {
+            scanner.allocScratch(database);
+            List<Match> matches = scanner.scan(database, "wordA wordN wordT");
+            assertThat(matches.stream()
+                    .allMatch(e -> e.getMatchedExpression().getFlags().toString().contains("COMBINATION"))).isTrue();
+        }
     }
 
-    @Test @Order(101)
+    @Test
+    @Order(101)
     @DisplayName("Every QUIET sub-expression a pure-decomposition combination needs is assigned an id " +
-                 "from the allocated range, never the term's own term number")
-    void quietSubExpressionsNeverUseTermNumber() {
+            "from the allocated range, never the term's own term number")
+    void quietSubExpressionsNeverUseTermNumber() throws IOException {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE, term(NESTED_TOO_COMPLEX_TERM));
-        bundleService.buildBundle(req);
+        LexiconCompileBundleService.CompileBundleResult compileBundleResult = bundleService.buildBundle(req);
+        Database database = Database.load(new ByteArrayInputStream(compileBundleResult.hyperscanDatabaseBytes()));
 
-        List<com.gliwka.hyperscan.wrapper.Expression> compiled = Database.lastCompiledExpressions;
-        // termId "test-rule::1" -> term number 1; the combination (id 1) is the only
-        // non-QUIET expression. Every OTHER expression (the 3 decomposed leaves) must be
-        // QUIET and NOT use id 1.
-        assertThat(compiled.stream()
-                .filter(e -> e.getId() != 1)
-                .allMatch(e -> e.getFlags().toString().contains("QUIET")))
-                .isTrue();
-        assertThat(compiled.stream().filter(e -> e.getId() == 1).count()).isEqualTo(1);
+        try (Scanner scanner = new Scanner()) {
+            scanner.allocScratch(database);
+            List<Match> matches = scanner.scan(database, "insider");
+            assertThat(matches.stream()
+                    .allMatch(e -> e.getMatchedExpression().getFlags().toString().contains("QUIET"))).isTrue();
+        }
     }
 
-    @Test @Order(102)
+    @Test
+    @Order(102)
     @DisplayName("An AND NOT term's expressions are NEVER QUIET and NEVER COMBINATION — every " +
-                 "required/excluded pattern is its own plain, individually-reportable expression")
-    void andNotTerm_neverUsesQuietOrCombination() {
+            "required/excluded pattern is its own plain, individually-reportable expression")
+    void andNotTerm_neverUsesQuietOrCombination() throws IOException {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE, term("insider AND NOT compliance"));
-        var bundle = bundleService.buildBundle(req);
-        var result = bundle.jsonResponse().results().get(0);
+        LexiconCompileBundleService.CompileBundleResult compileBundleResult = bundleService.buildBundle(req);
+        Database database = Database.load(new ByteArrayInputStream(compileBundleResult.hyperscanDatabaseBytes()));
+        var result = compileBundleResult.jsonResponse().results().getFirst();
 
-        List<com.gliwka.hyperscan.wrapper.Expression> compiled = Database.lastCompiledExpressions;
-        assertThat(compiled).hasSize(2); // required + excluded, no combination expression at all
-        assertThat(compiled.stream().noneMatch(e -> e.getFlags().toString().contains("QUIET"))).isTrue();
-        assertThat(compiled.stream().noneMatch(e -> e.getFlags().toString().contains("COMBINATION"))).isTrue();
-        // Neither expression uses the term's own number (1) -- both got allocated ids instead,
-        // since there is no single reportable id for an AND NOT term any more.
-        assertThat(compiled.stream().noneMatch(e -> e.getId() == 1)).isTrue();
-        assertThat(result.requiredExpressionIds().get(0)).isNotEqualTo(1);
-        assertThat(result.excludedExpressionIds().get(0)).isNotEqualTo(1);
+        try (Scanner scanner = new Scanner()) {
+            scanner.allocScratch(database);
+            List<Match> matches = scanner.scan(database, "insider");
+            assertThat(matches.stream()
+                    .allMatch(e -> e.getMatchedExpression().getFlags().toString().contains("QUIET"))).isFalse();
+            assertThat(matches.stream()
+                    .allMatch(e -> e.getMatchedExpression().getFlags().toString().contains("COMBINATION"))).isFalse();
+        }
+
+        assertThat(result.requiredExpressionIds().getFirst()).isNotEqualTo(1);
+        assertThat(result.excludedExpressionIds().getFirst()).isNotEqualTo(1);
     }
 
     // ── Term id validation: malformed / duplicate term numbers rejected up front ──
 
-    @Test @Order(110)
+    @Test
+    @Order(110)
     @DisplayName("A termId not ending in '::<n>' is rejected with InvalidTermIdException before any term is compiled")
     void malformedTermIdRejected() {
         var req = new TypedCompileRequest();
@@ -768,9 +823,10 @@ class LexiconCompileBundleServiceTest {
                 .hasMessageContaining("not_a_valid_term_id");
     }
 
-    @Test @Order(111)
+    @Test
+    @Order(111)
     @DisplayName("Two terms sharing the same term number are rejected with InvalidTermIdException, " +
-                 "since they would collide at the same Hyperscan expression id")
+            "since they would collide at the same Hyperscan expression id")
     void duplicateTermNumberRejected() {
         var req = new TypedCompileRequest();
         req.setRequestId(UUID.randomUUID().toString());
@@ -785,7 +841,8 @@ class LexiconCompileBundleServiceTest {
                 .hasMessageContaining("dup_id_rule::1");
     }
 
-    @Test @Order(112)
+    @Test
+    @Order(112)
     @DisplayName("A termId ending in a non-numeric suffix after '::' is rejected, not silently treated as 0")
     void nonNumericSuffixRejected() {
         var req = new TypedCompileRequest();
@@ -798,10 +855,11 @@ class LexiconCompileBundleServiceTest {
                 .isInstanceOf(com.db.macs3.ecomms.spectre.model.InvalidTermIdException.class);
     }
 
-    @Test @Order(113)
+    @Test
+    @Order(113)
     @DisplayName("Valid, non-sequential, sparse term numbers (e.g. 5 and 100) are accepted; the plain " +
-                 "term gets its own number as expression id, the AND NOT term gets allocated ids " +
-                 "starting safely beyond both term numbers")
+            "term gets its own number as expression id, the AND NOT term gets allocated ids " +
+            "starting safely beyond both term numbers")
     void sparseTermNumbersAccepted() {
         var req = new TypedCompileRequest();
         req.setRequestId(UUID.randomUUID().toString());
@@ -815,7 +873,7 @@ class LexiconCompileBundleServiceTest {
         var results = bundle.jsonResponse().results();
 
         assertThat(results).allMatch(TermCompilationResult::isPass);
-        assertThat(results.get(0).hyperscanExpressionId()).isEqualTo(5);
+        assertThat(results.getFirst().hyperscanExpressionId()).isEqualTo(5);
         // The AND NOT term (term number 100) no longer gets hyperscanExpressionId -- its
         // required/excluded patterns get allocated ids starting from 101 (max term number + 1).
         assertThat(results.get(1).hyperscanExpressionId()).isNull();

@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <!DOCTYPE module PUBLIC
-    "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
-    "https://checkstyle.org/dtds/configuration_1_3.dtd">
+        "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+        "https://checkstyle.org/dtds/configuration_1_3.dtd">
 
 <!--
   ╔══════════════════════════════════════════════════════════════════════════╗
@@ -10,10 +10,10 @@
   ║                                                                          ║
   ║  Compatible with: checkstyle 10.12.5 / maven-checkstyle-plugin 3.3.1   ║
   ║                                                                          ║
-  ║  BREAKING CHANGE from Checkstyle 8.42+:                                 ║
-  ║   JavadocMethod.scope   → JavadocMethod.accessModifiers                 ║
-  ║   JavadocVariable.scope → JavadocVariable.accessModifiers               ║
-  ║   JavadocType.scope is still valid in 10.x                              ║
+  ║  Compatibility notes for Checkstyle 10.12.5:                         ║
+  ║   JavadocMethod.accessModifiers is supported.                          ║
+  ║   JavadocVariable has no scope/accessModifiers property.               ║
+  ║   JavadocType.scope is supported.                                      ║
   ║                                                                          ║
   ║  Rules summary:                                                          ║
   ║   • 120-character line limit                                             ║
@@ -56,6 +56,18 @@
         <property name="severity" value="warning"/>
     </module>
 
+    <!-- ── Line length ───────────────────────────────────────────────────── -->
+
+    <!--
+      Maximum 120 characters per line.
+      Exemptions: package/import lines, and http(s):// URLs in Javadoc.
+    -->
+    <module name="LineLength">
+        <property name="max"           value="120"/>
+        <property name="ignorePattern"
+                  value="^package.*|^import.*|a href|href|http://|https://|ftp://"/>
+    </module>
+
     <!-- ── TreeWalker — per-token AST checks ────────────────────────────────── -->
     <module name="TreeWalker">
 
@@ -63,7 +75,7 @@
 
         <!--
           JavadocMethod — checks FORMAT of existing Javadoc on methods.
-          NOTE (Checkstyle 8.42+): 'scope' was REMOVED. Use 'accessModifiers'.
+          Checkstyle 10.12.5 does not support scope/accessModifiers for JavadocVariable.
           accessModifiers="public" → only check public methods.
           Suppressions.xml relaxes this for getters, records, test classes, etc.
         -->
@@ -85,12 +97,11 @@
 
         <!--
           JavadocVariable — checks Javadoc on fields/variables.
-          NOTE (Checkstyle 8.42+): 'scope' was REMOVED. Use 'accessModifiers'.
-          accessModifiers="public" → only check public fields.
+          Checkstyle 10.12.5 does not support scope/accessModifiers for JavadocVariable.
+          The module uses its Checkstyle 10.12.5 defaults.
           Suppressions.xml relaxes this for model/config classes.
         -->
         <module name="JavadocVariable">
-            <property name="accessModifiers" value="public"/>
         </module>
 
         <!-- Javadoc content: first sentence must end with a period -->
@@ -169,21 +180,7 @@
         <!-- Remove unused imports -->
         <module name="UnusedImports">
             <property name="processJavadoc" value="true"/>
-        </module>
-
-        <!-- ── Line length ───────────────────────────────────────────────────── -->
-
-        <!--
-          Maximum 120 characters per line.
-          Exemptions: package/import lines, and http(s):// URLs in Javadoc.
-        -->
-        <module name="LineLength">
-            <property name="max"           value="120"/>
-            <property name="ignorePattern"
-                      value="^package.*|^import.*|a href|href|http://|https://|ftp://"/>
-        </module>
-
-        <!-- ── Whitespace ───────────────────────────────────────────────────── -->
+        </module><!-- ── Whitespace ───────────────────────────────────────────────────── -->
 
         <!-- No space inside angle brackets: Map<String, List<String>> -->
         <module name="GenericWhitespace"/>

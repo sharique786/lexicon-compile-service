@@ -56,7 +56,9 @@ import java.util.List;
  */
 final class PatternCodeGenerator {
 
-    /** PCRE metacharacters that always need escaping (excludes {@code *} and {@code ?}, handled specially). */
+    /**
+     * PCRE metacharacters that always need escaping (excludes {@code *} and {@code ?}, handled specially).
+     */
     private static final String PCRE_META = "\\.^$|+()[]{}<>";
 
     /**
@@ -69,7 +71,8 @@ final class PatternCodeGenerator {
      */
     private static final String UNBOUNDED_GAP = "[\\s\\S]*";
 
-    private PatternCodeGenerator() {}
+    private PatternCodeGenerator() {
+    }
 
     /**
      * Generates the Hyperscan pattern for {@code ast}, mutating {@code ctx}
@@ -142,7 +145,7 @@ final class PatternCodeGenerator {
     }
 
     private static String generateNear(Ast.Near near, ParseContext ctx) {
-        String leftPat  = generate(near.left(), ctx);
+        String leftPat = generate(near.left(), ctx);
         String rightPat = generate(near.right(), ctx);
         MultiLanguagePatternBuilder.BuildResult r =
                 MultiLanguagePatternBuilder.buildNear(leftPat, rightPat, near.distance());
@@ -151,7 +154,7 @@ final class PatternCodeGenerator {
     }
 
     private static String generateFollowedBy(Ast.FollowedBy fb, ParseContext ctx) {
-        String leftPat  = generate(fb.left(), ctx);
+        String leftPat = generate(fb.left(), ctx);
         String rightPat = generate(fb.right(), ctx);
         MultiLanguagePatternBuilder.BuildResult r =
                 MultiLanguagePatternBuilder.buildFollowedBy(leftPat, rightPat, fb.distance());
@@ -174,7 +177,7 @@ final class PatternCodeGenerator {
      *
      * @param operandPatterns already-generated PCRE fragments for each AND operand
      * @return {@code (?:seq1|seq2|...)} where each {@code seqN} is one
-     *         permutation of the operands joined by {@link #UNBOUNDED_GAP}
+     * permutation of the operands joined by {@link #UNBOUNDED_GAP}
      */
     private static String buildUnboundedCoOccurrencePattern(List<String> operandPatterns) {
         List<List<String>> permutations = permutationsOf(operandPatterns);
@@ -185,7 +188,9 @@ final class PatternCodeGenerator {
         return "(?:" + String.join("|", orderedSequences) + ")";
     }
 
-    /** Standard backtracking permutation generator — N! permutations for N items. */
+    /**
+     * Standard backtracking permutation generator — N! permutations for N items.
+     */
     private static List<List<String>> permutationsOf(List<String> items) {
         List<List<String>> result = new ArrayList<>();
         permute(new ArrayList<>(items), 0, result);
@@ -304,9 +309,9 @@ final class PatternCodeGenerator {
                 || (codePoint >= 0x1F900 && codePoint <= 0x1F9FF)
                 || (codePoint >= 0x1FA00 && codePoint <= 0x1FA6F)
                 || (codePoint >= 0x1FA70 && codePoint <= 0x1FAFF)
-                || (codePoint >= 0x2600  && codePoint <= 0x26FF)
-                || (codePoint >= 0x2700  && codePoint <= 0x27BF)
-                || (codePoint >= 0xFE00  && codePoint <= 0xFE0F)
+                || (codePoint >= 0x2600 && codePoint <= 0x26FF)
+                || (codePoint >= 0x2700 && codePoint <= 0x27BF)
+                || (codePoint >= 0xFE00 && codePoint <= 0xFE0F)
                 || (codePoint >= 0x1F1E0 && codePoint <= 0x1F1FF)
                 || (codePoint >= 0x1F100 && codePoint <= 0x1F1FF);
     }

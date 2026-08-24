@@ -46,7 +46,7 @@ class HyperscanCombinationHandlerTest {
     }
 
     private TermCompilationResult passResult(List<String> translatedPattern, boolean requiresExclusionCheck,
-                                              List<String> exclusionPattern) {
+                                             List<String> exclusionPattern) {
         return new TermCompilationResult(
                 "t::1", "desc", CompilationStatus.PASS,
                 translatedPattern, null, null,
@@ -119,8 +119,8 @@ class HyperscanCombinationHandlerTest {
             var assignment = handler.addExpressions(result, 7, new HyperscanCombinationHandler.HyperscanIdAllocator(8), out);
 
             assertThat(out).hasSize(1);
-            assertThat(out.get(0).getId()).isEqualTo(7);
-            assertThat(out.get(0).getExpression()).isEqualTo("insider");
+            assertThat(out.getFirst().getId()).isEqualTo(7);
+            assertThat(out.getFirst().getExpression()).isEqualTo("insider");
             assertThat(assignment.hyperscanExpressionId()).isEqualTo(7);
             assertThat(assignment.requiredExpressionIds()).isNull();
             assertThat(assignment.excludedExpressionIds()).isNull();
@@ -133,7 +133,7 @@ class HyperscanCombinationHandlerTest {
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
 
-            assertThat(out.get(0).getFlags().contains(ExpressionFlag.QUIET)).isFalse();
+            assertThat(out.getFirst().getFlags().contains(ExpressionFlag.QUIET)).isFalse();
         }
 
         @Test
@@ -143,7 +143,7 @@ class HyperscanCombinationHandlerTest {
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
 
-            assertThat(out.get(0).getFlags().contains(ExpressionFlag.COMBINATION)).isFalse();
+            assertThat(out.getFirst().getFlags().contains(ExpressionFlag.COMBINATION)).isFalse();
         }
     }
 
@@ -209,7 +209,7 @@ class HyperscanCombinationHandlerTest {
 
         @Test
         @DisplayName("hyperscanExpressionId is null; requiredExpressionIds/excludedExpressionIds are " +
-                     "populated with one allocated id each, neither equal to the term number")
+                "populated with one allocated id each, neither equal to the term number")
         void reportsViaRequiredExcludedIds() {
             var result = passResult(List.of("required"), true, List.of("excluded"));
             List<Expression> out = new ArrayList<>();
@@ -218,13 +218,13 @@ class HyperscanCombinationHandlerTest {
             assertThat(assignment.hyperscanExpressionId()).isNull();
             assertThat(assignment.requiredExpressionIds()).containsExactly(2);
             assertThat(assignment.excludedExpressionIds()).containsExactly(3);
-            assertThat(assignment.requiredExpressionIds().get(0)).isNotEqualTo(1);
-            assertThat(assignment.excludedExpressionIds().get(0)).isNotEqualTo(1);
+            assertThat(assignment.requiredExpressionIds().getFirst()).isNotEqualTo(1);
+            assertThat(assignment.excludedExpressionIds().getFirst()).isNotEqualTo(1);
         }
 
         @Test
         @DisplayName("Both expressions are plain — never QUIET — since each must report individually " +
-                     "for the caller to evaluate the boolean condition after the whole scan completes")
+                "for the caller to evaluate the boolean condition after the whole scan completes")
         void bothExpressionsPlainNotQuiet() {
             var result = passResult(List.of("required"), true, List.of("excluded"));
             List<Expression> out = new ArrayList<>();
@@ -235,7 +235,7 @@ class HyperscanCombinationHandlerTest {
 
         @Test
         @DisplayName("Both expressions safely carry SOM_LEFTMOST — safe since neither is QUIET, unlike " +
-                     "the earlier design where required/excluded were QUIET sub-expressions")
+                "the earlier design where required/excluded were QUIET sub-expressions")
         void bothExpressionsCarrySomLeftmost() {
             var result = passResult(List.of("required"), true, List.of("excluded"));
             List<Expression> out = new ArrayList<>();
@@ -266,7 +266,7 @@ class HyperscanCombinationHandlerTest {
 
         @Test
         @DisplayName("Decomposed required side with simple excluded: every required leaf plus the " +
-                     "excluded pattern each get their own plain, individually-reportable expression")
+                "excluded pattern each get their own plain, individually-reportable expression")
         void decomposedRequiredSideAllPlain() {
             var result = passResult(List.of("reqA", "reqB", "reqC"), true, List.of("excluded"));
             List<Expression> out = new ArrayList<>();
@@ -297,7 +297,7 @@ class HyperscanCombinationHandlerTest {
 
         @Test
         @DisplayName("Pure decomposition (no AND NOT): never mixes CASELESS/UTF8/UCP/DOTALL/SOM_LEFTMOST " +
-                     "into a combination expression's own flags")
+                "into a combination expression's own flags")
         void combinationFlagsNeverMixed() {
             var result = passResult(List.of("leafA", "leafB"), false, null);
             List<Expression> out = new ArrayList<>();
@@ -310,14 +310,14 @@ class HyperscanCombinationHandlerTest {
 
         @Test
         @DisplayName("A plain (non-combination, non-AND-NOT) term's single expression DOES carry " +
-                     "SOM_LEFTMOST — safe there since it is never QUIET")
+                "SOM_LEFTMOST — safe there since it is never QUIET")
         void plainTermCarriesSomLeftmost() {
             var result = passResult(List.of("insider"), false, null);
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
 
             assertThat(out).hasSize(1);
-            assertThat(out.get(0).getFlags().contains(ExpressionFlag.SOM_LEFTMOST)).isTrue();
+            assertThat(out.getFirst().getFlags().contains(ExpressionFlag.SOM_LEFTMOST)).isTrue();
         }
     }
 }

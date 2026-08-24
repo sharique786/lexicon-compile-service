@@ -177,8 +177,12 @@ public final class TermSyntaxTranslator {
                 Candidate excludedCandidate = generateSide(excludedCombined, ctx);
                 int flags = ctx.computeFlags();
 
-                SideResult required = validateSide(requiredCandidate, ctx, flags, preprocessed, "required", warnings);
-                SideResult excluded = validateSide(excludedCandidate, ctx, flags, preprocessed, "excluded (AND NOT)", warnings);
+                SideResult required
+                        = validateSide(requiredCandidate, ctx, flags,
+                        preprocessed, "required", warnings);
+                SideResult excluded
+                        = validateSide(excludedCandidate, ctx, flags,
+                        preprocessed, "excluded (AND NOT)", warnings);
 
                 log.debug("Translated (AND NOT): '{}' -> required={} excluded={} flags={} warnings={}",
                         rawExpression, required, excluded, flags, warnings.size());
@@ -303,10 +307,12 @@ public final class TermSyntaxTranslator {
      * caller just checks {@code patterns.size()}.
      */
     private record SideResult(List<String> patterns) {
-        boolean isDecomposed() { return patterns.size() > 1; }
+        boolean isDecomposed() {
+            return patterns.size() > 1;
+        }
 
         @Override public String toString() {
-            return isDecomposed() ? "decomposed(" + patterns.size() + " leaves)" : "'" + patterns.get(0) + "'";
+            return isDecomposed() ? "decomposed(" + patterns.size() + " leaves)" : "'" + patterns.getFirst() + "'";
         }
     }
 
@@ -318,7 +324,9 @@ public final class TermSyntaxTranslator {
      * still needing Phase-2 validation before being trusted).
      */
     private record Candidate(Ast sideAst, String singlePattern, List<String> preDecomposedLeaves) {
-        boolean isPreDecomposed() { return preDecomposedLeaves != null; }
+        boolean isPreDecomposed() {
+            return preDecomposedLeaves != null;
+        }
     }
 
     /**

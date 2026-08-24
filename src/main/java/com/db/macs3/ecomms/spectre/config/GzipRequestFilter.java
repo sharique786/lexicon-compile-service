@@ -1,14 +1,26 @@
 package com.db.macs3.ecomms.spectre.config;
 
-import jakarta.servlet.*;
+import jakarta.servlet.Filter;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.FilterConfig;
+import jakarta.servlet.ReadListener;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletInputStream;
+import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
+import jakarta.validation.constraints.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.zip.GZIPInputStream;
 
@@ -16,7 +28,7 @@ import java.util.zip.GZIPInputStream;
  * Servlet filter that decompresses GZIP-encoded request bodies.
  *
  * <p>Uses {@code jakarta.servlet.*} (Jakarta EE 10 / Spring Boot 4).
- * @{@code Order(1)} — runs before Spring's DispatcherServlet.
+ * {@code Order(1)} — runs before Spring's DispatcherServlet.
  *
  * <h2>Compression flow</h2>
  * <dl>
@@ -38,8 +50,8 @@ public class GzipRequestFilter implements Filter {
 
     @Override
     public void doFilter(ServletRequest request,
-                          ServletResponse response,
-                          FilterChain chain) throws IOException, ServletException {
+                         ServletResponse response,
+                         FilterChain chain) throws IOException, ServletException {
 
         HttpServletRequest httpReq = (HttpServletRequest) request;
         String encoding = httpReq.getHeader("Content-Encoding");
@@ -54,10 +66,12 @@ public class GzipRequestFilter implements Filter {
     }
 
     @Override
-    public void init(FilterConfig config) { }
+    public void init(FilterConfig config) {
+    }
 
     @Override
-    public void destroy() { }
+    public void destroy() {
+    }
 
     // ── GzipRequestWrapper ────────────────────────────────────────────────────
 
@@ -83,11 +97,28 @@ public class GzipRequestFilter implements Filter {
         public ServletInputStream getInputStream() {
             ByteArrayInputStream bais = new ByteArrayInputStream(decompressedBody);
             return new ServletInputStream() {
-                @Override public int     read()                               { return bais.read(); }
-                @Override public int     read(byte[] b, int off, int len)     { return bais.read(b, off, len); }
-                @Override public boolean isFinished()                         { return bais.available() == 0; }
-                @Override public boolean isReady()                            { return true; }
-                @Override public void    setReadListener(ReadListener rl) {
+                @Override
+                public int read() {
+                    return bais.read();
+                }
+
+                @Override
+                public int read(@NotNull byte[] bytes, int off, int len) {
+                    return bais.read(bytes, off, len);
+                }
+
+                @Override
+                public boolean isFinished() {
+                    return bais.available() == 0;
+                }
+
+                @Override
+                public boolean isReady() {
+                    return true;
+                }
+
+                @Override
+                public void setReadListener(ReadListener rl) {
                     throw new UnsupportedOperationException("ReadListener not supported");
                 }
             };
@@ -99,7 +130,9 @@ public class GzipRequestFilter implements Filter {
                     new InputStreamReader(getInputStream(), StandardCharsets.UTF_8));
         }
 
-        /** Strip Content-Encoding so downstream code does not double-decompress. */
+        /**
+         * Strip Content-Encoding so downstream code does not double-decompress.
+         */
         @Override
         public String getHeader(String name) {
             return "Content-Encoding".equalsIgnoreCase(name) ? null : super.getHeader(name);

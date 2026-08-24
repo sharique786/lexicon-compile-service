@@ -17,8 +17,11 @@ import java.util.List;
  */
 sealed interface Ast {
 
-    /** {@code A OR B OR C} — alternation. */
-    record Or(List<Ast> operands) implements Ast {}
+    /**
+     * {@code A OR B OR C} — alternation.
+     */
+    record Or(List<Ast> operands) implements Ast {
+    }
 
     /**
      * {@code A AND B AND C} — all operands must be present, ANYWHERE in the
@@ -32,7 +35,8 @@ sealed interface Ast {
      * lookahead-based design (documented in the old README) could never
      * have worked against Hyperscan, which does not support lookaround at all.
      */
-    record And(List<Ast> operands) implements Ast {}
+    record And(List<Ast> operands) implements Ast {
+    }
 
     /**
      * {@code A AND NOT B} (and its chained form {@code A AND NOT B AND NOT C},
@@ -53,16 +57,26 @@ sealed interface Ast {
      * {@code exclusionPattern} does NOT match the same message — see the
      * README's "AND NOT: the two-pattern contract" section.
      */
-    record AndNot(Ast required, List<Ast> excluded) implements Ast {}
+    record AndNot(Ast required, List<Ast> excluded) implements Ast {
+    }
 
-    /** {@code A NEAR{n} B} — bidirectional proximity, bounded gap of {@code n} words/chars. */
-    record Near(Ast left, Ast right, int distance) implements Ast {}
+    /**
+     * {@code A NEAR{n} B} — bidirectional proximity, bounded gap of {@code n} words/chars.
+     */
+    record Near(Ast left, Ast right, int distance) implements Ast {
+    }
 
-    /** {@code A FOLLOWEDBY{n} B} — directional proximity (A before B), bounded gap of {@code n} words/chars. */
-    record FollowedBy(Ast left, Ast right, int distance) implements Ast {}
+    /**
+     * {@code A FOLLOWEDBY{n} B} — directional proximity (A before B), bounded gap of {@code n} words/chars.
+     */
+    record FollowedBy(Ast left, Ast right, int distance) implements Ast {
+    }
 
-    /** A single unquoted word — may contain a {@code *} wildcard and/or a literal {@code ?}. */
-    record Word(String text) implements Ast {}
+    /**
+     * A single unquoted word — may contain a {@code *} wildcard and/or a literal {@code ?}.
+     */
+    record Word(String text) implements Ast {
+    }
 
     /**
      * Multiple unquoted words that appeared together inside one set of
@@ -70,8 +84,12 @@ sealed interface Ast {
      * — a literal multi-word phrase. Each word is still wildcard-aware
      * (e.g. {@code (chimp* attack)} is valid).
      */
-    record Phrase(List<String> words) implements Ast {}
+    record Phrase(List<String> words) implements Ast {
+    }
 
-    /** A double-quoted phrase — always literal; {@code *} and {@code ?} inside are NOT special. */
-    record QuotedPhrase(String text) implements Ast {}
+    /**
+     * A double-quoted phrase — always literal; {@code *} and {@code ?} inside are NOT special.
+     */
+    record QuotedPhrase(String text) implements Ast {
+    }
 }

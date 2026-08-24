@@ -1,6 +1,11 @@
 package com.db.macs3.ecomms.spectre.hyperscan;
 
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -24,13 +29,15 @@ class HyperscanCompilerTest {
         compiler.selfTest();
     }
 
-    @Test @Order(1)
+    @Test
+    @Order(1)
     @DisplayName("engineMode is always HYPERSCAN_NATIVE")
     void engineMode() {
         assertThat(compiler.getEngineMode()).isEqualTo("HYPERSCAN_NATIVE");
     }
 
-    @Test @Order(2)
+    @Test
+    @Order(2)
     @DisplayName("hyperscanVersion returns library version string")
     void hyperscanVersion() {
         assertThat(compiler.getHyperscanVersion()).isEqualTo("5.4.0-2.0.0");
@@ -38,7 +45,8 @@ class HyperscanCompilerTest {
 
     // ── Valid patterns ────────────────────────────────────────────────────────
 
-    @Test @Order(10)
+    @Test
+    @Order(10)
     @DisplayName("Simple word pattern → PASS")
     void simpleWordPass() {
         var r = compiler.validate("insider", HyperscanCompiler.HS_FLAG_CASELESS);
@@ -47,14 +55,16 @@ class HyperscanCompilerTest {
         assertThat(r.errorMessage()).isNull();
     }
 
-    @Test @Order(11)
+    @Test
+    @Order(11)
     @DisplayName("OR group pattern → PASS")
     void orGroupPass() {
         var r = compiler.validate("(?:price|spread|stock)", HyperscanCompiler.HS_FLAG_CASELESS);
         assertThat(r.isPass()).isTrue();
     }
 
-    @Test @Order(12)
+    @Test
+    @Order(12)
     @DisplayName("NEAR{5} bidirectional pattern → PASS")
     void nearPatternPass() {
         String pattern = "(?:manipulate\\S*(?:\\s+\\S+){0,5}\\s+(?:price|spread|stock)"
@@ -63,7 +73,8 @@ class HyperscanCompilerTest {
         assertThat(r.isPass()).isTrue();
     }
 
-    @Test @Order(13)
+    @Test
+    @Order(13)
     @DisplayName("FOLLOWEDBY directional pattern → PASS")
     void followedByPatternPass() {
         var r = compiler.validate(
@@ -72,7 +83,8 @@ class HyperscanCompilerTest {
         assertThat(r.isPass()).isTrue();
     }
 
-    @Test @Order(14)
+    @Test
+    @Order(14)
     @DisplayName("Lookahead (?=...) is NOT supported by Hyperscan — correctly rejected")
     void andLookaheadUnsupported() {
         int flags = HyperscanCompiler.HS_FLAG_CASELESS | HyperscanCompiler.HS_FLAG_DOTALL;
@@ -83,7 +95,8 @@ class HyperscanCompilerTest {
         assertThat(r.errorMessage()).isNotBlank();
     }
 
-    @Test @Order(15)
+    @Test
+    @Order(15)
     @DisplayName("Negative lookahead (?!...) is NOT supported by Hyperscan — correctly rejected")
     void andNotUnsupported() {
         int flags = HyperscanCompiler.HS_FLAG_CASELESS | HyperscanCompiler.HS_FLAG_DOTALL;
@@ -94,7 +107,8 @@ class HyperscanCompilerTest {
         assertThat(r.errorMessage()).isNotBlank();
     }
 
-    @Test @Order(16)
+    @Test
+    @Order(16)
     @DisplayName("Emoji codepoint \\x{1F4B0} with UTF8+UCP → PASS")
     void emojiCodepointPass() {
         int flags = HyperscanCompiler.HS_FLAG_CASELESS
@@ -104,7 +118,8 @@ class HyperscanCompilerTest {
         assertThat(r.isPass()).isTrue();
     }
 
-    @Test @Order(17)
+    @Test
+    @Order(17)
     @DisplayName("Korean literal with UTF8+UCP → PASS")
     void koreanLiteralPass() {
         int flags = HyperscanCompiler.HS_FLAG_CASELESS
@@ -114,7 +129,8 @@ class HyperscanCompilerTest {
         assertThat(r.isPass()).isTrue();
     }
 
-    @Test @Order(18)
+    @Test
+    @Order(18)
     @DisplayName("Arabic literal with UTF8+UCP → PASS")
     void arabicLiteralPass() {
         int flags = HyperscanCompiler.HS_FLAG_CASELESS
@@ -124,7 +140,8 @@ class HyperscanCompilerTest {
         assertThat(r.isPass()).isTrue();
     }
 
-    @Test @Order(19)
+    @Test
+    @Order(19)
     @DisplayName("Wildcard \\S* pattern → PASS")
     void wildcardPass() {
         var r = compiler.validate("manipulate\\S*", HyperscanCompiler.HS_FLAG_CASELESS);
@@ -133,7 +150,8 @@ class HyperscanCompilerTest {
 
     // ── Invalid patterns ──────────────────────────────────────────────────────
 
-    @Test @Order(30)
+    @Test
+    @Order(30)
     @DisplayName("Null pattern → FAILED with descriptive error")
     void nullPatternFailed() {
         var r = compiler.validate(null, HyperscanCompiler.HS_FLAG_CASELESS);
@@ -141,14 +159,16 @@ class HyperscanCompilerTest {
         assertThat(r.errorMessage()).isNotBlank();
     }
 
-    @Test @Order(31)
+    @Test
+    @Order(31)
     @DisplayName("Blank pattern → FAILED")
     void blankPatternFailed() {
         var r = compiler.validate("  ", HyperscanCompiler.HS_FLAG_CASELESS);
         assertThat(r.isFailed()).isTrue();
     }
 
-    @Test @Order(32)
+    @Test
+    @Order(32)
     @DisplayName("Unclosed group (unclosed → FAILED with Hyperscan error in message")
     void invalidPatternFailed() {
         var r = compiler.validate("(unclosed", HyperscanCompiler.HS_FLAG_CASELESS);
@@ -156,7 +176,8 @@ class HyperscanCompilerTest {
         assertThat(r.errorMessage()).containsIgnoringCase("Hyperscan compile error");
     }
 
-    @Test @Order(33)
+    @Test
+    @Order(33)
     @DisplayName("Unclosed character class [unclosed → FAILED (truly invalid Hyperscan pattern)")
     void invalidQuantifierFailed() {
         // {broken} is treated as a literal by Hyperscan (not a quantifier without an atom)
@@ -168,7 +189,8 @@ class HyperscanCompilerTest {
 
     // ── Flag computation ──────────────────────────────────────────────────────
 
-    @Test @Order(40)
+    @Test
+    @Order(40)
     @DisplayName("ValidationResult.pass stores pattern and flags")
     void validationResultPass() {
         var r = HyperscanCompiler.ValidationResult.pass("test", 1);
@@ -178,7 +200,8 @@ class HyperscanCompilerTest {
         assertThat(r.errorMessage()).isNull();
     }
 
-    @Test @Order(41)
+    @Test
+    @Order(41)
     @DisplayName("ValidationResult.failed stores error message")
     void validationResultFailed() {
         var r = HyperscanCompiler.ValidationResult.failed("some error");
@@ -188,11 +211,12 @@ class HyperscanCompilerTest {
 
     // ── Thread safety ─────────────────────────────────────────────────────────
 
-    @Test @Order(50)
+    @Test
+    @Order(50)
     @DisplayName("Thread safety: 50 concurrent compiles via JDK 21 virtual threads")
     void threadSafety() throws InterruptedException {
-        int count   = 50;
-        var latch   = new CountDownLatch(count);
+        int count = 50;
+        var latch = new CountDownLatch(count);
         var failures = new AtomicInteger();
 
         for (int i = 0; i < count; i++) {

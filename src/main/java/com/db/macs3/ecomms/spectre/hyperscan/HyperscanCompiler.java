@@ -79,13 +79,17 @@ public class HyperscanCompiler {
 
     private static final Logger log = LoggerFactory.getLogger(HyperscanCompiler.class);
 
-    /** Hyperscan flag bitmasks (mirrors hs_compile.h). */
+    /**
+     * Hyperscan flag bitmasks (mirrors hs_compile.h).
+     */
     public static final int HS_FLAG_CASELESS = 1;
-    public static final int HS_FLAG_DOTALL   = 2;
-    public static final int HS_FLAG_UTF8     = 32;
-    public static final int HS_FLAG_UCP      = 64;
+    public static final int HS_FLAG_DOTALL = 2;
+    public static final int HS_FLAG_UTF8 = 32;
+    public static final int HS_FLAG_UCP = 64;
 
-    /** Library version reported in responses. */
+    /**
+     * Library version reported in responses.
+     */
     private static final String HYPERSCAN_VERSION = "5.4.0-2.0.0";
 
     // ── Startup self-test ─────────────────────────────────────────────────────
@@ -123,10 +127,10 @@ public class HyperscanCompiler {
      * <p>One {@link Database} is created per call and immediately closed after
      * validation. Each call is stateless and safe for concurrent virtual threads.
      *
-     * @param pattern  Hyperscan PCRE string from {@code TermSyntaxTranslator}
-     * @param hsFlags  HS_FLAG_* bitmask (CASELESS=1, DOTALL=2, UTF8=32, UCP=64)
+     * @param pattern Hyperscan PCRE string from {@code TermSyntaxTranslator}
+     * @param hsFlags HS_FLAG_* bitmask (CASELESS=1, DOTALL=2, UTF8=32, UCP=64)
      * @return {@link ValidationResult#pass} on success,
-     *         {@link ValidationResult#failed} with Hyperscan error message on failure
+     * {@link ValidationResult#failed} with Hyperscan error message on failure
      */
     public ValidationResult validate(String pattern, int hsFlags) {
         if (pattern == null || pattern.isBlank()) {
@@ -153,12 +157,16 @@ public class HyperscanCompiler {
         }
     }
 
-    /** Returns the engine identifier string for REST responses. */
+    /**
+     * Returns the engine identifier string for REST responses.
+     */
     public String getEngineMode() {
         return "HYPERSCAN_NATIVE";
     }
 
-    /** Returns the bundled Hyperscan library version. */
+    /**
+     * Returns the bundled Hyperscan library version.
+     */
     public String getHyperscanVersion() {
         return HYPERSCAN_VERSION;
     }
@@ -321,27 +329,38 @@ public class HyperscanCompiler {
      */
     public record ValidationResult(
             boolean pass,
-            String  pattern,
-            int     hsFlags,
-            String  errorMessage
+            String pattern,
+            int hsFlags,
+            String errorMessage
     ) {
-        /** Factory: successful compilation. */
+        /**
+         * Factory: successful compilation.
+         */
         public static ValidationResult pass(String pattern, int flags) {
             return new ValidationResult(true, pattern, flags, null);
         }
 
-        /** Factory: failed compilation (no pattern available). */
+        /**
+         * Factory: failed compilation (no pattern available).
+         */
         public static ValidationResult failed(String error) {
             return new ValidationResult(false, null, 0, error);
         }
 
-        /** Factory: failed compilation (pattern attempted but invalid). */
+        /**
+         * Factory: failed compilation (pattern attempted but invalid).
+         */
         public static ValidationResult failed(String error, String pattern, int flags) {
             return new ValidationResult(false, pattern, flags, error);
         }
 
-        public boolean isPass()   { return pass; }
-        public boolean isFailed() { return !pass; }
+        public boolean isPass() {
+            return pass;
+        }
+
+        public boolean isFailed() {
+            return !pass;
+        }
     }
 
     // ── Combined multi-pattern database (for the /compile/bundle endpoint) ─────
@@ -389,9 +408,9 @@ public class HyperscanCompiler {
      * @param expressions PASS expressions to combine; must be non-empty and
      *                    each must have a unique non-null id
      * @return {@link CombinedCompileResult#success} with the serialised bytes,
-     *         or {@link CombinedCompileResult#failure} with the Hyperscan
-     *         error and (if identifiable) the id of the expression that
-     *         caused the failure
+     * or {@link CombinedCompileResult#failure} with the Hyperscan
+     * error and (if identifiable) the id of the expression that
+     * caused the failure
      */
     public CombinedCompileResult compileCombinedDatabase(List<Expression> expressions) {
         if (expressions == null || expressions.isEmpty()) {
@@ -447,18 +466,22 @@ public class HyperscanCompiler {
      */
     public record CombinedCompileResult(
             boolean success,
-            byte[]  databaseBytes,
-            long    databaseSizeBytes,
-            int     expressionCount,
+            byte[] databaseBytes,
+            long databaseSizeBytes,
+            int expressionCount,
             Integer failedExpressionId,
-            String  errorMessage
+            String errorMessage
     ) {
-        /** Factory: successful combined compile. */
+        /**
+         * Factory: successful combined compile.
+         */
         public static CombinedCompileResult success(byte[] bytes, int expressionCount) {
             return new CombinedCompileResult(true, bytes, bytes.length, expressionCount, null, null);
         }
 
-        /** Factory: failed combined compile. */
+        /**
+         * Factory: failed combined compile.
+         */
         public static CombinedCompileResult failure(String error, Integer failedExpressionId) {
             return new CombinedCompileResult(false, null, 0, 0, failedExpressionId, error);
         }

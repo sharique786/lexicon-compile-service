@@ -74,7 +74,7 @@ final class Tokenizer {
         }
         throw new TranslationException(
                 "Lexicon term contains no meaningful content (only symbols/whitespace): '" + text + "'."
-                + " A lexicon term must contain at least one letter or digit.");
+                        + " A lexicon term must contain at least one letter or digit.");
     }
 
     // ── Main scan loop ───────────────────────────────────────────────────────
@@ -101,8 +101,8 @@ final class Tokenizer {
                 if (openParenDepth < 0) {
                     throw new TranslationException(
                             "Unmatched closing parenthesis ')' at position " + currentIndex
-                            + " in term: '" + sourceText + "'."
-                            + " Every ')' must have a matching '(' before it.");
+                                    + " in term: '" + sourceText + "'."
+                                    + " Every ')' must have a matching '(' before it.");
                 }
                 tokens.add(new Token.RParen());
                 currentIndex++;
@@ -119,8 +119,8 @@ final class Tokenizer {
         if (openParenDepth != 0) {
             throw new TranslationException(
                     "Unmatched opening parenthesis '(' in term: '" + sourceText + "'."
-                    + " Every '(' must have a matching ')'. Found " + openParenDepth
-                    + " unclosed parenthes" + (openParenDepth == 1 ? "is" : "es") + ".");
+                            + " Every '(' must have a matching ')'. Found " + openParenDepth
+                            + " unclosed parenthes" + (openParenDepth == 1 ? "is" : "es") + ".");
         }
 
         return tokens;
@@ -139,8 +139,8 @@ final class Tokenizer {
         if (currentIndex >= sourceText.length()) {
             throw new TranslationException(
                     "Unclosed quoted phrase starting at position " + quoteStartIndex
-                    + " in term: '" + sourceText + "'."
-                    + " Every opening '\"' must have a matching closing '\"'.");
+                            + " in term: '" + sourceText + "'."
+                            + " Every opening '\"' must have a matching closing '\"'.");
         }
         currentIndex++; // consume closing quote
         return new Token.QuotedPhrase(phraseContent.toString());
@@ -187,7 +187,9 @@ final class Tokenizer {
         return new Token.Word(word);
     }
 
-    /** True for characters that end a word-like run: whitespace, parens, or the quote character. */
+    /**
+     * True for characters that end a word-like run: whitespace, parens, or the quote character.
+     */
     private static boolean isTokenBoundary(char character) {
         return Character.isWhitespace(character) || character == '(' || character == ')' || character == '"';
     }
@@ -250,15 +252,15 @@ final class Tokenizer {
             if (currentIndex < sourceText.length() && sourceText.charAt(currentIndex) == '{') {
                 throw new TranslationException(
                         keyword + " must be immediately followed by '{n}' with no whitespace"
-                        + " (found a space before '{' at position " + currentIndex
-                        + " in term: '" + sourceText + "')."
-                        + " Write it as " + keyword + "{n}, e.g. " + keyword + "{3}.");
+                                + " (found a space before '{' at position " + currentIndex
+                                + " in term: '" + sourceText + "')."
+                                + " Write it as " + keyword + "{n}, e.g. " + keyword + "{3}.");
             }
             currentIndex = rewindIndex;
             throw new TranslationException(
                     keyword + " is missing its '{n}' distance value in term: '" + sourceText + "'."
-                    + " Expected format: " + keyword + "{n}, e.g. " + keyword + "{3}."
-                    + " To use \"" + keyword + "\" as literal text instead, wrap it in quotes.");
+                            + " Expected format: " + keyword + "{n}, e.g. " + keyword + "{3}."
+                            + " To use \"" + keyword + "\" as literal text instead, wrap it in quotes.");
         }
 
         // word is longer than the bare keyword — must be keyword immediately
@@ -290,13 +292,13 @@ final class Tokenizer {
         if (distanceText.isEmpty()) {
             throw new TranslationException(
                     keyword + "{} has no distance value in term: '" + sourceText + "'. Expected "
-                    + keyword + "{n}, e.g. " + keyword + "{3}.");
+                            + keyword + "{n}, e.g. " + keyword + "{3}.");
         }
         if (distanceText.contains(",")) {
             throw new TranslationException(
                     keyword + "{" + distanceText + "} is invalid in term: '" + sourceText + "'."
-                    + " Only a single value is allowed (no comma-separated range). Expected "
-                    + keyword + "{n}, e.g. " + keyword + "{3}.");
+                            + " Only a single value is allowed (no comma-separated range). Expected "
+                            + keyword + "{n}, e.g. " + keyword + "{3}.");
         }
         boolean isValidSingleDigit = distanceText.length() == 1
                 && distanceText.charAt(0) >= '1' && distanceText.charAt(0) <= '9';
@@ -304,8 +306,8 @@ final class Tokenizer {
             String reason;
             if (distanceText.chars().allMatch(Character::isDigit)) {
                 reason = distanceText.equals("0") ? "zero is not allowed"
-                       : distanceText.length() > 1 ? "only a single digit (1-9) is allowed, not a multi-digit value"
-                       : "value out of range";
+                        : distanceText.length() > 1 ? "only a single digit (1-9) is allowed, not a multi-digit value"
+                        : "value out of range";
             } else if (distanceText.startsWith("-")) {
                 reason = "negative values are not allowed";
             } else {
@@ -313,7 +315,7 @@ final class Tokenizer {
             }
             throw new TranslationException(
                     keyword + "{" + distanceText + "} is invalid in term: '" + sourceText + "' — " + reason + "."
-                    + " Expected " + keyword + "{n} where n is a single digit from 1 to 9.");
+                            + " Expected " + keyword + "{n} where n is a single digit from 1 to 9.");
         }
     }
 }

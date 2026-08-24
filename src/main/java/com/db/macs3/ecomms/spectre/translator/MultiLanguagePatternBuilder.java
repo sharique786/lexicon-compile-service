@@ -64,30 +64,36 @@ public final class MultiLanguagePatternBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(MultiLanguagePatternBuilder.class);
 
-    private MultiLanguagePatternBuilder() {}
+    private MultiLanguagePatternBuilder() {
+    }
 
     // ── Result record ─────────────────────────────────────────────────────
 
     /**
      * Holds the generated PCRE pattern and the recommended Hyperscan flags.
      *
-     * @param pattern           the Hyperscan-compatible PCRE pattern
-     * @param scriptType        detected script combination
+     * @param pattern            the Hyperscan-compatible PCRE pattern
+     * @param scriptType         detected script combination
      * @param recommendedHsFlags flag bitmask (1=CASELESS, 2=DOTALL, 32=UTF8, 64=UCP)
-     * @param warning           non-null when there is a known limitation to report
-     *                          (e.g. mixed RTL+LTR FOLLOWEDBY)
+     * @param warning            non-null when there is a known limitation to report
+     *                           (e.g. mixed RTL+LTR FOLLOWEDBY)
      */
     public record BuildResult(
-            String     pattern,
+            String pattern,
             ScriptType scriptType,
-            int        recommendedHsFlags,
-            String     warning
+            int recommendedHsFlags,
+            String warning
     ) {
-        /** Convenience constructor for no-warning results. */
+        /**
+         * Convenience constructor for no-warning results.
+         */
         public BuildResult(String pattern, ScriptType scriptType, int flags) {
             this(pattern, scriptType, flags, null);
         }
-        public boolean hasWarning() { return warning != null && !warning.isBlank(); }
+
+        public boolean hasWarning() {
+            return warning != null && !warning.isBlank();
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -101,9 +107,9 @@ public final class MultiLanguagePatternBuilder {
      * of {@code termB} in either order — i.e.:
      * {@code termA…termB} OR {@code termB…termA}.
      *
-     * @param termA first operand (already escaped for Hyperscan PCRE)
-     * @param termB second operand
-     * @param n     maximum distance in "word gaps" (or character multiples for CJK)
+     * @param termA       first operand (already escaped for Hyperscan PCRE)
+     * @param termB       second operand
+     * @param maxDistance maximum distance in "word gaps" (or character multiples for CJK)
      * @return {@link BuildResult} containing the pattern and recommended flags
      */
     public static BuildResult buildNear(String termA, String termB, int maxDistance) {
@@ -132,9 +138,9 @@ public final class MultiLanguagePatternBuilder {
      * result because the user's visual intent (e.g. Arabic word "comes after"
      * an English word) may not align with logical-order matching.
      *
-     * @param termA first operand (expected to appear first in text)
-     * @param termB second operand (expected to follow termA)
-     * @param n     maximum gap distance
+     * @param termA       first operand (expected to appear first in text)
+     * @param termB       second operand (expected to follow termA)
+     * @param maxDistance maximum gap distance
      * @return {@link BuildResult} containing the pattern and recommended flags
      */
     public static BuildResult buildFollowedBy(String termA, String termB, int maxDistance) {
@@ -205,7 +211,7 @@ public final class MultiLanguagePatternBuilder {
      * flag, {@code \\S} matches any Unicode non-whitespace code point, including
      * Arabic (U+0600–U+06FF) and Hebrew (U+0590–U+05FF) characters.
      *
-     * @param n maximum number of intervening words
+     * @param maxDistance maximum number of intervening words
      */
     static String wordBasedGap(int maxDistance) {
         return "(?:\\s+\\S+){0,%d}\\s+".formatted(maxDistance);
@@ -227,8 +233,8 @@ public final class MultiLanguagePatternBuilder {
      * and furigana.  The trade-off is slightly more false positives vs.
      * fewer false negatives — acceptable for a surveillance alerting system.
      *
-     * @param script   the resolved script type (provides avgCharsPerWord)
-     * @param n        maximum "word" distance specified by the lexicon term author
+     * @param script      the resolved script type (provides avgCharsPerWord)
+     * @param maxDistance maximum "word" distance specified by the lexicon term author
      */
     static String charBasedGap(ScriptType script, int maxDistance) {
         // maxChars = maxDistance words × average chars per word

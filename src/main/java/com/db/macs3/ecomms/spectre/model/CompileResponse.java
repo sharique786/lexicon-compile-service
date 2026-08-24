@@ -29,7 +29,7 @@ import java.util.List;
  */
 public record CompileResponse(
 
-        /**
+        /*
          * Caller-supplied or generated request identifier, echoed back for
          * end-to-end tracing. {@code null} (and absent from JSON) for the
          * {@code /compile} endpoint which predates this field.
@@ -41,7 +41,7 @@ public record CompileResponse(
         @JsonProperty("lexiconRuleName")
         String lexiconRuleName,
 
-        /**
+        /*
          * Term compilation strategy for this request.
          * Present only for the {@code /compile/bundle} endpoint where
          * {@code termType} is declared at the request root level.
@@ -64,11 +64,11 @@ public record CompileResponse(
         @JsonProperty("hasFailures")
         boolean hasFailures,
 
-        /** Always {@code "HYPERSCAN_NATIVE"} — no fallback engine. */
+        /* Always {@code "HYPERSCAN_NATIVE"} — no fallback engine. */
         @JsonProperty("engineMode")
         String engineMode,
 
-        /**
+        /*
          * Bundled Hyperscan library version (e.g. {@code "5.4.0-2.0.0"}).
          * Absent from the {@code /compile/bundle} response where version
          * pinning is handled at the Scan Engine side.
@@ -81,7 +81,7 @@ public record CompileResponse(
         @JsonFormat(shape = JsonFormat.Shape.STRING)
         Instant compiledAt,
 
-        /**
+        /*
          * Wall-clock time from first term to last in milliseconds.
          * Absent (serialised as default zero is suppressed) from the
          * {@code /compile/bundle} response.
@@ -105,11 +105,11 @@ public record CompileResponse(
      * endpoint) always carries one.
      */
     public static CompileResponse of(String requestId,
-                                      String ruleName,
-                                      List<TermCompilationResult> results,
-                                      long processingTimeMs,
-                                      String hyperscanVersion) {
-        int passCount   = (int) results.stream().filter(TermCompilationResult::isPass).count();
+                                     String ruleName,
+                                     List<TermCompilationResult> results,
+                                     long processingTimeMs,
+                                     String hyperscanVersion) {
+        int passCount = (int) results.stream().filter(TermCompilationResult::isPass).count();
         int failedCount = (int) results.stream().filter(TermCompilationResult::isFailed).count();
         return new CompileResponse(
                 requestId,
@@ -139,10 +139,10 @@ public record CompileResponse(
      * @param results   per-term compilation outcomes
      */
     public static CompileResponse ofBundle(String requestId,
-                                            TermType termType,
-                                            String ruleName,
-                                            List<TermCompilationResult> results) {
-        int passCount   = (int) results.stream().filter(TermCompilationResult::isPass).count();
+                                           TermType termType,
+                                           String ruleName,
+                                           List<TermCompilationResult> results) {
+        int passCount = (int) results.stream().filter(TermCompilationResult::isPass).count();
         int failedCount = (int) results.stream().filter(TermCompilationResult::isFailed).count();
         return new CompileResponse(
                 requestId,

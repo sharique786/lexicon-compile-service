@@ -6,13 +6,23 @@
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
-        <module name="lexicon-compile-service" />
+      </profile>
+      <profile name="Annotation profile for Lexicon Compile Service" enabled="true">
+        <sourceOutputDir name="../generated-sources/annotations" />
+        <sourceTestOutputDir name="../generated-test-sources/test-annotations" />
+        <processorPath useClasspath="false">
+          <entry name="$MAVEN_REPOSITORY$/org/springframework/boot/spring-boot-configuration-processor/4.1.0/spring-boot-configuration-processor-4.1.0.jar" />
+        </processorPath>
+        <module name="lexicon-compile-service.main" />
+        <module name="lexicon-compile-service.test" />
       </profile>
     </annotationProcessing>
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
       <module name="lexicon-compile-service" options="-parameters --enable-preview" />
+      <module name="lexicon-compile-service.main" options="-parameters --enable-preview" />
+      <module name="lexicon-compile-service.test" options="-parameters --enable-preview" />
     </option>
   </component>
 </project>

@@ -1,15 +1,11 @@
 package com.db.macs3.ecomms.spectre.model;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
-
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -57,10 +53,22 @@ public class CompileRequest {
             @JsonProperty("riskDriverName")
             String riskDriverName
 
-    ) {}
+    ) {
+    }
 
-    public String getLexiconRuleName()          { return lexiconRuleName; }
-    public void setLexiconRuleName(String v)    { this.lexiconRuleName = v; }
-    public List<TermInput> getTerms()           { return terms; }
-    public void setTerms(List<TermInput> v)     { this.terms = v; }
+    public String getLexiconRuleName() {
+        return lexiconRuleName;
+    }
+
+    public void setLexiconRuleName(String v) {
+        this.lexiconRuleName = v;
+    }
+
+    public List<TermInput> getTerms() {
+        return terms;
+    }
+
+    public void setTerms(List<TermInput> v) {
+        this.terms = v;
+    }
 }

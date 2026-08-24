@@ -111,7 +111,7 @@ public record TermCompilationResult(
         @JsonProperty("compilationStatus")
         CompilationStatus compilationStatus,
 
-        /**
+        /*
          * The required side's independently Hyperscan-validated pattern(s) —
          * see class Javadoc. Non-null and non-empty for a PASS term; null
          * for a FAILED term where translation never produced a pattern at
@@ -121,7 +121,7 @@ public record TermCompilationResult(
         @JsonProperty("translatedPattern")
         List<String> translatedPattern,
 
-        /**
+        /*
          * Hyperscan error message when a pattern was syntactically valid
          * PCRE but Hyperscan's compiler still rejected it — the main
          * pattern, the exclusion pattern, or a decomposed leaf of either
@@ -131,7 +131,7 @@ public record TermCompilationResult(
         @JsonProperty("errorLog")
         String errorLog,
 
-        /**
+        /*
          * Error from the operator-language translator, when the term's text
          * could not be converted into a PCRE pattern at all (e.g. missing
          * operand for NEAR{n}), OR when a side was over budget AND had no
@@ -143,7 +143,7 @@ public record TermCompilationResult(
         @JsonProperty("translationError")
         String translationError,
 
-        /**
+        /*
          * Hyperscan compile-flag bitmask applied to the pattern(s).
          * {@code 1}=CASELESS, {@code 32}=UTF8, {@code 64}=UCP.
          * {@code 0} indicates translation never completed.
@@ -151,7 +151,7 @@ public record TermCompilationResult(
         @JsonProperty("hyperscanFlags")
         int hyperscanFlags,
 
-        /**
+        /*
          * {@code true} when the term used {@code AND NOT} — see the
          * two-implementations note in class Javadoc for what the caller
          * does with this depending on which endpoint produced this result.
@@ -162,7 +162,7 @@ public record TermCompilationResult(
         @JsonProperty("requiresExclusionCheck")
         boolean requiresExclusionCheck,
 
-        /**
+        /*
          * Independently Hyperscan-valid pattern(s) that must NOT (collectively,
          * per the AND convention described in class Javadoc) match the same
          * message for this term to be considered matched. Non-null and
@@ -171,7 +171,7 @@ public record TermCompilationResult(
         @JsonProperty("exclusionPattern")
         List<String> exclusionPattern,
 
-        /**
+        /*
          * Non-fatal issues worth surfacing to the caller — never null, may
          * be empty. Always includes an explicit entry whenever decomposition
          * applied to either side (see class Javadoc), and whenever the term
@@ -183,7 +183,7 @@ public record TermCompilationResult(
         @JsonProperty("warnings")
         List<String> warnings,
 
-        /**
+        /*
          * On a {@code /compile/bundle} response only, for a term that does NOT
          * require an exclusion check: this term's own term number — see class
          * Javadoc "hyperscanExpressionId: the term's own term number, when it
@@ -194,7 +194,7 @@ public record TermCompilationResult(
         @JsonProperty("hyperscanExpressionId")
         Integer hyperscanExpressionId,
 
-        /**
+        /*
          * On a {@code /compile/bundle} response only, for an AND NOT term ONLY:
          * the expression id(s) of the required side's independently reportable
          * plain pattern(s) — one per entry of {@code translatedPattern}. Null
@@ -207,7 +207,7 @@ public record TermCompilationResult(
         @JsonProperty("requiredExpressionIds")
         List<Integer> requiredExpressionIds,
 
-        /**
+        /*
          * On a {@code /compile/bundle} response only, for an AND NOT term ONLY:
          * the expression id(s) of the excluded side's independently reportable
          * plain pattern(s) — one per entry of {@code exclusionPattern}. Null
@@ -237,11 +237,11 @@ public record TermCompilationResult(
      * {@code warnings} may be empty.
      */
     public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
-                                              List<String> translatedPattern,
-                                              int hyperscanFlags,
-                                              boolean requiresExclusionCheck,
-                                              List<String> exclusionPattern,
-                                              List<String> warnings) {
+                                             List<String> translatedPattern,
+                                             int hyperscanFlags,
+                                             boolean requiresExclusionCheck,
+                                             List<String> exclusionPattern,
+                                             List<String> warnings) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(),
                 CompilationStatus.PASS,
@@ -251,10 +251,12 @@ public record TermCompilationResult(
                 null, null, null, Instant.now());
     }
 
-    /** Convenience overload for a PASS result with no AND-NOT exclusion and no warnings. */
+    /**
+     * Convenience overload for a PASS result with no AND-NOT exclusion and no warnings.
+     */
     public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
-                                              List<String> translatedPattern,
-                                              int hyperscanFlags) {
+                                             List<String> translatedPattern,
+                                             int hyperscanFlags) {
         return pass(input, translatedPattern, hyperscanFlags, false, null, List.of());
     }
 
@@ -267,9 +269,9 @@ public record TermCompilationResult(
      *                          if the failure was in the exclusion side specifically
      */
     public static TermCompilationResult failedHyperscan(TypedCompileRequest.TermInput input,
-                                                          List<String> translatedPattern,
-                                                          String errorLog,
-                                                          int hyperscanFlags) {
+                                                        List<String> translatedPattern,
+                                                        String errorLog,
+                                                        int hyperscanFlags) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(),
                 CompilationStatus.FAILED,
@@ -285,7 +287,7 @@ public record TermCompilationResult(
      * budget) — see {@code TermSyntaxTranslator}. Hyperscan was never invoked.
      */
     public static TermCompilationResult failedTranslation(TypedCompileRequest.TermInput input,
-                                                            String translationError) {
+                                                          String translationError) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(),
                 CompilationStatus.FAILED,
@@ -318,7 +320,7 @@ public record TermCompilationResult(
      * implementations".
      */
     public TermCompilationResult withExpressionIds(List<Integer> requiredExpressionIds,
-                                                     List<Integer> excludedExpressionIds) {
+                                                   List<Integer> excludedExpressionIds) {
         return new TermCompilationResult(
                 termId, termDescription, compilationStatus,
                 translatedPattern, errorLog, translationError,
@@ -326,6 +328,11 @@ public record TermCompilationResult(
                 null, requiredExpressionIds, excludedExpressionIds, compiledAt);
     }
 
-    public boolean isPass()   { return CompilationStatus.PASS   == compilationStatus; }
-    public boolean isFailed() { return CompilationStatus.FAILED == compilationStatus; }
+    public boolean isPass() {
+        return CompilationStatus.PASS == compilationStatus;
+    }
+
+    public boolean isFailed() {
+        return CompilationStatus.FAILED == compilationStatus;
+    }
 }

@@ -129,30 +129,37 @@ public class HyperscanCombinationHandler {
      */
     public static final class HyperscanIdAllocator {
         private int nextId;
-        public HyperscanIdAllocator(int startId) { this.nextId = startId; }
-        public int allocate() { return nextId++; }
+
+        public HyperscanIdAllocator(int startId) {
+            this.nextId = startId;
+        }
+
+        public int allocate() {
+            return nextId++;
+        }
     }
 
     /**
      * The result of assigning expression id(s) to one term — exactly one
      * of the two shapes below is populated, never both:
      *
-     * @param hyperscanExpressionId  populated for a term that does NOT require
-     *                               an exclusion check (simple or purely
-     *                               decomposed) — always the term's own term
-     *                               number. Null for an AND NOT term.
-     * @param requiredExpressionIds  populated ONLY for an AND NOT term — the id(s)
-     *                               of the required side's plain expression(s), one
-     *                               per entry of {@code translatedPattern}. Null otherwise.
-     * @param excludedExpressionIds  populated ONLY for an AND NOT term — the id(s)
-     *                               of the excluded side's plain expression(s), one
-     *                               per entry of {@code exclusionPattern}. Null otherwise.
+     * @param hyperscanExpressionId populated for a term that does NOT require
+     *                              an exclusion check (simple or purely
+     *                              decomposed) — always the term's own term
+     *                              number. Null for an AND NOT term.
+     * @param requiredExpressionIds populated ONLY for an AND NOT term — the id(s)
+     *                              of the required side's plain expression(s), one
+     *                              per entry of {@code translatedPattern}. Null otherwise.
+     * @param excludedExpressionIds populated ONLY for an AND NOT term — the id(s)
+     *                              of the excluded side's plain expression(s), one
+     *                              per entry of {@code exclusionPattern}. Null otherwise.
      */
     public record ExpressionAssignment(
             Integer hyperscanExpressionId,
             List<Integer> requiredExpressionIds,
             List<Integer> excludedExpressionIds
-    ) {}
+    ) {
+    }
 
     /**
      * Adds this PASS term's Hyperscan {@link Expression}(s) to
@@ -169,14 +176,14 @@ public class HyperscanCombinationHandler {
      * QUIET+SOM_LEFTMOST incompatibility never applies to them. QUIET
      * remains used only for the (still-safe) pure-decomposition COMBINATION path.
      *
-     * @param termResult   a PASS result
-     * @param termNumber    this term's own term number, parsed from its {@code termId}
-     * @param idAllocator   shared across the whole bundle request — see {@link #computeIdOffset}
+     * @param termResult     a PASS result
+     * @param termNumber     this term's own term number, parsed from its {@code termId}
+     * @param idAllocator    shared across the whole bundle request — see {@link #computeIdOffset}
      * @param expressionsOut every expression this term needs is appended here
      * @return this term's id assignment — see {@link ExpressionAssignment}
      */
     public ExpressionAssignment addExpressions(TermCompilationResult termResult, int termNumber,
-                                                HyperscanIdAllocator idAllocator, List<Expression> expressionsOut) {
+                                               HyperscanIdAllocator idAllocator, List<Expression> expressionsOut) {
         List<String> requiredPatterns = termResult.translatedPattern();
 
         if (termResult.requiresExclusionCheck()) {
@@ -190,7 +197,7 @@ public class HyperscanCombinationHandler {
         if (requiredPatterns.size() == 1) {
             // Simplest, most common case — one plain pattern, reportable directly.
             expressionsOut.add(new Expression(
-                    requiredPatterns.get(0),
+                    requiredPatterns.getFirst(),
                     compiler.toExpressionFlags(termResult.hyperscanFlags()),
                     termNumber));
             return new ExpressionAssignment(termNumber, null, null);
@@ -213,7 +220,7 @@ public class HyperscanCombinationHandler {
      * these are QUIET.
      */
     private List<Integer> addPlainSide(List<String> patterns, HyperscanIdAllocator idAllocator,
-                                        List<Expression> expressionsOut, int hyperscanFlags) {
+                                       List<Expression> expressionsOut, int hyperscanFlags) {
         List<Integer> ids = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
             int id = idAllocator.allocate();
@@ -230,7 +237,7 @@ public class HyperscanCombinationHandler {
      * Never includes SOM_LEFTMOST — confirmed incompatible with QUIET.
      */
     private List<Integer> addQuietSide(List<String> patterns, HyperscanIdAllocator idAllocator,
-                                        List<Expression> expressionsOut, int hyperscanFlags) {
+                                       List<Expression> expressionsOut, int hyperscanFlags) {
         List<Integer> ids = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
             int id = idAllocator.allocate();

@@ -1,16 +1,15 @@
 package com.db.macs3.ecomms.spectre.controller;
 
 import com.db.macs3.ecomms.spectre.model.InvalidTermIdException;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -52,7 +51,7 @@ class GlobalExceptionHandler {
      */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<Map<String, Object>> handleFileTooLarge() {
-        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
                 .body(errorBody(413, "Uploaded file exceeds maximum allowed size", null));
     }
 
@@ -85,8 +84,8 @@ class GlobalExceptionHandler {
 
     private Map<String, Object> errorBody(int status, String message, List<String> details) {
         var body = new LinkedHashMap<String, Object>();
-        body.put("status",    status);
-        body.put("error",     message);
+        body.put("status", status);
+        body.put("error", message);
         if (details != null) {
             body.put("details", details);
         }

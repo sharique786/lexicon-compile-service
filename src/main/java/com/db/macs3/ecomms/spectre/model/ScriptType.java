@@ -28,14 +28,22 @@ package com.db.macs3.ecomms.spectre.model;
 public enum ScriptType {
 
     // ── Space-delimited scripts (WORD-BASED gap) ──────────────────────────
-    /** English, French, German, Spanish, Russian, Greek, etc. */
-    LATIN      (false, true,  8),
-    /** Arabic script — RTL, space-delimited words. */
-    ARABIC     (true,  true,  7),
-    /** Hebrew script — RTL, space-delimited words. */
-    HEBREW     (true,  true,  7),
-    /** Devanagari — Hindi, Sanskrit, Marathi, Nepali. */
-    DEVANAGARI (false, true,  7),
+    /**
+     * English, French, German, Spanish, Russian, Greek, etc.
+     */
+    LATIN(false, true, 8),
+    /**
+     * Arabic script — RTL, space-delimited words.
+     */
+    ARABIC(true, true, 7),
+    /**
+     * Hebrew script — RTL, space-delimited words.
+     */
+    HEBREW(true, true, 7),
+    /**
+     * Devanagari — Hindi, Sanskrit, Marathi, Nepali.
+     */
+    DEVANAGARI(false, true, 7),
 
     // ── Character-based scripts (CHAR-BASED gap) ──────────────────────────
     /**
@@ -43,24 +51,24 @@ public enum ScriptType {
      * No spaces between characters; a "word" averages 2 characters.
      * avgCharsPerWord = 3 (2 chars + 1 safety buffer per gap unit).
      */
-    CJK        (false, false, 3),
+    CJK(false, false, 3),
     /**
      * Japanese Hiragana / Katakana syllabaries.
      * No spaces; a word averages ~3 kana characters.
      */
-    KANA       (false, false, 3),
+    KANA(false, false, 3),
     /**
      * Korean Hangul syllable blocks.
      * Formal writing uses spaces between eojeol units, but spaces are
      * frequently omitted in chat / SNS text.  Character-based gap handles
      * both cases safely.  Average eojeol ≈ 4–5 syllable characters.
      */
-    HANGUL     (false, false, 5),
+    HANGUL(false, false, 5),
     /**
      * Thai, Lao, Myanmar — no whitespace between words.
      * Average word ≈ 5–6 characters.
      */
-    THAI       (false, false, 6),
+    THAI(false, false, 6),
 
     // ── Mixed-script combinations ─────────────────────────────────────────
     /**
@@ -68,47 +76,59 @@ public enum ScriptType {
      * other script.  Character-based gap is mandatory because the
      * space-free side of the pair has no word separators.
      */
-    MIXED_CJK  (false, false, 4),
+    MIXED_CJK(false, false, 4),
     /**
      * RTL scripts (Arabic or Hebrew) mixed with Latin-only scripts.
      * Both sides use spaces, so word-based gap applies.
      */
-    MIXED_RTL  (false, true,  8),
+    MIXED_RTL(false, true, 8),
     /**
      * Any other multi-script combination not covered above.
      * Conservative character-based gap to avoid false negatives.
      */
-    MIXED      (false, false, 6);
+    MIXED(false, false, 6);
 
     // ─────────────────────────────────────────────────────────────────────
     private final boolean rightToLeft;
     private final boolean spaceDelimited;
-    private final int     avgCharsPerWord;
+    private final int avgCharsPerWord;
 
     ScriptType(boolean rightToLeft, boolean spaceDelimited, int avgCharsPerWord) {
-        this.rightToLeft     = rightToLeft;
-        this.spaceDelimited  = spaceDelimited;
+        this.rightToLeft = rightToLeft;
+        this.spaceDelimited = spaceDelimited;
         this.avgCharsPerWord = avgCharsPerWord;
     }
 
-    /** True for Arabic and Hebrew — visually RTL in display. */
-    public boolean isRightToLeft()   { return rightToLeft; }
+    /**
+     * True for Arabic and Hebrew — visually RTL in display.
+     */
+    public boolean isRightToLeft() {
+        return rightToLeft;
+    }
 
-    /** True when words are space-delimited — word-based gap is appropriate. */
-    public boolean isSpaceDelimited(){ return spaceDelimited; }
+    /**
+     * True when words are space-delimited — word-based gap is appropriate.
+     */
+    public boolean isSpaceDelimited() {
+        return spaceDelimited;
+    }
 
     /**
      * Average Unicode character count per "word" in this script.
      * Used to convert an n-word gap distance into a character ceiling:
      * {@code maxChars = n * getAvgCharsPerWord()}.
      */
-    public int getAvgCharsPerWord()  { return avgCharsPerWord; }
+    public int getAvgCharsPerWord() {
+        return avgCharsPerWord;
+    }
 
     /**
      * True when a character-based ({@code [\\s\\S]{0,N}}) gap must be used
      * because whitespace cannot reliably separate words.
      */
-    public boolean isCharBased()     { return !spaceDelimited; }
+    public boolean isCharBased() {
+        return !spaceDelimited;
+    }
 
     /**
      * Recommended Hyperscan expression flag bitmask for this script type.
@@ -121,7 +141,7 @@ public enum ScriptType {
      *                               character properties (critical for
      *                               Arabic, Korean, CJK, etc.)
      * </pre>
-     *
+     * <p>
      * Without UCP, {@code \\S+} only matches ASCII non-whitespace and
      * silently skips Arabic / Hebrew / CJK characters.
      */

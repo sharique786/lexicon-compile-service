@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <!DOCTYPE suppressions PUBLIC
-    "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
-    "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+        "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+        "https://checkstyle.org/dtds/suppressions_1_2.dtd">
 
 <!--
   ╔══════════════════════════════════════════════════════════════════════════╗
   ║  Checkstyle Suppressions — Lexicon Compile Service                      ║
   ║  com.db.macs3.ecomms.spectre                                            ║
   ║                                                                          ║
-  ║  Compatible with: checkstyle 10.12.5                                    ║
+  ║  Compatible with: checkstyle 10.12.5 / maven-checkstyle-plugin 3.3.1   ║
   ║                                                                          ║
   ║  Format:                                                                 ║
   ║    <suppress checks="CheckName"                                         ║

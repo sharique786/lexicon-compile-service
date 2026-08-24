@@ -11,7 +11,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.io.*;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.PushbackInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -57,9 +60,9 @@ public class CsvCompileService {
     /**
      * Parses CSV from an {@link InputStream} and compiles all terms.
      *
-     * @param csvStream  raw CSV bytes (may be BOM-prefixed UTF-8)
-     * @param ruleName   lexicon rule name for the response
-     * @param requestId  caller-supplied or generated UUID, echoed in the response
+     * @param csvStream raw CSV bytes (may be BOM-prefixed UTF-8)
+     * @param ruleName  lexicon rule name for the response
+     * @param requestId caller-supplied or generated UUID, echoed in the response
      * @return compile response with {@code request_id} set
      * @throws IOException if the CSV cannot be parsed
      */
@@ -99,11 +102,11 @@ public class CsvCompileService {
                 return terms;
             }
 
-            int start = isHeaderRow(rows.get(0)) ? 1 : 0;
+            int start = isHeaderRow(rows.getFirst()) ? 1 : 0;
 
             for (int i = start; i < rows.size(); i++) {
-                String[] row     = rows.get(i);
-                int      lineNum = i + 1;
+                String[] row = rows.get(i);
+                int lineNum = i + 1;
 
                 if (isBlankRow(row)) {
                     continue;
@@ -136,7 +139,7 @@ public class CsvCompileService {
     }
 
     private boolean isBlankRow(String[] row) {
-        if (row == null || row.length == 0) {
+        if (row == null) {
             return true;
         }
         for (String cell : row) {

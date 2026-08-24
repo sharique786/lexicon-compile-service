@@ -1,9 +1,10 @@
 package com.db.macs3.ecomms.spectre.config;
 
 import com.db.macs3.ecomms.spectre.hyperscan.HyperscanCompiler;
+import jakarta.validation.constraints.NotNull;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -32,7 +33,7 @@ public class LexiconCompileConfig {
     public WebMvcConfigurer corsConfigurer() {
         return new WebMvcConfigurer() {
             @Override
-            public void addCorsMappings(CorsRegistry registry) {
+            public void addCorsMappings(@NotNull CorsRegistry registry) {
                 registry.addMapping("/api/**")
                         .allowedOrigins("*")
                         .allowedMethods("GET", "POST", "OPTIONS")
@@ -60,21 +61,21 @@ public class LexiconCompileConfig {
                         compiler.validate("health_probe", HyperscanCompiler.HS_FLAG_CASELESS);
                 if (probe.isPass()) {
                     return Health.up()
-                            .withDetail("engine",      "HYPERSCAN_NATIVE")
-                            .withDetail("library",     "com.gliwka.hyperscan")
-                            .withDetail("version",     compiler.getHyperscanVersion())
+                            .withDetail("engine", "HYPERSCAN_NATIVE")
+                            .withDetail("library", "com.gliwka.hyperscan")
+                            .withDetail("version", compiler.getHyperscanVersion())
                             .withDetail("compression", "GZIP request + response")
-                            .withDetail("jdk",         Runtime.version().toString())
+                            .withDetail("jdk", Runtime.version().toString())
                             .build();
                 }
                 return Health.down()
                         .withDetail("engine", "HYPERSCAN_NATIVE")
-                        .withDetail("error",  probe.errorMessage())
+                        .withDetail("error", probe.errorMessage())
                         .build();
             } catch (Exception e) {
                 return Health.down()
                         .withDetail("engine", "HYPERSCAN_NATIVE")
-                        .withDetail("error",  e.getMessage())
+                        .withDetail("error", e.getMessage())
                         .build();
             }
         };

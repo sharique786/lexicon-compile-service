@@ -68,8 +68,11 @@ final class ExpressionParser {
         this.originalTerm = originalTerm;
     }
 
-    /** The parsed AST, plus any non-fatal warnings accumulated while parsing (never null; may be empty). */
-    record ParseResult(Ast ast, List<String> warnings) {}
+    /**
+     * The parsed AST, plus any non-fatal warnings accumulated while parsing (never null; may be empty).
+     */
+    record ParseResult(Ast ast, List<String> warnings) {
+    }
 
     /**
      * Parses a fully-tokenized lexicon term into an {@link Ast}.
@@ -100,7 +103,7 @@ final class ExpressionParser {
             advance();
             alternatives.add(parseAndNot());
         }
-        return alternatives.size() == 1 ? alternatives.get(0) : new Ast.Or(alternatives);
+        return alternatives.size() == 1 ? alternatives.getFirst() : new Ast.Or(alternatives);
     }
 
     private Ast parseAndNot() {
@@ -117,12 +120,12 @@ final class ExpressionParser {
      * {@code andExpr := proximityExpr ( AND proximityExpr )*}
      *
      * <p>Caps the operand count at {@link ParseContext#MAX_AND_OPERANDS} —
-     * {@link PatternCodeGenerator#generateAnd} expresses "all present, any
+     * {@link PatternCodeGenerator generateAnd} expresses "all present, any
      * order, unbounded distance" by enumerating every ordering of the
      * operands (N! permutations), so operand count directly controls
      * pattern size; beyond the ceiling the resulting pattern reliably fails
      * Hyperscan compilation with "Pattern Too Long", the same class of
-     * failure {@link #checkForChainedProximityOperator} prevents for
+     * failure checkForChainedProximityOperator prevents for
      * chained NEAR/FOLLOWEDBY.
      */
     private Ast parseAnd() {
@@ -135,11 +138,11 @@ final class ExpressionParser {
         if (operands.size() > ParseContext.MAX_AND_OPERANDS) {
             throw new TranslationException(
                     "Too many AND operands at the same level (" + operands.size() + ") in term: '"
-                    + originalTerm + "'. A maximum of " + ParseContext.MAX_AND_OPERANDS + " is supported"
-                    + " — each additional operand multiplies the size of the resulting Hyperscan pattern."
-                    + " Split this term into multiple simpler lexicon terms instead.");
+                            + originalTerm + "'. A maximum of " + ParseContext.MAX_AND_OPERANDS + " is supported"
+                            + " — each additional operand multiplies the size of the resulting Hyperscan pattern."
+                            + " Split this term into multiple simpler lexicon terms instead.");
         }
-        return operands.size() == 1 ? operands.get(0) : new Ast.And(operands);
+        return operands.size() == 1 ? operands.getFirst() : new Ast.And(operands);
     }
 
     /**
@@ -172,8 +175,8 @@ final class ExpressionParser {
     private Ast consumeProximityOperator(Ast leftOperand) {
         Token proximityToken = advance();
         Ast rightOperand = parseAtom();
-        return (proximityToken instanceof Token.Near near)
-                ? new Ast.Near(leftOperand, rightOperand, near.distance())
+        return (proximityToken instanceof Token.Near(int distance))
+                ? new Ast.Near(leftOperand, rightOperand, distance)
                 : new Ast.FollowedBy(leftOperand, rightOperand, ((Token.FollowedBy) proximityToken).distance());
     }
 
@@ -190,13 +193,13 @@ final class ExpressionParser {
         String keyword = (next instanceof Token.Near) ? LexiconOperatorKeyword.NEAR : LexiconOperatorKeyword.FOLLOWEDBY;
         warnings.add(
                 "Chained " + keyword + " operators without explicit parentheses were used in term: '"
-                + originalTerm + "' (found a second " + keyword + " chained directly after the first)."
-                + " This still compiles, for backward compatibility with existing lexicon terms, and is"
-                + " treated as left-associative nesting — equivalent to wrapping the earlier operator(s)"
-                + " in parentheses explicitly, e.g. 'A " + keyword + "{n} B " + keyword + "{m} C' is treated"
-                + " as '(A " + keyword + "{n} B) " + keyword + "{m} C'. New terms should use explicit"
-                + " parentheses instead, both for clarity and because this implicit form may be rejected"
-                + " for newly-created terms in a future version.");
+                        + originalTerm + "' (found a second " + keyword + " chained directly after the first)."
+                        + " This still compiles, for backward compatibility with existing lexicon terms, and is"
+                        + " treated as left-associative nesting — equivalent to wrapping the earlier operator(s)"
+                        + " in parentheses explicitly, e.g. 'A " + keyword + "{n} B " + keyword + "{m} C' is treated"
+                        + " as '(A " + keyword + "{n} B) " + keyword + "{m} C'. New terms should use explicit"
+                        + " parentheses instead, both for clarity and because this implicit form may be rejected"
+                        + " for newly-created terms in a future version.");
     }
 
     /**
@@ -215,8 +218,8 @@ final class ExpressionParser {
         if (peekIs(Token.Not.class)) {
             throw new TranslationException(
                     "Standalone NOT is not supported in term: '" + originalTerm + "'."
-                    + " NOT must always be paired with AND, written as 'X AND NOT Y'."
-                    + " To match the literal word \"NOT\" instead, wrap it in quotes.");
+                            + " NOT must always be paired with AND, written as 'X AND NOT Y'."
+                            + " To match the literal word \"NOT\" instead, wrap it in quotes.");
         }
     }
 
@@ -228,9 +231,9 @@ final class ExpressionParser {
         if (currentToken instanceof Token.LParen) {
             return parseParenGroup();
         }
-        if (currentToken instanceof Token.QuotedPhrase quotedPhrase) {
+        if (currentToken instanceof Token.QuotedPhrase(String text)) {
             advance();
-            return new Ast.QuotedPhrase(quotedPhrase.text());
+            return new Ast.QuotedPhrase(text);
         }
         if (currentToken instanceof Token.Word) {
             return parseWordOrPhrase();
@@ -248,11 +251,11 @@ final class ExpressionParser {
      */
     private Ast parseWordOrPhrase() {
         List<String> collectedWords = new ArrayList<>();
-        while (currentTokenIndex < tokens.size() && tokens.get(currentTokenIndex) instanceof Token.Word word) {
-            collectedWords.add(word.text());
+        while (currentTokenIndex < tokens.size() && tokens.get(currentTokenIndex) instanceof Token.Word(String text)) {
+            collectedWords.add(text);
             currentTokenIndex++;
         }
-        return collectedWords.size() == 1 ? new Ast.Word(collectedWords.get(0)) : new Ast.Phrase(collectedWords);
+        return collectedWords.size() == 1 ? new Ast.Word(collectedWords.getFirst()) : new Ast.Phrase(collectedWords);
     }
 
     /**
@@ -299,10 +302,12 @@ final class ExpressionParser {
     private TranslationException unexpectedTokenError(String context) {
         return new TranslationException(
                 "Could not parse term: '" + originalTerm + "' (" + context + ")."
-                + " Check for unbalanced parentheses or a malformed operator.");
+                        + " Check for unbalanced parentheses or a malformed operator.");
     }
 
-    /** Best-effort human-readable rendering of an AST node for error messages. */
+    /**
+     * Best-effort human-readable rendering of an AST node for error messages.
+     */
     private String describe(Ast astNode) {
         return switch (astNode) {
             case Ast.Word word -> word.text();

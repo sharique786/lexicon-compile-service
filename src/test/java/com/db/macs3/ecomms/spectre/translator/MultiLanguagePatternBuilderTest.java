@@ -35,10 +35,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MultiLanguagePatternBuilderTest {
 
     // ── Regex test helper ────────────────────────────────────────────────
-    /** Compiles the Hyperscan pattern with Java's Unicode-aware flags and tests it. */
+
+    /**
+     * Compiles the Hyperscan pattern with Java's Unicode-aware flags and tests it.
+     */
     private boolean matches(String hsPattern, String message) {
         int jf = Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
-               | Pattern.DOTALL | Pattern.UNICODE_CHARACTER_CLASS;
+                | Pattern.DOTALL | Pattern.UNICODE_CHARACTER_CLASS;
         return Pattern.compile(hsPattern, jf).matcher(message).find();
     }
 
@@ -46,10 +49,12 @@ class MultiLanguagePatternBuilderTest {
     // English (Latin) — baseline, unchanged behaviour
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Latin (English) NEAR / FOLLOWEDBY — baseline")
+    @Nested
+    @DisplayName("Latin (English) NEAR / FOLLOWEDBY — baseline")
     class Latin {
 
-        @Test @DisplayName("NEAR: words within n word-gaps — both orders")
+        @Test
+        @DisplayName("NEAR: words within n word-gaps — both orders")
         void latinNear() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("insider", "trading", 3);
             assertThat(r.scriptType()).isEqualTo(ScriptType.LATIN);
@@ -67,7 +72,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "routine business communications only")).isFalse();
         }
 
-        @Test @DisplayName("FOLLOWEDBY: word before word, directional")
+        @Test
+        @DisplayName("FOLLOWEDBY: word before word, directional")
         void latinFollowedBy() {
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("buy", "shares", 3);
             assertThat(r.scriptType()).isEqualTo(ScriptType.LATIN);
@@ -79,7 +85,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(r.hasWarning()).isFalse();
         }
 
-        @Test @DisplayName("NEAR gap pattern uses word-token format for Latin")
+        @Test
+        @DisplayName("NEAR gap pattern uses word-token format for Latin")
         void latinGapIsWordBased() {
             String gap = MultiLanguagePatternBuilder.wordBasedGap(2);
             assertThat(gap).contains("\\s+").contains("\\S+").contains("{0,2}");
@@ -90,10 +97,12 @@ class MultiLanguagePatternBuilderTest {
     // Arabic — RTL, space-delimited, requires UTF8+UCP
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Arabic (RTL) NEAR / FOLLOWEDBY")
+    @Nested
+    @DisplayName("Arabic (RTL) NEAR / FOLLOWEDBY")
     class Arabic {
 
-        @Test @DisplayName("NEAR: Arabic price manipulation — both word orders")
+        @Test
+        @DisplayName("NEAR: Arabic price manipulation — both word orders")
         void arabicNear_priceManipulation() {
             // السعر = price,  التلاعب = manipulation
             BuildResult r = MultiLanguagePatternBuilder.buildNear("السعر", "التلاعب", 2);
@@ -112,7 +121,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "تقرير السوق اليومي بشكل عام")).isFalse();
         }
 
-        @Test @DisplayName("NEAR: Arabic insider information — typical phrase")
+        @Test
+        @DisplayName("NEAR: Arabic insider information — typical phrase")
         void arabicNear_insiderInfo() {
             // معلومات = information,  داخلية = insider/internal
             BuildResult r = MultiLanguagePatternBuilder.buildNear("معلومات", "داخلية", 3);
@@ -121,7 +131,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "البيانات الداخلية ومعلومات السوق")).isTrue();
         }
 
-        @Test @DisplayName("FOLLOWEDBY: Arabic logical-order match (RTL text)")
+        @Test
+        @DisplayName("FOLLOWEDBY: Arabic logical-order match (RTL text)")
         void arabicFollowedBy() {
             // In Unicode logical order: معلومات (information) then سرية (secret)
             // This is correct for Arabic stored text
@@ -134,7 +145,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(r.hasWarning()).isFalse();
         }
 
-        @Test @DisplayName("Arabic uses word-based gap (words separated by spaces)")
+        @Test
+        @DisplayName("Arabic uses word-based gap (words separated by spaces)")
         void arabicGapIsWordBased() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("السعر", "التلاعب", 2);
             // Gap must use \\s+ / \\S+ token approach
@@ -147,10 +159,12 @@ class MultiLanguagePatternBuilderTest {
     // Hebrew — RTL, space-delimited, requires UTF8+UCP
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Hebrew (RTL) NEAR / FOLLOWEDBY")
+    @Nested
+    @DisplayName("Hebrew (RTL) NEAR / FOLLOWEDBY")
     class Hebrew {
 
-        @Test @DisplayName("NEAR: Hebrew insider trading — bidirectional")
+        @Test
+        @DisplayName("NEAR: Hebrew insider trading — bidirectional")
         void hebrewNear() {
             // מידע = information/data,  פנים = insider
             BuildResult r = MultiLanguagePatternBuilder.buildNear("מידע", "פנים", 3);
@@ -162,7 +176,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "שוק המניות בתל אביב")).isFalse();
         }
 
-        @Test @DisplayName("FOLLOWEDBY: Hebrew logical order — forward direction")
+        @Test
+        @DisplayName("FOLLOWEDBY: Hebrew logical order — forward direction")
         void hebrewFollowedBy() {
             // מסחר = trading,  פנים = insider
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("מסחר", "פנים", 2);
@@ -171,7 +186,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "פנים מסחר בניגוד לחוק")).isFalse();
         }
 
-        @Test @DisplayName("Hebrew uses word-based gap (Hebrew words use spaces)")
+        @Test
+        @DisplayName("Hebrew uses word-based gap (Hebrew words use spaces)")
         void hebrewGapIsWordBased() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("מידע", "פנים", 2);
             assertThat(r.pattern()).contains("\\s+");
@@ -182,10 +198,12 @@ class MultiLanguagePatternBuilderTest {
     // Chinese (Simplified) — CJK, NO spaces between characters
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Chinese (Simplified CJK) NEAR / FOLLOWEDBY — char-based gap")
+    @Nested
+    @DisplayName("Chinese (Simplified CJK) NEAR / FOLLOWEDBY — char-based gap")
     class ChineseSimplified {
 
-        @Test @DisplayName("NEAR: 内幕 NEAR{2} 交易 — with and without spaces")
+        @Test
+        @DisplayName("NEAR: 内幕 NEAR{2} 交易 — with and without spaces")
         void chineseNear_noSpace() {
             // 内幕 = insider,  交易 = trading
             BuildResult r = MultiLanguagePatternBuilder.buildNear("内幕", "交易", 2);
@@ -202,7 +220,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "正常的商业活动记录")).isFalse();       // no match
         }
 
-        @Test @DisplayName("NEAR: 价格 NEAR{3} 操纵 — market manipulation")
+        @Test
+        @DisplayName("NEAR: 价格 NEAR{3} 操纵 — market manipulation")
         void chineseNear_marketManipulation() {
             // 价格 = price,  操纵 = manipulation
             BuildResult r = MultiLanguagePatternBuilder.buildNear("价格", "操纵", 3);
@@ -211,7 +230,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "操纵价格的违规行为")).isTrue();        // reversed
         }
 
-        @Test @DisplayName("FOLLOWEDBY: 内幕 FOLLOWEDBY{2} 交易 — directional")
+        @Test
+        @DisplayName("FOLLOWEDBY: 内幕 FOLLOWEDBY{2} 交易 — directional")
         void chineseFollowedBy() {
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("内幕", "交易", 2);
             assertThat(r.scriptType()).isEqualTo(ScriptType.CJK);
@@ -223,7 +243,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(r.hasWarning()).isFalse();
         }
 
-        @Test @DisplayName("CJK char-based gap formula: n=3, avgCharsPerWord=3 → {0,12}")
+        @Test
+        @DisplayName("CJK char-based gap formula: n=3, avgCharsPerWord=3 → {0,12}")
         void cjkGapFormula() {
             // n=3, avgCharsPerWord=3, +n buffer = 3*3+3 = 12
             String gap = MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 3);
@@ -235,10 +256,12 @@ class MultiLanguagePatternBuilderTest {
     // Chinese (Traditional)
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Chinese (Traditional) NEAR")
+    @Nested
+    @DisplayName("Chinese (Traditional) NEAR")
     class ChineseTraditional {
 
-        @Test @DisplayName("NEAR: 內幕 NEAR{2} 交易 (traditional characters)")
+        @Test
+        @DisplayName("NEAR: 內幕 NEAR{2} 交易 (traditional characters)")
         void traditionalChineseNear() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("內幕", "交易", 2);
             assertThat(r.scriptType()).isEqualTo(ScriptType.CJK);
@@ -251,10 +274,12 @@ class MultiLanguagePatternBuilderTest {
     // Japanese — Kanji (CJK) + Kana, no spaces between script types
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Japanese (Kanji + Kana) NEAR / FOLLOWEDBY")
+    @Nested
+    @DisplayName("Japanese (Kanji + Kana) NEAR / FOLLOWEDBY")
     class Japanese {
 
-        @Test @DisplayName("NEAR: インサイダー NEAR{3} 取引 — katakana + kanji mix")
+        @Test
+        @DisplayName("NEAR: インサイダー NEAR{3} 取引 — katakana + kanji mix")
         void japaneseNear_kanaKanji() {
             // インサイダー = insider (katakana),  取引 = transaction/trading (kanji)
             BuildResult r = MultiLanguagePatternBuilder.buildNear("インサイダー", "取引", 3);
@@ -267,7 +292,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "通常の株式取引市場")).isFalse();            // no match
         }
 
-        @Test @DisplayName("NEAR: 情報 NEAR{2} 内部 — kanji terms (insider information)")
+        @Test
+        @DisplayName("NEAR: 情報 NEAR{2} 内部 — kanji terms (insider information)")
         void japaneseNear_kanji() {
             // 情報 = information,  内部 = insider/internal
             BuildResult r = MultiLanguagePatternBuilder.buildNear("情報", "内部", 2);
@@ -276,7 +302,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "情報内部からのリーク")).isTrue();
         }
 
-        @Test @DisplayName("FOLLOWEDBY: インサイダー FOLLOWEDBY{2} 取引")
+        @Test
+        @DisplayName("FOLLOWEDBY: インサイダー FOLLOWEDBY{2} 取引")
         void japaneseFollowedBy() {
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("インサイダー", "取引", 2);
             assertThat(matches(r.pattern(), "インサイダー取引調査")).isTrue();
@@ -288,10 +315,12 @@ class MultiLanguagePatternBuilderTest {
     // Korean (Hangul) — character-based, handles both with/without spaces
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Korean (Hangul) NEAR / FOLLOWEDBY")
+    @Nested
+    @DisplayName("Korean (Hangul) NEAR / FOLLOWEDBY")
     class Korean {
 
-        @Test @DisplayName("NEAR: 내부자 NEAR{3} 거래 — with space (formal Korean)")
+        @Test
+        @DisplayName("NEAR: 내부자 NEAR{3} 거래 — with space (formal Korean)")
         void koreanNear_withSpace() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("내부자", "거래", 3);
             assertThat(r.scriptType()).isEqualTo(ScriptType.HANGUL);
@@ -302,7 +331,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "거래 내부자 정보를 사용했다")).isTrue();
         }
 
-        @Test @DisplayName("NEAR: 내부자 NEAR{3} 거래 — without space (informal Korean)")
+        @Test
+        @DisplayName("NEAR: 내부자 NEAR{3} 거래 — without space (informal Korean)")
         void koreanNear_withoutSpace() {
             // KEY TEST: char-based gap must handle the no-space case
             BuildResult r = MultiLanguagePatternBuilder.buildNear("내부자", "거래", 3);
@@ -310,7 +340,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "거래내부자")).isTrue();             // reversed, no space
         }
 
-        @Test @DisplayName("NEAR: 정보 NEAR{2} 유출 — information leak")
+        @Test
+        @DisplayName("NEAR: 정보 NEAR{2} 유출 — information leak")
         void koreanNear_infoLeak() {
             // 정보 = information,  유출 = leak
             BuildResult r = MultiLanguagePatternBuilder.buildNear("정보", "유출", 2);
@@ -319,7 +350,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "유출된 정보")).isTrue();            // reversed
         }
 
-        @Test @DisplayName("FOLLOWEDBY: 내부자 FOLLOWEDBY{2} 거래 — with and without space")
+        @Test
+        @DisplayName("FOLLOWEDBY: 내부자 FOLLOWEDBY{2} 거래 — with and without space")
         void koreanFollowedBy() {
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("내부자", "거래", 2);
             assertThat(r.scriptType()).isEqualTo(ScriptType.HANGUL);
@@ -330,7 +362,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "거래 내부자")).isFalse();
         }
 
-        @Test @DisplayName("Korean gap is char-based (not word-based)")
+        @Test
+        @DisplayName("Korean gap is char-based (not word-based)")
         void koreanGapIsCharBased() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("내부자", "거래", 2);
             assertThat(r.pattern()).contains("[\\s\\S]");
@@ -343,10 +376,12 @@ class MultiLanguagePatternBuilderTest {
     // Thai — character-based, no word spaces
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Thai NEAR / FOLLOWEDBY — char-based gap")
+    @Nested
+    @DisplayName("Thai NEAR / FOLLOWEDBY — char-based gap")
     class Thai {
 
-        @Test @DisplayName("NEAR: ราคา NEAR{3} การซื้อขาย — price NEAR trading")
+        @Test
+        @DisplayName("NEAR: ราคา NEAR{3} การซื้อขาย — price NEAR trading")
         void thaiNear() {
             // ราคา = price,  การซื้อขาย = trading
             BuildResult r = MultiLanguagePatternBuilder.buildNear("ราคา", "การซื้อขาย", 3);
@@ -361,10 +396,12 @@ class MultiLanguagePatternBuilderTest {
     // Mixed language — the most important real-world case
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Mixed language NEAR / FOLLOWEDBY")
+    @Nested
+    @DisplayName("Mixed language NEAR / FOLLOWEDBY")
     class Mixed {
 
-        @Test @DisplayName("NEAR: English + Korean — char-based gap (CJK wins)")
+        @Test
+        @DisplayName("NEAR: English + Korean — char-based gap (CJK wins)")
         void englishKoreanNear() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("insider", "내부자", 3);
             assertThat(r.scriptType()).isEqualTo(ScriptType.MIXED_CJK);
@@ -375,7 +412,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "내부자 was the insider")).isTrue();
         }
 
-        @Test @DisplayName("NEAR: English + Chinese — char-based gap")
+        @Test
+        @DisplayName("NEAR: English + Chinese — char-based gap")
         void englishChineseNear() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("insider", "内幕", 3);
             assertThat(r.scriptType()).isEqualTo(ScriptType.MIXED_CJK);
@@ -383,14 +421,16 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "内幕 insider信息")).isTrue();
         }
 
-        @Test @DisplayName("NEAR: English + Japanese — char-based gap")
+        @Test
+        @DisplayName("NEAR: English + Japanese — char-based gap")
         void englishJapaneseNear() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("trading", "取引", 2);
             assertThat(r.scriptType()).isEqualTo(ScriptType.MIXED_CJK);
             assertThat(matches(r.pattern(), "illegal trading取引")).isTrue();
         }
 
-        @Test @DisplayName("NEAR: English + Arabic — word-based gap (both space-delimited)")
+        @Test
+        @DisplayName("NEAR: English + Arabic — word-based gap (both space-delimited)")
         void englishArabicNear() {
             // Both English and Arabic use spaces → word-based gap applies
             BuildResult r = MultiLanguagePatternBuilder.buildNear("price", "السعر", 3);
@@ -402,21 +442,24 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "السعر is the Arabic word for price")).isTrue();
         }
 
-        @Test @DisplayName("NEAR: English + Hebrew — word-based gap")
+        @Test
+        @DisplayName("NEAR: English + Hebrew — word-based gap")
         void englishHebrewNear() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("information", "מידע", 3);
             assertThat(r.scriptType()).isEqualTo(ScriptType.MIXED_RTL);
             assertThat(matches(r.pattern(), "the information מידע was leaked")).isTrue();
         }
 
-        @Test @DisplayName("NEAR: Chinese + Arabic — CJK wins (char-based gap)")
+        @Test
+        @DisplayName("NEAR: Chinese + Arabic — CJK wins (char-based gap)")
         void chineseArabicNear() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("内幕", "معلومات", 2);
             assertThat(r.scriptType()).isEqualTo(ScriptType.MIXED_CJK);
             assertThat(r.pattern()).contains("[\\s\\S]");
         }
 
-        @Test @DisplayName("NEAR: Three-language mix — Korean + Arabic + English")
+        @Test
+        @DisplayName("NEAR: Three-language mix — Korean + Arabic + English")
         void threeLanguageMix() {
             // Operands: Korean term vs Arabic term
             BuildResult r = MultiLanguagePatternBuilder.buildNear("내부자", "معلومات", 3);
@@ -426,7 +469,8 @@ class MultiLanguagePatternBuilderTest {
 
         // ── FOLLOWEDBY mixed-direction warning ─────────────────────────────
 
-        @Test @DisplayName("FOLLOWEDBY: English + Arabic — warning emitted (mixed RTL+LTR direction)")
+        @Test
+        @DisplayName("FOLLOWEDBY: English + Arabic — warning emitted (mixed RTL+LTR direction)")
         void followedBy_englishArabic_rtlWarning() {
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("insider", "السعر", 2);
             // Should generate a warning about mixed RTL+LTR FOLLOWEDBY
@@ -436,13 +480,15 @@ class MultiLanguagePatternBuilderTest {
             assertThat(r.pattern()).isNotBlank();
         }
 
-        @Test @DisplayName("FOLLOWEDBY: Pure Arabic — no warning (logical order is reading order)")
+        @Test
+        @DisplayName("FOLLOWEDBY: Pure Arabic — no warning (logical order is reading order)")
         void followedBy_pureArabic_noWarning() {
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("معلومات", "سرية", 2);
             assertThat(r.hasWarning()).isFalse();
         }
 
-        @Test @DisplayName("FOLLOWEDBY: Korean + English — char-based, no RTL warning")
+        @Test
+        @DisplayName("FOLLOWEDBY: Korean + English — char-based, no RTL warning")
         void followedBy_koreanEnglish_noWarning() {
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("내부자", "insider", 3);
             assertThat(r.scriptType()).isEqualTo(ScriptType.MIXED_CJK);
@@ -455,40 +501,47 @@ class MultiLanguagePatternBuilderTest {
     // Flags validation
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Recommended Hyperscan flags")
+    @Nested
+    @DisplayName("Recommended Hyperscan flags")
     class Flags {
 
-        @Test @DisplayName("Latin-only → flags=3 (CASELESS+DOTALL, no UTF8/UCP needed)")
+        @Test
+        @DisplayName("Latin-only → flags=3 (CASELESS+DOTALL, no UTF8/UCP needed)")
         void latinFlags() {
             assertThat(MultiLanguagePatternBuilder.recommendedHsFlags("insider", "trading"))
                     .isEqualTo(3);
         }
 
-        @Test @DisplayName("Arabic → flags=99 (CASELESS+DOTALL+UTF8+UCP)")
+        @Test
+        @DisplayName("Arabic → flags=99 (CASELESS+DOTALL+UTF8+UCP)")
         void arabicFlags() {
             assertThat(MultiLanguagePatternBuilder.recommendedHsFlags("السعر", "التلاعب"))
                     .isEqualTo(99);
         }
 
-        @Test @DisplayName("Hebrew → flags=99")
+        @Test
+        @DisplayName("Hebrew → flags=99")
         void hebrewFlags() {
             assertThat(MultiLanguagePatternBuilder.recommendedHsFlags("מידע", "פנים"))
                     .isEqualTo(99);
         }
 
-        @Test @DisplayName("CJK → flags=99")
+        @Test
+        @DisplayName("CJK → flags=99")
         void cjkFlags() {
             assertThat(MultiLanguagePatternBuilder.recommendedHsFlags("内幕", "交易"))
                     .isEqualTo(99);
         }
 
-        @Test @DisplayName("Korean → flags=99")
+        @Test
+        @DisplayName("Korean → flags=99")
         void koreanFlags() {
             assertThat(MultiLanguagePatternBuilder.recommendedHsFlags("내부자", "거래"))
                     .isEqualTo(99);
         }
 
-        @Test @DisplayName("Mixed Latin+Arabic → flags=99 (Unicode needed)")
+        @Test
+        @DisplayName("Mixed Latin+Arabic → flags=99 (Unicode needed)")
         void mixedLatinArabicFlags() {
             assertThat(MultiLanguagePatternBuilder.recommendedHsFlags("price", "السعر"))
                     .isEqualTo(99);
@@ -499,34 +552,40 @@ class MultiLanguagePatternBuilderTest {
     // Gap pattern structure
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Gap pattern structure")
+    @Nested
+    @DisplayName("Gap pattern structure")
     class GapPattern {
 
-        @Test @DisplayName("wordBasedGap(n=0): zero intervening words allowed")
+        @Test
+        @DisplayName("wordBasedGap(n=0): zero intervening words allowed")
         void wordGapZero() {
             assertThat(MultiLanguagePatternBuilder.wordBasedGap(0))
                     .isEqualTo("(?:\\s+\\S+){0,0}\\s+");
         }
 
-        @Test @DisplayName("charBasedGap CJK n=1: {0,4}")
+        @Test
+        @DisplayName("charBasedGap CJK n=1: {0,4}")
         void charGapCjkN1() {
             assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 1))
                     .isEqualTo("[\\s\\S]{0,4}"); // 1*3+1 = 4
         }
 
-        @Test @DisplayName("charBasedGap Hangul n=3: {0,18}")
+        @Test
+        @DisplayName("charBasedGap Hangul n=3: {0,18}")
         void charGapHangulN3() {
             assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.HANGUL, 3))
                     .isEqualTo("[\\s\\S]{0,18}"); // 3*5+3 = 18
         }
 
-        @Test @DisplayName("charBasedGap MIXED_CJK n=2: {0,10}")
+        @Test
+        @DisplayName("charBasedGap MIXED_CJK n=2: {0,10}")
         void charGapMixedCjkN2() {
             assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.MIXED_CJK, 2))
                     .isEqualTo("[\\s\\S]{0,10}"); // 2*4+2 = 10
         }
 
-        @Test @DisplayName("NEAR pattern is bidirectional: (?:A...B|B...A)")
+        @Test
+        @DisplayName("NEAR pattern is bidirectional: (?:A...B|B...A)")
         void nearIsBidirectional() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("price", "manipulation", 1);
             // Must contain both orders
@@ -539,7 +598,8 @@ class MultiLanguagePatternBuilderTest {
             assertThat(priceCount).isGreaterThan(0);
         }
 
-        @Test @DisplayName("FOLLOWEDBY pattern is directional: A...B only (no B...A)")
+        @Test
+        @DisplayName("FOLLOWEDBY pattern is directional: A...B only (no B...A)")
         void followedByIsDirectional() {
             BuildResult r = MultiLanguagePatternBuilder.buildFollowedBy("buy", "shares", 2);
             // The pattern must start with "buy" and end with "shares"
@@ -554,10 +614,12 @@ class MultiLanguagePatternBuilderTest {
     // Edge cases
     // ══════════════════════════════════════════════════════════════════════
 
-    @Nested @DisplayName("Edge cases")
+    @Nested
+    @DisplayName("Edge cases")
     class EdgeCases {
 
-        @Test @DisplayName("n=0: adjacent terms (no gap)")
+        @Test
+        @DisplayName("n=0: adjacent terms (no gap)")
         void nEqualsZero() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("내부자", "거래", 0);
             // Pattern should still be valid and match adjacent terms
@@ -565,27 +627,31 @@ class MultiLanguagePatternBuilderTest {
             assertThat(matches(r.pattern(), "내부자거래")).isTrue();
         }
 
-        @Test @DisplayName("Large n=10: CJK gap ceiling is 10*3+10=40 chars")
+        @Test
+        @DisplayName("Large n=10: CJK gap ceiling is 10*3+10=40 chars")
         void largeN() {
             String gap = MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 10);
             assertThat(gap).isEqualTo("[\\s\\S]{0,40}");
         }
 
-        @Test @DisplayName("Emoji terms: fall back to LATIN script safely")
+        @Test
+        @DisplayName("Emoji terms: fall back to LATIN script safely")
         void emojiTerms() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("💰", "🤫", 2);
             assertThat(r).isNotNull();
             assertThat(r.pattern()).isNotBlank();
         }
 
-        @Test @DisplayName("Single-character CJK terms")
+        @Test
+        @DisplayName("Single-character CJK terms")
         void singleCharCjk() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("金", "融", 1);
             assertThat(r.scriptType()).isEqualTo(ScriptType.CJK);
             assertThat(matches(r.pattern(), "金融")).isTrue(); // adjacent
         }
 
-        @Test @DisplayName("Mixed CJK with whitespace in operand")
+        @Test
+        @DisplayName("Mixed CJK with whitespace in operand")
         void cjkWithWhitespace() {
             BuildResult r = MultiLanguagePatternBuilder.buildNear("내부 거래", "정보", 2);
             assertThat(r.scriptType()).isEqualTo(ScriptType.HANGUL);

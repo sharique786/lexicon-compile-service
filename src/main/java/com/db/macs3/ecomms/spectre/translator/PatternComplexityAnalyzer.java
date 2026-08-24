@@ -79,24 +79,29 @@ final class PatternComplexityAnalyzer {
      */
     static final int COMPLEXITY_BUDGET = 700;
 
-    /** Multiplier applied to a NEAR operand's score — NEAR generates both
-     *  A-then-B and B-then-A, doubling automaton complexity relative to the
-     *  same operands under a single-direction FOLLOWEDBY. */
+    /**
+     * Multiplier applied to a NEAR operand's score — NEAR generates both
+     * A-then-B and B-then-A, doubling automaton complexity relative to the
+     * same operands under a single-direction FOLLOWEDBY.
+     */
     private static final int NEAR_DIRECTIONALITY_FACTOR = 2;
 
-    /** Extra weight for a wildcard-containing word/phrase — {@code \S*}'s own
-     *  unbounded internal branching compounds with any surrounding bounded
-     *  repetition or alternation it sits inside. */
+    /**
+     * Extra weight for a wildcard-containing word/phrase — {@code \S*}'s own
+     * unbounded internal branching compounds with any surrounding bounded
+     * repetition or alternation it sits inside.
+     */
     private static final int WILDCARD_WEIGHT = 2;
     private static final int PLAIN_WEIGHT = 1;
 
-    private PatternComplexityAnalyzer() {}
+    private PatternComplexityAnalyzer() {
+    }
 
     /**
      * @return true when {@code ast}'s estimated complexity exceeds
-     *         {@link #COMPLEXITY_BUDGET} — the caller should attempt
-     *         decomposition (see {@code PatternDecomposer}) rather than
-     *         code-generating {@code ast} as a single pattern.
+     * {@link #COMPLEXITY_BUDGET} — the caller should attempt
+     * decomposition (see {@code PatternDecomposer}) rather than
+     * code-generating {@code ast} as a single pattern.
      */
     static boolean isOverBudget(Ast ast) {
         return estimateSafely(ast) > COMPLEXITY_BUDGET;
@@ -104,8 +109,8 @@ final class PatternComplexityAnalyzer {
 
     /**
      * @return the estimated complexity score — exposed (package-visible,
-     *         not just via {@link #isOverBudget}) so callers building an
-     *         error or warning message can report the actual number.
+     * not just via {@link #isOverBudget}) so callers building an
+     * error or warning message can report the actual number.
      */
     static int estimate(Ast ast) {
         return estimateSafely(ast);

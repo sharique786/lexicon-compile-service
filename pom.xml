@@ -47,8 +47,8 @@
         <!-- Library versions -->
         <hyperscan.version>5.4.0-2.0.0</hyperscan.version>
         <icu4j.version>73.2</icu4j.version>
+        <tika.version>2.9.2</tika.version>
         <opencsv.version>5.9</opencsv.version>
-        <tika.version>3.3.1</tika.version>
 
         <!-- Plugin versions -->
         <maven-checkstyle-plugin.version>3.3.1</maven-checkstyle-plugin.version>
@@ -69,15 +69,7 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-webmvc</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator-test</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -87,10 +79,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-webmvc-test</artifactId>
         </dependency>
 
         <!-- ── Intel Hyperscan (com.gliwka.hyperscan 5.4.0-2.0.0) ─────────
@@ -110,24 +98,20 @@
             <artifactId>icu4j</artifactId>
             <version>${icu4j.version}</version>
         </dependency>
+        <!-- Optional: Apache Tika language detection for language-level disambiguation -->
+        <!-- after ScriptDetector has identified the Unicode script family.             -->
+        <!-- TikaLanguageSupport.java uses this to distinguish zh vs ja for CJK text.  -->
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-langdetect-optimaize</artifactId>
+            <version>${tika.version}</version>
+        </dependency>
 
         <!-- ── OpenCSV — robust CSV parsing with BOM stripping ───────────── -->
         <dependency>
             <groupId>com.opencsv</groupId>
             <artifactId>opencsv</artifactId>
             <version>${opencsv.version}</version>
-        </dependency>
-
-        <!-- Optional: Apache Tika language detection for language-level disambiguation -->
-        <dependency>
-            <groupId>org.apache.tika</groupId>
-            <artifactId>tika-core</artifactId>
-            <version>${tika.version}</version> <!-- Match your project's Tika version -->
-        </dependency>
-        <dependency>
-            <groupId>org.apache.tika</groupId>
-            <artifactId>tika-langdetect-optimaize</artifactId>
-            <version>${tika.version}</version>
         </dependency>
 
         <!-- ── Jackson ───────────────────────────────────────────────────── -->
@@ -211,36 +195,36 @@
             </plugin>
 
             <!-- ── Checkstyle ─────────────────────────────────────────────── -->
-            <!-- <plugin>
-                 <groupId>org.apache.maven.plugins</groupId>
-                 <artifactId>maven-checkstyle-plugin</artifactId>
-                 <version>${maven-checkstyle-plugin.version}</version>
-                 <dependencies>
-                     <dependency>
-                         <groupId>com.puppycrawl.tools</groupId>
-                         <artifactId>checkstyle</artifactId>
-                         <version>${checkstyle.version}</version>
-                     </dependency>
-                 </dependencies>
-                 <configuration>
-                     <configLocation>checkstyle/checkstyle.xml</configLocation>
-                     <suppressionsLocation>checkstyle/suppressions.xml</suppressionsLocation>
-                     <encoding>UTF-8</encoding>
-                     <consoleOutput>true</consoleOutput>
-                     <failsOnError>true</failsOnError>
-                     <includeTestSourceDirectory>false</includeTestSourceDirectory>
-                     <violationSeverity>warning</violationSeverity>
-                 </configuration>
-                 <executions>
-                     <execution>
-                         <id>checkstyle-validate</id>
-                         <phase>validate</phase>
-                         <goals>
-                             <goal>check</goal>
-                         </goals>
-                     </execution>
-                 </executions>
-             </plugin>-->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <version>${maven-checkstyle-plugin.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.puppycrawl.tools</groupId>
+                        <artifactId>checkstyle</artifactId>
+                        <version>${checkstyle.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <configLocation>checkstyle/checkstyle.xml</configLocation>
+                    <suppressionsLocation>checkstyle/suppressions.xml</suppressionsLocation>
+                    <encoding>UTF-8</encoding>
+                    <consoleOutput>true</consoleOutput>
+                    <failsOnError>true</failsOnError>
+                    <includeTestSourceDirectory>false</includeTestSourceDirectory>
+                    <violationSeverity>warning</violationSeverity>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>checkstyle-validate</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
 
             <!-- ── JaCoCo code coverage ──────────────────────────────────── -->
             <plugin>

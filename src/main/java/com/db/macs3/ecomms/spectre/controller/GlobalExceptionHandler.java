@@ -1,5 +1,7 @@
 package com.db.macs3.ecomms.spectre.controller;
 
+import com.db.macs3.ecomms.spectre.model.InvalidTermIdException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -9,7 +11,6 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
-
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -53,6 +54,20 @@ class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleFileTooLarge() {
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
                 .body(errorBody(413, "Uploaded file exceeds maximum allowed size", null));
+    }
+
+    /**
+     * Handles {@code /compile/bundle} requests whose term ids don't satisfy
+     * the {@code ::<n>} term-number convention that endpoint's Hyperscan
+     * expression id scheme depends on — see {@link InvalidTermIdException}.
+     *
+     * @return HTTP 400 Bad Request
+     */
+    @ExceptionHandler(InvalidTermIdException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidTermId(InvalidTermIdException ex) {
+        log.warn("Invalid termId(s) in bundle request: {}", ex.getMessage());
+        return ResponseEntity.badRequest()
+                .body(errorBody(400, ex.getMessage(), null));
     }
 
     /**

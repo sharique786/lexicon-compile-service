@@ -1,9 +1,9 @@
 package com.db.macs3.ecomms.spectre.service;
 
 import com.db.macs3.ecomms.spectre.hyperscan.HyperscanCompiler;
-import com.db.macs3.ecomms.spectre.model.CompileRequest;
 import com.db.macs3.ecomms.spectre.model.CompileResponse;
 import com.db.macs3.ecomms.spectre.model.TermCompilationResult;
+import com.db.macs3.ecomms.spectre.model.TypedCompileRequest;
 import com.db.macs3.ecomms.spectre.translator.TermSyntaxTranslator;
 import com.db.macs3.ecomms.spectre.translator.TranslationResult;
 import io.micrometer.core.instrument.Counter;
@@ -20,10 +20,17 @@ import java.util.List;
  *
  * <p>Per-term pipeline:
  * <ol>
- *   <li>{@link TermSyntaxTranslator#translate} — custom query lang → PCRE + flags</li>
- *   <li>{@link HyperscanCompiler#validate}     — Hyperscan Database.compile() check</li>
- *   <li>Build {@link TermCompilationResult}    — echo input + append result fields</li>
+ *   <li>{@link TermSyntaxTranslator#translate} — custom query lang → PCRE pattern(s) + flags</li>
+ *   <li>Build {@link TermCompilationResult}    — echo input + append result fields.
+ *       No separate Hyperscan validation happens here any more — every pattern
+ *       {@link TermSyntaxTranslator} returns has already been validated against
+ *       the real Hyperscan compiler internally (see its class Javadoc).</li>
  * </ol>
+ *
+ * <p>{@link TypedCompileRequest} is the single request type for both this
+ * service's own {@code /compile}/{@code /compile/csv} use and
+ * {@code LexiconCompileBundleService}'s {@code /compile/bundle} use — see
+ * {@link TypedCompileRequest} class Javadoc.
  *
  * <p>Uses JDK 21 pattern matching switch on the sealed {@link TranslationResult}.
  * Stateless — safe for concurrent virtual-thread requests.
@@ -56,13 +63,13 @@ public class LexiconCompileService {
      * @param request validated compile request
      * @return compile response with per-term results and summary counts
      */
-    public CompileResponse compile(CompileRequest request) {
+    public CompileResponse compile(TypedCompileRequest request) {
         long startMs = System.currentTimeMillis();
         log.info("Compiling {} term(s) for rule '{}'",
                 request.getTerms().size(), request.getLexiconRuleName());
 
         List<TermCompilationResult> results = new ArrayList<>(request.getTerms().size());
-        for (CompileRequest.TermInput term : request.getTerms()) {
+        for (TypedCompileRequest.TermInput term : request.getTerms()) {
             TermCompilationResult result = compileTerm(term);
             results.add(result);
             if (result.isPass()) {
@@ -84,7 +91,7 @@ public class LexiconCompileService {
                 elapsed);
 
         return CompileResponse.of(
-                request.getLexiconRuleName(), results, elapsed,
+                request.getRequestId(), request.getLexiconRuleName(), results, elapsed,
                 compiler.getHyperscanVersion());
     }
 
@@ -100,17 +107,16 @@ public class LexiconCompileService {
     // ── Per-term pipeline ─────────────────────────────────────────────────────
 
     /**
-     * Runs translate → validate for one term using JDK 21 pattern matching switch.
+     * Runs translate → build-result for one term using JDK 21 pattern matching switch.
      *
      * <p>Public (not just used internally by {@link #compile}) so that
      * {@code LexiconCompileBundleService} can reuse this exact pipeline for
-     * {@code termType="Standard"} terms in the {@code /compile/bundle}
-     * endpoint, guaranteeing identical translate/validate/result-building
-     * behaviour between {@code /compile} and {@code /compile/bundle} with
-     * zero duplicated logic. This is a pure visibility change — the method
-     * body and behaviour are unchanged.
+     * {@code termType=TermType.NATURAL_LANGUAGE} terms in the {@code /compile/bundle}
+     * endpoint, guaranteeing identical translate/result-building behaviour
+     * between {@code /compile} and {@code /compile/bundle} with zero
+     * duplicated logic.
      */
-    public TermCompilationResult compileTerm(CompileRequest.TermInput term) {
+    public TermCompilationResult compileTerm(TypedCompileRequest.TermInput term) {
         TranslationResult translation;
         try {
             translation = translator.translate(term.termDescription());
@@ -125,17 +131,10 @@ public class LexiconCompileService {
             case TranslationResult.Error err ->
                     TermCompilationResult.failedTranslation(term, err.message());
 
-            case TranslationResult.Success success -> {
-                HyperscanCompiler.ValidationResult validation =
-                        compiler.validate(success.hsPattern(), success.hsFlags());
-                yield validation.isPass()
-                        ? TermCompilationResult.pass(
-                                term, success.hsPattern(),
-                                success.hsFlags(), success.requiresAndPostFilter())
-                        : TermCompilationResult.failedHyperscan(
-                                term, success.hsPattern(),
-                                validation.errorMessage(), success.hsFlags());
-            }
+            case TranslationResult.Success success -> TermCompilationResult.pass(
+                    term, success.hsPatterns(), success.hsFlags(),
+                    success.requiresExclusionCheck(), success.exclusionPatterns(),
+                    success.warnings());
         };
     }
 }

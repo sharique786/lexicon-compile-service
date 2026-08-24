@@ -1,71 +1,227 @@
 package com.db.macs3.ecomms.spectre.model;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
-
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Compilation outcome for a single lexicon term.
+ *
+ * <h2>Null field semantics</h2>
+ * <ul>
+ *   <li>{@code translatedPattern} — null/absent only when translation failed before any
+ *       pattern could be produced (see {@code translationError}); for a PASS term, always
+ *       present with at least one entry — see below</li>
+ *   <li>{@code errorLog} — non-null only for Hyperscan-stage failures</li>
+ *   <li>{@code translationError} — non-null only for translation-stage failures</li>
+ *   <li>{@code exclusionPattern} — non-null only when {@code requiresExclusionCheck} is true</li>
+ *   <li>{@code hyperscanExpressionId} — populated only on a {@code /compile/bundle}
+ *       response, and only for a term that does NOT require an exclusion check
+ *       (simple or purely decomposed). Null for {@code /compile}/{@code /compile/csv},
+ *       and null for an AND NOT term even on {@code /compile/bundle} — see
+ *       {@code requiredExpressionIds}/{@code excludedExpressionIds} below and
+ *       {@code HyperscanCombinationHandler} class Javadoc for why.</li>
+ *   <li>{@code requiredExpressionIds} / {@code excludedExpressionIds} — populated only
+ *       on a {@code /compile/bundle} response, and only for an AND NOT term. Null
+ *       otherwise (including null for a non-AND-NOT term on {@code /compile/bundle},
+ *       which uses {@code hyperscanExpressionId} instead).</li>
+ * </ul>
+ * At most one of {@code errorLog} / {@code translationError} is non-null.
+ * Both are null when {@code compilationStatus} is {@code PASS}.
+ *
+ * <h2>{@code translatedPattern} and {@code exclusionPattern} are always lists</h2>
+ * <p>Every lexicon term — however structurally complex, and whether or not
+ * it uses {@code AND NOT} — is represented uniformly: {@code translatedPattern}
+ * holds the required side's independently Hyperscan-valid pattern(s), one
+ * entry for a term simple enough to compile as a single pattern, two or
+ * more for a term too structurally complex for that (see
+ * {@code PatternComplexityAnalyzer} / {@code PatternDecomposer}) — decomposed
+ * into independent leaf patterns instead of being rejected outright. There
+ * is no separate "was this decomposed" boolean any more: a caller checks
+ * {@code translatedPattern.size()}. The same applies to
+ * {@code exclusionPattern} for an AND NOT term's excluded side.
+ *
+ * <p><b>Multiple entries are a real precision trade-off — always check
+ * {@code warnings}.</b> Decomposition discards the original NEAR/FOLLOWEDBY
+ * proximity and ordering constraints entirely: the leaf patterns are
+ * combined with pure boolean AND ("all of these appear somewhere in the
+ * message"), not with any positional relationship. {@code warnings} always
+ * carries an explicit entry whenever this trade-off applies to either side,
+ * so no caller can silently treat a decomposed match as a genuine proximity
+ * match.
+ *
+ * <h2>AND NOT has two different correct implementations, for two different callers</h2>
+ * <p>{@code translatedPattern} and {@code exclusionPattern} are independently
+ * Hyperscan-valid pattern lists (Hyperscan cannot express "absent from the
+ * whole message" in a single pattern — no negative lookaround support).
+ * What a caller does with them differs by which endpoint it used:
+ *
+ * <ul>
+ *   <li><b>{@code /compile} and {@code /compile/csv}</b> — the caller (e.g.
+ *       the Lexicon Scanner Service) reads the JSON, compiles every pattern
+ *       in both lists itself, and combines the boolean results in
+ *       application code: matched iff EVERY entry of {@code translatedPattern}
+ *       matches AND the excluded condition (every entry of {@code exclusionPattern}
+ *       found — pure AND, same convention as the required side) is NOT fully
+ *       satisfied.</li>
+ *   <li><b>{@code /compile/bundle}</b> — for a term that does NOT require an
+ *       exclusion check, every pattern in {@code translatedPattern} is compiled
+ *       into the combined database as a QUIET sub-expression feeding a native
+ *       Hyperscan LOGICAL COMBINATION ({@code HS_FLAG_COMBINATION}) at
+ *       {@code hyperscanExpressionId} — Hyperscan itself evaluates the full
+ *       "all parts present" condition natively. <b>For an AND NOT term, this
+ *       native-combination approach is NOT used</b> — confirmed unreliable by
+ *       Hyperscan's own documented eager, progressive combination evaluation
+ *       (a formula mixing a positive requirement with a negation can fire
+ *       before the negated pattern has had a chance to appear later in the
+ *       same text). Instead, every required and excluded pattern compiles as
+ *       its own independently reportable plain expression
+ *       ({@code requiredExpressionIds} / {@code excludedExpressionIds}), and
+ *       the caller evaluates the boolean condition itself AFTER the whole
+ *       scan completes, using the complete match-id set
+ *       {@code Scanner.scan()} returns. See
+ *       {@code HyperscanCombinationHandler} and {@code LexiconCompileBundleService}.</li>
+ * </ul>
+ *
+ * <h2>{@code hyperscanExpressionId}: the term's own term number, when it applies</h2>
+ * <p>On a {@code /compile/bundle} response, a non-AND-NOT PASS term's
+ * reportable Hyperscan expression id — whether it needed decomposition or
+ * not — is ALWAYS its own term number (parsed from its {@code termId}'s
+ * {@code ::<n>} suffix). This is deliberate: a downstream consumer that
+ * already knows a term's number can predict which expression id to watch
+ * for WITHOUT reading this JSON at all. An AND NOT term does not have this
+ * property any more — see the two-implementations note above — and reports
+ * via {@code requiredExpressionIds}/{@code excludedExpressionIds} instead.
+ * Every QUIET sub-expression a pure-decomposition combination needs is
+ * assigned an id from a separate allocated range that never collides with
+ * any term number — see {@code HyperscanCombinationHandler}.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record TermCompilationResult(
 
-        /** Echoed from input. */
         @JsonProperty("termId")
         String termId,
 
-        /** Echoed from input. */
         @JsonProperty("termDescription")
         String termDescription,
 
-        /** Echoed from input. */
-        @JsonProperty("riskDriverName")
-        String riskDriverName,
-
-        /** PASS or FAILED. */
         @JsonProperty("compilationStatus")
         CompilationStatus compilationStatus,
 
         /**
-         * Hyperscan PCRE pattern produced by {@code TermSyntaxTranslator}.
-         * Present for both PASS and FAILED (may be the partial attempt that failed).
+         * The required side's independently Hyperscan-validated pattern(s) —
+         * see class Javadoc. Non-null and non-empty for a PASS term; null
+         * for a FAILED term where translation never produced a pattern at
+         * all (may still be non-null, for visibility, when the failure was
+         * a Hyperscan-stage rejection of an attempted pattern).
          */
         @JsonProperty("translatedPattern")
-        String translatedPattern,
+        List<String> translatedPattern,
 
         /**
-         * Hyperscan error from {@code CompileErrorException.getMessage()}.
-         * Null when compilationStatus = PASS.
+         * Hyperscan error message when a pattern was syntactically valid
+         * PCRE but Hyperscan's compiler still rejected it — the main
+         * pattern, the exclusion pattern, or a decomposed leaf of either
+         * side (the message says which). Null for PASS terms and for
+         * translation-stage failures.
          */
         @JsonProperty("errorLog")
         String errorLog,
 
         /**
-         * Translation-stage error (before Hyperscan compile was attempted).
-         * Null when compilationStatus = PASS.
+         * Error from the operator-language translator, when the term's text
+         * could not be converted into a PCRE pattern at all (e.g. missing
+         * operand for NEAR{n}), OR when a side was over budget AND had no
+         * NEAR/FOLLOWEDBY structure left to decompose, OR when even a
+         * decomposed leaf was itself over budget on its own — see
+         * {@code PatternDecomposer}. Null for PASS terms and for
+         * Hyperscan-stage failures.
          */
         @JsonProperty("translationError")
         String translationError,
 
         /**
-         * Hyperscan flag bitmask used for compilation.
-         * 1=CASELESS, 2=DOTALL, 32=UTF8, 64=UCP.
+         * Hyperscan compile-flag bitmask applied to the pattern(s).
+         * {@code 1}=CASELESS, {@code 32}=UTF8, {@code 64}=UCP.
+         * {@code 0} indicates translation never completed.
          */
         @JsonProperty("hyperscanFlags")
         int hyperscanFlags,
 
         /**
-         * True when an AND operator produced a lookahead pattern.
-         * The scan-time caller should apply Java-side post-filtering
-         * to ensure all AND operands match the same document.
+         * {@code true} when the term used {@code AND NOT} — see the
+         * two-implementations note in class Javadoc for what the caller
+         * does with this depending on which endpoint produced this result.
+         * Always {@code false} for failed terms and for terms using only
+         * {@code AND} (which is fully expressed by {@code translatedPattern}
+         * alone — see {@code PatternCodeGenerator} class Javadoc).
          */
-        @JsonProperty("requiresAndPostFilter")
-        boolean requiresAndPostFilter,
+        @JsonProperty("requiresExclusionCheck")
+        boolean requiresExclusionCheck,
+
+        /**
+         * Independently Hyperscan-valid pattern(s) that must NOT (collectively,
+         * per the AND convention described in class Javadoc) match the same
+         * message for this term to be considered matched. Non-null and
+         * non-empty iff {@code requiresExclusionCheck} is true; null otherwise.
+         */
+        @JsonProperty("exclusionPattern")
+        List<String> exclusionPattern,
+
+        /**
+         * Non-fatal issues worth surfacing to the caller — never null, may
+         * be empty. Always includes an explicit entry whenever decomposition
+         * applied to either side (see class Javadoc), and whenever the term
+         * relied on chained NEAR/FOLLOWEDBY without explicit parentheses
+         * (see {@code ExpressionParser}). Present regardless of
+         * {@code compilationStatus}, though in practice only PASS terms
+         * currently produce any.
+         */
+        @JsonProperty("warnings")
+        List<String> warnings,
+
+        /**
+         * On a {@code /compile/bundle} response only, for a term that does NOT
+         * require an exclusion check: this term's own term number — see class
+         * Javadoc "hyperscanExpressionId: the term's own term number, when it
+         * applies". Null outside {@code /compile/bundle}, null for FAILED terms,
+         * and null for an AND NOT term (see {@code requiredExpressionIds} /
+         * {@code excludedExpressionIds} instead).
+         */
+        @JsonProperty("hyperscanExpressionId")
+        Integer hyperscanExpressionId,
+
+        /**
+         * On a {@code /compile/bundle} response only, for an AND NOT term ONLY:
+         * the expression id(s) of the required side's independently reportable
+         * plain pattern(s) — one per entry of {@code translatedPattern}. Null
+         * for every other case (including a non-AND-NOT term on
+         * {@code /compile/bundle}, which uses {@code hyperscanExpressionId}
+         * instead). See class Javadoc "AND NOT has two different correct
+         * implementations" for how a caller combines this with
+         * {@code excludedExpressionIds}.
+         */
+        @JsonProperty("requiredExpressionIds")
+        List<Integer> requiredExpressionIds,
+
+        /**
+         * On a {@code /compile/bundle} response only, for an AND NOT term ONLY:
+         * the expression id(s) of the excluded side's independently reportable
+         * plain pattern(s) — one per entry of {@code exclusionPattern}. Null
+         * for every other case. <b>Same AND convention as the required side:</b>
+         * the excluded condition is considered satisfied (and the term
+         * therefore excluded) only when EVERY entry of this list was found
+         * somewhere in the scan — not when merely one was. A caller must
+         * confirm the excluded condition was NOT fully satisfied (at least
+         * one entry absent) for this term to count as matched, exactly
+         * mirroring the documented {@code /compile}/{@code /compile/csv}
+         * contract in class Javadoc.
+         */
+        @JsonProperty("excludedExpressionIds")
+        List<Integer> excludedExpressionIds,
 
         @JsonProperty("compiledAt")
         @JsonFormat(shape = JsonFormat.Shape.STRING)
@@ -74,41 +230,100 @@ public record TermCompilationResult(
 ) {
     // ── Factory methods ───────────────────────────────────────────────────────
 
-    /** Creates a PASS result. */
-    public static TermCompilationResult pass(CompileRequest.TermInput input,
-                                              String translatedPattern,
+    /**
+     * Creates a PASS result. {@code translatedPattern} and (when
+     * {@code requiresExclusionCheck}) {@code exclusionPattern} may each have
+     * one entry (simple term) or several (decomposed) — see class Javadoc.
+     * {@code warnings} may be empty.
+     */
+    public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
+                                              List<String> translatedPattern,
                                               int hyperscanFlags,
-                                              boolean requiresAndPostFilter) {
+                                              boolean requiresExclusionCheck,
+                                              List<String> exclusionPattern,
+                                              List<String> warnings) {
         return new TermCompilationResult(
-                input.termId(), input.termDescription(), input.riskDriverName(),
+                input.termId(), input.termDescription(),
                 CompilationStatus.PASS,
                 translatedPattern, null, null,
-                hyperscanFlags, requiresAndPostFilter,
-                Instant.now());
+                hyperscanFlags, requiresExclusionCheck, exclusionPattern,
+                warnings == null ? List.of() : List.copyOf(warnings),
+                null, null, null, Instant.now());
     }
 
-    /** Creates a FAILED result with Hyperscan compile error. */
-    public static TermCompilationResult failedHyperscan(CompileRequest.TermInput input,
-                                                         String translatedPattern,
-                                                         String errorLog,
-                                                         int hyperscanFlags) {
+    /** Convenience overload for a PASS result with no AND-NOT exclusion and no warnings. */
+    public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
+                                              List<String> translatedPattern,
+                                              int hyperscanFlags) {
+        return pass(input, translatedPattern, hyperscanFlags, false, null, List.of());
+    }
+
+    /**
+     * Creates a FAILED result where Hyperscan rejected a pattern — the main
+     * pattern, the exclusion pattern, or a decomposed leaf of either side
+     * (the message says which).
+     *
+     * @param translatedPattern the pattern(s) attempted, for visibility — may be null
+     *                          if the failure was in the exclusion side specifically
+     */
+    public static TermCompilationResult failedHyperscan(TypedCompileRequest.TermInput input,
+                                                          List<String> translatedPattern,
+                                                          String errorLog,
+                                                          int hyperscanFlags) {
         return new TermCompilationResult(
-                input.termId(), input.termDescription(), input.riskDriverName(),
+                input.termId(), input.termDescription(),
                 CompilationStatus.FAILED,
                 translatedPattern, errorLog, null,
-                hyperscanFlags, false,
-                Instant.now());
+                hyperscanFlags, false, null, List.of(),
+                null, null, null, Instant.now());
     }
 
-    /** Creates a FAILED result due to translation error. */
-    public static TermCompilationResult failedTranslation(CompileRequest.TermInput input,
-                                                           String translationError) {
+    /**
+     * Creates a FAILED result where the term's syntax could not be translated
+     * into a PCRE pattern at all — including the narrower decomposition-failure
+     * cases (no proximity structure left to decompose; a leaf itself over
+     * budget) — see {@code TermSyntaxTranslator}. Hyperscan was never invoked.
+     */
+    public static TermCompilationResult failedTranslation(TypedCompileRequest.TermInput input,
+                                                            String translationError) {
         return new TermCompilationResult(
-                input.termId(), input.termDescription(), input.riskDriverName(),
+                input.termId(), input.termDescription(),
                 CompilationStatus.FAILED,
                 null, null, translationError,
-                0, false,
-                Instant.now());
+                0, false, null, List.of(),
+                null, null, null, Instant.now());
+    }
+
+    /**
+     * Returns a copy of this (PASS, non-AND-NOT) result with
+     * {@link #hyperscanExpressionId} set — used only by
+     * {@code LexiconCompileBundleService}, which always sets it to the
+     * term's own term number (see class Javadoc). Never used for an AND NOT
+     * term — see {@link #withExpressionIds}.
+     */
+    public TermCompilationResult withHyperscanExpressionId(int id) {
+        return new TermCompilationResult(
+                termId, termDescription, compilationStatus,
+                translatedPattern, errorLog, translationError,
+                hyperscanFlags, requiresExclusionCheck, exclusionPattern, warnings,
+                id, null, null, compiledAt);
+    }
+
+    /**
+     * Returns a copy of this (PASS, AND NOT) result with
+     * {@link #requiredExpressionIds} and {@link #excludedExpressionIds} set —
+     * used only by {@code LexiconCompileBundleService} for a term where
+     * {@link #requiresExclusionCheck} is true. {@link #hyperscanExpressionId}
+     * remains null — see class Javadoc "AND NOT has two different correct
+     * implementations".
+     */
+    public TermCompilationResult withExpressionIds(List<Integer> requiredExpressionIds,
+                                                     List<Integer> excludedExpressionIds) {
+        return new TermCompilationResult(
+                termId, termDescription, compilationStatus,
+                translatedPattern, errorLog, translationError,
+                hyperscanFlags, requiresExclusionCheck, exclusionPattern, warnings,
+                null, requiredExpressionIds, excludedExpressionIds, compiledAt);
     }
 
     public boolean isPass()   { return CompilationStatus.PASS   == compilationStatus; }

@@ -3,14 +3,21 @@
 # Spring Boot 4.0.6 | JDK 21 | GCP Cloud Run
 # com.gliwka.hyperscan 5.4.0-2.0.0 | GZIP request + response
 # =============================================================================
+# NOTE: Each profile section uses spring.config.activate.on-profile under ---
+# There is exactly ONE top-level "spring:" block below.
+# =============================================================================
 
 spring:
   application:
     name: lexicon-compile-service
   profiles:
     active: local
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
   jackson:
     serialization:
+      write-dates-as-timestamps: false
       indent-output: false
     deserialization:
       fail-on-unknown-properties: false
@@ -74,6 +81,67 @@ logging:
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
 
+---
+# =============================================================================
+# LOCAL profile
+# =============================================================================
+spring:
+  config:
+    activate:
+      on-profile: local
 
+server:
+  port: 8080
 
+logging:
+  level:
+    com.db.macs3.ecomms.spectre: DEBUG
 
+---
+# =============================================================================
+# TEST profile
+# =============================================================================
+spring:
+  config:
+    activate:
+      on-profile: test
+
+server:
+  port: 0
+  compression:
+    enabled: true
+    min-response-size: 1
+
+logging:
+  level:
+    com.db.macs3.ecomms.spectre: DEBUG
+
+---
+# =============================================================================
+# CLOUD-RUN profile
+# =============================================================================
+spring:
+  config:
+    activate:
+      on-profile: cloud-run
+
+server:
+  port: ${PORT:8080}
+  compression:
+    enabled: true
+    min-response-size: 1024
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 20
+
+lexicon:
+  compiler:
+    max-terms-per-request: 2000
+
+logging:
+  level:
+    root: WARN
+    com.db.macs3.ecomms.spectre: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5level [%thread] %logger{36} - %msg%n"

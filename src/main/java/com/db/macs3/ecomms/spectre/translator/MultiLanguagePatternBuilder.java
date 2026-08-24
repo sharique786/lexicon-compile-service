@@ -55,7 +55,7 @@ import org.slf4j.LoggerFactory;
  * String near = "(?:%s%s%s|%s%s%s)".formatted(a, gap, b, b, gap, a);
  *
  * // NEW — language-aware:
- * BuildResult result = MultiLanguagePatternBuilder.buildNear(a, b, n);
+ * BuildResult result = MultiLanguagePatternBuilder.buildNear(termA, termB, maxDistance);
  * String near    = result.pattern();
  * int    hsFlags = result.recommendedHsFlags();
  * }</pre>
@@ -106,15 +106,15 @@ public final class MultiLanguagePatternBuilder {
      * @param n     maximum distance in "word gaps" (or character multiples for CJK)
      * @return {@link BuildResult} containing the pattern and recommended flags
      */
-    public static BuildResult buildNear(String termA, String termB, int n) {
+    public static BuildResult buildNear(String termA, String termB, int maxDistance) {
         ScriptType script = ScriptDetector.detectCombined(termA, termB);
-        String gap = buildGap(script, n);
+        String gap = buildGap(script, maxDistance);
 
         // Bidirectional: (A gap B) OR (B gap A)
         String pattern = "(?:%s%s%s|%s%s%s)".formatted(termA, gap, termB, termB, gap, termA);
 
         log.debug("NEAR{} built: script={}, gap={}, pattern={}",
-                n, script, gap, pattern);
+                maxDistance, script, gap, pattern);
 
         return new BuildResult(pattern, script, script.recommendedHsFlags());
     }
@@ -137,9 +137,9 @@ public final class MultiLanguagePatternBuilder {
      * @param n     maximum gap distance
      * @return {@link BuildResult} containing the pattern and recommended flags
      */
-    public static BuildResult buildFollowedBy(String termA, String termB, int n) {
+    public static BuildResult buildFollowedBy(String termA, String termB, int maxDistance) {
         ScriptType script = ScriptDetector.detectCombined(termA, termB);
-        String gap = buildGap(script, n);
+        String gap = buildGap(script, maxDistance);
 
         // Directional: A then B
         String pattern = "%s%s%s".formatted(termA, gap, termB);
@@ -155,7 +155,7 @@ public final class MultiLanguagePatternBuilder {
         }
 
         log.debug("FOLLOWEDBY{} built: script={}, gap={}, pattern={}",
-                n, script, gap, pattern);
+                maxDistance, script, gap, pattern);
 
         return new BuildResult(pattern, script, script.recommendedHsFlags(), warning);
     }
@@ -182,11 +182,11 @@ public final class MultiLanguagePatternBuilder {
      * <p>Dispatches to either a word-based or character-based gap based on
      * the detected {@link ScriptType}.
      */
-    static String buildGap(ScriptType script, int n) {
+    static String buildGap(ScriptType script, int maxDistance) {
         if (script.isCharBased()) {
-            return charBasedGap(script, n);
+            return charBasedGap(script, maxDistance);
         }
-        return wordBasedGap(n);
+        return wordBasedGap(maxDistance);
     }
 
     /**
@@ -207,8 +207,8 @@ public final class MultiLanguagePatternBuilder {
      *
      * @param n maximum number of intervening words
      */
-    static String wordBasedGap(int n) {
-        return "(?:\\s+\\S+){0,%d}\\s+".formatted(n);
+    static String wordBasedGap(int maxDistance) {
+        return "(?:\\s+\\S+){0,%d}\\s+".formatted(maxDistance);
     }
 
     /**
@@ -230,10 +230,10 @@ public final class MultiLanguagePatternBuilder {
      * @param script   the resolved script type (provides avgCharsPerWord)
      * @param n        maximum "word" distance specified by the lexicon term author
      */
-    static String charBasedGap(ScriptType script, int n) {
-        // N = n words × average chars per word
-        // A small additive buffer (+n) covers punctuation, spaces, and mixed chars
-        int maxChars = n * script.getAvgCharsPerWord() + n;
+    static String charBasedGap(ScriptType script, int maxDistance) {
+        // maxChars = maxDistance words × average chars per word
+        // A small additive buffer (+maxDistance) covers punctuation, spaces, and mixed chars
+        int maxChars = maxDistance * script.getAvgCharsPerWord() + maxDistance;
         return "[\\s\\S]{0,%d}".formatted(maxChars);
     }
 
@@ -247,14 +247,14 @@ public final class MultiLanguagePatternBuilder {
      * Convenience wrapper for callers that build the full CompileResponse
      * separately.
      */
-    public static String nearPattern(String termA, String termB, int n) {
-        return buildNear(termA, termB, n).pattern();
+    public static String nearPattern(String termA, String termB, int maxDistance) {
+        return buildNear(termA, termB, maxDistance).pattern();
     }
 
     /**
      * Returns only the FOLLOWEDBY pattern string (no metadata).
      */
-    public static String followedByPattern(String termA, String termB, int n) {
-        return buildFollowedBy(termA, termB, n).pattern();
+    public static String followedByPattern(String termA, String termB, int maxDistance) {
+        return buildFollowedBy(termA, termB, maxDistance).pattern();
     }
 }

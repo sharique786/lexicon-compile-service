@@ -1,9 +1,9 @@
 package com.db.macs3.ecomms.spectre.config;
 
 import com.db.macs3.ecomms.spectre.hyperscan.HyperscanCompiler;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;

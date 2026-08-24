@@ -1,0 +1,11 @@
+{
+  "request_id": "it-test-regex-0001",
+  "lexiconRuleName": "lexicon_it_test_regex",
+  "termType": "Regex",
+  "terms": [
+    { "termId": "regex::1", "termDescription": "(?:insider|trading)" },
+    { "termId": "regex::2", "termDescription": "\\binsider\\s+trading\\b" },
+    { "termId": "regex::3", "termDescription": "내부자" },
+    { "termId": "regex::4", "termDescription": "(?:unclosed" }
+  ]
+}

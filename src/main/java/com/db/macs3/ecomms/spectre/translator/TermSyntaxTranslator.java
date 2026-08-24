@@ -1,5 +1,6 @@
 package com.db.macs3.ecomms.spectre.translator;
 
+import com.db.macs3.ecomms.spectre.hyperscan.HyperscanCompiler;
 import com.ibm.icu.text.Normalizer2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,87 +8,135 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
- * Translates lexicon term descriptions into Hyperscan-compatible PCRE patterns.
+ * Translates lexicon term descriptions (operator language) into
+ * Hyperscan-compatible PCRE patterns.
  *
- * <h2>Supported operators (in precedence order — highest to lowest)</h2>
+ * <h2>Pipeline</h2>
+ * <pre>
+ * raw text → preprocess → Tokenizer → List&lt;Token&gt; → ExpressionParser → Ast (+ warnings)
+ *          → per side (required; excluded, if AND NOT):
+ *              PatternComplexityAnalyzer over budget?
+ *                → yes: PatternDecomposer → independent leaf patterns, EACH real-Hyperscan-validated (+ warning)
+ *                → no:  PatternCodeGenerator → one pattern → real-Hyperscan-validated
+ *                         → Hyperscan ALSO rejects it as "too large"? → fall back to decomposition anyway
+ *                         → Hyperscan rejects it for any OTHER reason?  → translation fails (real error surfaced)
+ * </pre>
+ *
+ * <p>Each stage is a separate, independently-testable class.
+ *
+ * <h2>Decomposition triggers on EITHER signal — heuristic OR real Hyperscan rejection</h2>
+ * <p>{@link PatternComplexityAnalyzer} is a heuristic (see its class Javadoc)
+ * calibrated on two known real outcomes — it can under-estimate a structure
+ * it has not seen before. This class therefore does not treat "under budget"
+ * as the final word: a side that passes the heuristic still gets its
+ * generated pattern checked against the REAL Hyperscan compiler
+ * ({@link HyperscanCompiler#validate}) before being accepted. If Hyperscan
+ * itself rejects that pattern with a size-related error ("Pattern is too
+ * large" / "too large" — see {@link #isPatternTooLargeError}), this class
+ * falls back to decomposition exactly as it would have if the heuristic had
+ * caught it up front — the two triggers converge on the same recovery path.
+ * A Hyperscan rejection for any OTHER reason (a genuinely malformed pattern)
+ * is NOT treated as a decomposition trigger — decomposition cannot fix a
+ * broken pattern, only an oversized one, so that case fails translation with
+ * Hyperscan's real error surfaced directly.
+ *
+ * <p>Because every pattern this class returns (single or decomposed) has
+ * therefore ALREADY been validated against real Hyperscan, {@code
+ * LexiconCompileService} and {@code LexiconCompileBundleService} no longer
+ * need to independently re-validate a translator-produced pattern — they
+ * trust {@link TranslationResult.Success} as already Hyperscan-clean. (The
+ * separate {@code Regex} term type — raw, caller-supplied PCRE that never
+ * passes through this translator at all — is unaffected and still validated
+ * directly where it is compiled; decomposition fundamentally cannot apply to
+ * it either, since it has no parsed AST/proximity structure to decompose.)
+ *
+ * <h2>Operator precedence (grammar — see {@link ExpressionParser})</h2>
  * <table>
- * <tr><td>Atom</td><td>word, "quoted phrase", emoji, non-english, wildcard, parens</td></tr>
- * <tr><td>NEAR{n}</td><td>bidirectional proximity — A within n words of B</td></tr>
- * <tr><td>FOLLOWEDBY{n}</td><td>directional proximity — A then B within n words</td></tr>
- * <tr><td>NOT</td><td>negation — text must NOT contain A</td></tr>
- * <tr><td>AND</td><td>conjunction — text must contain both A and B</td></tr>
- * <tr><td>AND NOT</td><td>exclusion — text must contain A but not B</td></tr>
- * <tr><td>OR</td><td>alternation — text contains A or B (lowest precedence)</td></tr>
+ * <tr><td>Atom</td><td>word, "quoted phrase", emoji, non-english, wildcard, parens (highest)</td></tr>
+ * <tr><td>NEAR{n} / FOLLOWEDBY{n}</td><td>proximity, bounded gap — chaining without explicit
+ *     parentheses is accepted (warned, not rejected) — see {@link ExpressionParser}</td></tr>
+ * <tr><td>AND</td><td>co-occurrence — all operands present, any order, NO distance limit</td></tr>
+ * <tr><td>AND NOT</td><td>the required side must be present; the excluded side(s) must be
+ *     absent from the whole message — see the two-pattern contract below.
+ *     There is no independent NOT operator: {@code NOT} is only ever valid
+ *     immediately after {@code AND}.</td></tr>
+ * <tr><td>OR</td><td>alternation (lowest)</td></tr>
  * </table>
+ *
+ * <h2>AND: same technique as NEAR/FOLLOWEDBY, just unbounded</h2>
+ * <p>{@code price AND rigging} compiles to a single, fully correct Hyperscan
+ * pattern using the same bidirectional-alternation technique NEAR uses for a
+ * bounded gap, with the gap made unbounded — see {@link PatternCodeGenerator}
+ * class Javadoc. No lookahead, no post-filter, no scan-time cooperation
+ * needed from the caller.
+ *
+ * <h2>AND NOT: a two-pattern contract, not a single regex</h2>
+ * <p>Hyperscan cannot express "absent from the whole message" — that is
+ * exactly what negative lookaround is for, and Hyperscan supports none.
+ * {@code A AND NOT B} therefore returns TWO independently Hyperscan-valid
+ * patterns: {@link TranslationResult.Success#hsPattern()} (A) and
+ * {@link TranslationResult.Success#exclusionPattern()} (B). The term is
+ * correctly matched only when {@code hsPattern} matches the message AND
+ * {@code exclusionPattern} does not — see {@link TranslationResult} class
+ * Javadoc for the exact contract.
  *
  * <h2>Pattern examples</h2>
  * <pre>
- * (manipulate*) NEAR{5} ((price) OR (spread) OR (stock))   [Latin — word-based gap]
- *   → (?:manipulate\S*(?:\s+\S+){0,5}\s+(?:price|spread|stock)
- *       |(?:price|spread|stock)(?:\s+\S+){0,5}\s+manipulate\S*)
+ * (crap OR bad) NEAR{3} (bonus OR comp)
+ *   → (?:(?:crap|bad)(?:\s+\S+){0,3}\s+(?:bonus|comp)|(?:bonus|comp)(?:\s+\S+){0,3}\s+(?:crap|bad))
  *
- * don't FOLLOWEDBY{3} compliance                            [Latin — word-based gap]
- *   → don't(?:\s+\S+){0,3}\s+compliance
+ * (F) FOLLOWEDBY{1} (((me) OR (cking)))
+ *   → F(?:\s+\S+){0,1}\s+(?:me|cking)
  *
- * 내부자 NEAR{3} 거래    (Korean insider NEAR trading)      [Hangul — char-based gap]
- *   → (?:내부자[\s\S]{0,18}거래|거래[\s\S]{0,18}내부자)     [N = 3×5+3 = 18]
- *   Matches both: "내부자 거래" (with space) and "내부자거래" (no space, informal)
+ * price AND rigging
+ *   → hsPattern: (?:price[\s\S]*rigging|rigging[\s\S]*price)
+ *   Matches "...price change and market rigging is going on" (both present,
+ *   any order, any distance apart). Does NOT match "There's price change"
+ *   alone (rigging never appears).
  *
- * 内幕 NEAR{2} 交易      (Chinese insider NEAR trading)    [CJK — char-based gap]
- *   → (?:内幕[\s\S]{0,8}交易|交易[\s\S]{0,8}内幕)           [N = 2×3+2 = 8]
+ * ((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)
+ *   → hsPattern:               (?:fix|rig)(?:\s+\S+){0,2}\s+the rate
+ *     requiresExclusionCheck:  true
+ *     exclusionPattern:        (?:fed rate move)
+ *   The caller must check BOTH: matched iff hsPattern matches AND
+ *   exclusionPattern does not — see README "AND NOT: the two-pattern contract".
  *
- * السعر NEAR{2} التلاعب (Arabic price NEAR manipulation)  [Arabic — word-based+UCP]
- *   → (?:السعر(?:\s+\S+){0,2}\s+التلاعب|التلاعب(?:\s+\S+){0,2}\s+السعر)
+ * ((he?d kill) OR (she?d kill))
+ *   → (?:he\?d kill|she\?d kill)     — '?' is always literal
  *
- * price AND spread AND NOT noise
- *   → (?=.*price)(?=.*spread)(?!.*noise).*  (with DOTALL flag)
+ * (check her out) OR (chimp*)
+ *   → (?:check her out|chimp\S*)
  *
- * 비밀 OR 내부자 거래
- *   → (?:비밀|내부자 거래)  (with UTF8+UCP flags)
+ * 내부자 NEAR{3} 거래    (Korean insider NEAR trading)
+ *   → (?:내부자[\s\S]{0,18}거래|거래[\s\S]{0,18}내부자)
  *
  * 💰 OR 🤫
  *   → (?:\x{1F4B0}|\x{1F92B})  (with UTF8+UCP flags)
  * </pre>
- *
- * <h2>Special character handling</h2>
- * <ul>
- *   <li>Apostrophes ({@code '}) — literal, no escaping needed in PCRE</li>
- *   <li>Exclamation marks ({@code !}) — literal in PCRE; also accepted as NOT prefix</li>
- *   <li>Wildcards ({@code *}) — converted to {@code \S*} (any non-whitespace sequence)</li>
- *   <li>Emojis — converted to {@code \x{NNNN}} Unicode codepoint notation</li>
- *   <li>Non-ASCII — preserved literal with HS_FLAG_UTF8|UCP</li>
- *   <li>Leet-speak ({@code 1ns1d3r}) — treated as literal pattern (intentional)</li>
- * </ul>
  */
 @Component
 public final class TermSyntaxTranslator {
 
     private static final Logger log = LoggerFactory.getLogger(TermSyntaxTranslator.class);
 
-    /** Detects NEAR{n} operator anywhere in a substring. */
-    private static final Pattern NEAR_OP = Pattern.compile(
-            "NEAR\\{(\\d+)\\}", Pattern.CASE_INSENSITIVE);
+    private final HyperscanCompiler compiler;
 
-    /** Detects FOLLOWEDBY{n} operator anywhere in a substring. */
-    private static final Pattern FOLLOWEDBY_OP = Pattern.compile(
-            "FOLLOWEDBY\\{(\\d+)\\}", Pattern.CASE_INSENSITIVE);
-
-    /** PCRE metacharacters (minus * and ? which get wildcard treatment). */
-    private static final String PCRE_META = "\\.^$|+()[]{}<>";
-
-    // ── Public API ────────────────────────────────────────────────────────────
+    public TermSyntaxTranslator(HyperscanCompiler compiler) {
+        this.compiler = compiler;
+    }
 
     /**
-     * Translates one lexicon term description into a Hyperscan PCRE pattern.
+     * Translates one lexicon term description into a Hyperscan PCRE pattern
+     * (or, for a side that needed decomposition, a set of independent
+     * Hyperscan-validated patterns — see class Javadoc). Every pattern in a
+     * successful result has already been checked against the real Hyperscan
+     * compiler.
      *
      * @param rawExpression the "Term Description" from the CSV/JSON input
-     * @return {@link TranslationResult.Success} with pattern and flags, or
-     *         {@link TranslationResult.Error} with error message
+     * @return {@link TranslationResult.Success}, or
+     *         {@link TranslationResult.Error} with a specific, actionable error message
      */
     public TranslationResult translate(String rawExpression) {
         if (rawExpression == null || rawExpression.isBlank()) {
@@ -97,13 +146,65 @@ public final class TermSyntaxTranslator {
             String preprocessed = preprocess(rawExpression);
             log.debug("Translating: '{}'", preprocessed);
 
-            ParseContext ctx    = new ParseContext();
-            String       pattern = parseExpression(preprocessed, ctx);
-            int          flags   = ctx.computeFlags();
+            List<Token> tokens = Tokenizer.tokenize(preprocessed);
+            ExpressionParser.ParseResult parseResult = ExpressionParser.parse(tokens, preprocessed);
+            Ast ast = parseResult.ast();
+            List<String> warnings = new ArrayList<>(parseResult.warnings());
 
-            log.debug("Translated: '{}' → pattern='{}' flags={}", rawExpression, pattern, flags);
-            return TranslationResult.success(pattern, flags,
-                    ctx.requiresAndPostFilter(), ctx.getAndOperands());
+            ParseContext ctx = new ParseContext();
+
+            if (ast instanceof Ast.AndNot andNot) {
+                // AND NOT is only handled at the ROOT of the term's AST — see
+                // rejectNestedAndNot() Javadoc for why a SECOND, nested AND NOT within
+                // either side (e.g. "A AND NOT (B AND NOT C)" or "(D AND NOT E) AND NOT F")
+                // is rejected here rather than silently mishandled the same way a
+                // non-root AND NOT elsewhere in the tree would be.
+                rejectNestedAndNot(andNot.required(), preprocessed);
+                for (Ast excludedOperand : andNot.excluded()) {
+                    rejectNestedAndNot(excludedOperand, preprocessed);
+                }
+
+                // Multiple "AND NOT X AND NOT Y" excluded operands are combined via OR into
+                // one Ast, exactly as PatternCodeGenerator.generateAndNot() already does inline
+                // for the non-decomposed case — see PatternDecomposer/generateAndNot comparison.
+                Ast excludedCombined = new Ast.Or(andNot.excluded());
+
+                // GENERATE both sides' candidate patterns before validating EITHER — see class
+                // Javadoc "the flag-accuracy reason this is two phases, not one": a side validated
+                // before the OTHER side has even been generated could be checked against a flags
+                // value missing UTF8/UCP only the other side's content would have required.
+                Candidate requiredCandidate = generateSide(andNot.required(), ctx);
+                Candidate excludedCandidate = generateSide(excludedCombined, ctx);
+                int flags = ctx.computeFlags();
+
+                SideResult required = validateSide(requiredCandidate, ctx, flags, preprocessed, "required", warnings);
+                SideResult excluded = validateSide(excludedCandidate, ctx, flags, preprocessed, "excluded (AND NOT)", warnings);
+
+                log.debug("Translated (AND NOT): '{}' -> required={} excluded={} flags={} warnings={}",
+                        rawExpression, required, excluded, flags, warnings.size());
+
+                return new TranslationResult.Success(
+                        required.patterns(), flags, true, excluded.patterns(),
+                        List.copyOf(warnings));
+            }
+
+            // The root is NOT AndNot — per rejectNestedAndNot() Javadoc, an AndNot node
+            // ANYWHERE in this tree would otherwise be silently mishandled: PatternCodeGenerator
+            // still has a case for it (so no exception is thrown by code generation itself), but
+            // its only effect is a side-channel ctx.setExclusionPattern() call whose result is
+            // then discarded entirely, since this branch always sets requiresExclusionCheck=false.
+            rejectNestedAndNot(ast, preprocessed);
+
+            Candidate candidate = generateSide(ast, ctx);
+            int flags = ctx.computeFlags();
+            SideResult required = validateSide(candidate, ctx, flags, preprocessed, "term", warnings);
+
+            log.debug("Translated: '{}' -> {} flags={} warnings={}",
+                    rawExpression, required, flags, warnings.size());
+
+            return new TranslationResult.Success(
+                    required.patterns(), flags, false, null,
+                    List.copyOf(warnings));
 
         } catch (TranslationException te) {
             log.warn("Translation failed for '{}': {}", rawExpression, te.getMessage());
@@ -114,697 +215,301 @@ public final class TermSyntaxTranslator {
         }
     }
 
+    /**
+     * Confirmed bug this method fixes: AND NOT is grammatically legal
+     * anywhere a parenthesised group is legal — {@code parseParenGroup()}
+     * recurses all the way back to the top of the grammar
+     * ({@code parseOr()}), so a term like
+     * {@code "(insider AND NOT compliance) NEAR{5} trading"} parses
+     * successfully into an {@code Ast.Near} whose LEFT operand is an
+     * {@code Ast.AndNot} node — {@code AndNot} nested inside {@code Near}.
+     *
+     * <p>{@code translate()} only ever special-cases AND NOT when it is the
+     * ROOT of the whole term's AST (see the {@code ast instanceof Ast.AndNot}
+     * check above). For the term above, the root is {@code Ast.Near}, not
+     * {@code Ast.AndNot}, so translation takes the ordinary single-pattern
+     * path — which does NOT throw or fail. {@code PatternCodeGenerator} has
+     * a real {@code case Ast.AndNot} arm ({@code generateAndNot()}), so
+     * generation completes without error; but that method's only visible
+     * effect is a side-channel {@code ctx.setExclusionPattern(...)} call
+     * that this path's caller never reads, since it unconditionally
+     * constructs the result with {@code requiresExclusionCheck=false}. The
+     * net effect, verified directly: the term above compiled to a PASS
+     * result equivalent to plain {@code "insider NEAR{5} trading"} — the
+     * {@code "AND NOT compliance"} constraint silently vanished, with no
+     * error, no warning, and a PASS status. A message containing
+     * "insider trading" would incorrectly match even when "compliance" was
+     * also present, exactly the case the term was written to exclude.
+     *
+     * <p>This is walked and rejected explicitly, rather than left to whatever
+     * {@code PatternCodeGenerator} happens to do with an unexpected node
+     * shape, for both directions this check runs in: (1) when the whole
+     * term's root is NOT {@code Ast.AndNot}, no {@code Ast.AndNot} may
+     * appear ANYWHERE in the tree; (2) when the root IS {@code Ast.AndNot},
+     * neither its required side nor any of its excluded operands may
+     * THEMSELVES contain a further nested {@code Ast.AndNot} — chained
+     * exclusions like {@code "A AND NOT B AND NOT C"} are already handled
+     * correctly as multiple excluded OPERANDS of one {@code Ast.AndNot} node
+     * (see {@code ExpressionParser.parseAndNot()}), not as nesting, so they
+     * are unaffected by this check; only a genuinely nested second AND NOT
+     * (e.g. {@code "A AND NOT (B AND NOT C)"}) is rejected.
+     *
+     * <p>Rejecting cleanly was chosen over attempting to support this
+     * automatically (e.g. by hoisting a nested exclusion up to the whole
+     * term's top level) because hoisting changes what the term actually
+     * means — a caller who wrote the exclusion scoped to one operand of a
+     * NEAR would silently get a term-wide exclusion instead, which is a
+     * different, unrequested semantic change, not a bug fix. A clear
+     * rejection lets the term's author rewrite it with AND NOT at the
+     * top level explicitly, matching what they intended.
+     *
+     * @throws TranslationException naming the specific unsupported nesting, if found
+     */
+    private void rejectNestedAndNot(Ast node, String originalTerm) {
+        if (node instanceof Ast.AndNot) {
+            throw new TranslationException(
+                    "AND NOT may only appear at the top level of a term, combined with the whole "
+                    + "term via OR/AND at most — it cannot be nested inside NEAR, FOLLOWEDBY, AND, "
+                    + "OR, or another AND NOT (including inside parentheses) in term: '" + originalTerm
+                    + "'. Rewrite this term with AND NOT at the outermost level instead — e.g. "
+                    + "replace '(A AND NOT B) NEAR{n} C' with the equivalent top-level form "
+                    + "'(A NEAR{n} C) AND NOT B' if the exclusion is meant to apply to the whole term.");
+        }
+        switch (node) {
+            case Ast.Or or -> or.operands().forEach(child -> rejectNestedAndNot(child, originalTerm));
+            case Ast.And and -> and.operands().forEach(child -> rejectNestedAndNot(child, originalTerm));
+            case Ast.Near near -> {
+                rejectNestedAndNot(near.left(), originalTerm);
+                rejectNestedAndNot(near.right(), originalTerm);
+            }
+            case Ast.FollowedBy fb -> {
+                rejectNestedAndNot(fb.left(), originalTerm);
+                rejectNestedAndNot(fb.right(), originalTerm);
+            }
+            case Ast.AndNot ignored -> throw new IllegalStateException("unreachable — handled above");
+            case Ast.Word ignored -> { /* leaf: no children to check */ }
+            case Ast.Phrase ignored -> { /* leaf: no children to check */ }
+            case Ast.QuotedPhrase ignored -> { /* leaf: no children to check */ }
+        }
+    }
+
+    // ── Per-side translation: generate (Phase 1), then validate (Phase 2) ──────
+
+    /**
+     * One side's translation outcome — always a list: exactly one entry for
+     * a side that compiled as a single pattern, two or more when it was
+     * decomposed. See {@link TranslationResult} class Javadoc for why there
+     * is no separate boolean "was this decomposed" flag any more — the
+     * caller just checks {@code patterns.size()}.
+     */
+    private record SideResult(List<String> patterns) {
+        boolean isDecomposed() { return patterns.size() > 1; }
+
+        @Override public String toString() {
+            return isDecomposed() ? "decomposed(" + patterns.size() + " leaves)" : "'" + patterns.get(0) + "'";
+        }
+    }
+
+    /**
+     * Phase-1 (generation-only, no Hyperscan calls) outcome for one side.
+     * Exactly one of {@code singlePattern} / {@code preDecomposedLeaves} is set:
+     * the heuristic already flagged this side as over budget (pre-decomposed,
+     * every leaf already generated), or it did not (single pattern generated,
+     * still needing Phase-2 validation before being trusted).
+     */
+    private record Candidate(Ast sideAst, String singlePattern, List<String> preDecomposedLeaves) {
+        boolean isPreDecomposed() { return preDecomposedLeaves != null; }
+    }
+
+    /**
+     * Phase 1: generates this side's pattern(s) — WITHOUT calling Hyperscan —
+     * so that {@code ctx}'s UTF8/UCP flag needs are fully populated from
+     * EVERY side of the term before {@link ParseContext#computeFlags} is
+     * called once, term-wide (see call site in {@link #translate}). This is
+     * what keeps Phase 2's validation flags accurate even when, say, only
+     * an AND NOT term's EXCLUDED side contains the non-ASCII content that
+     * determines whether UTF8/UCP are needed — the REQUIRED side must still
+     * be validated with those flags, not with whatever was known before the
+     * excluded side was even looked at.
+     */
+    private Candidate generateSide(Ast sideAst, ParseContext ctx) {
+        if (PatternComplexityAnalyzer.isOverBudget(sideAst)) {
+            List<Ast> leaves = PatternDecomposer.collectLeaves(sideAst);
+            List<String> leafPatterns = new ArrayList<>(leaves.size());
+            for (Ast leaf : leaves) {
+                leafPatterns.add(PatternCodeGenerator.generate(leaf, ctx));
+            }
+            return new Candidate(sideAst, null, leafPatterns);
+        }
+        String pattern = PatternCodeGenerator.generate(sideAst, ctx);
+        return new Candidate(sideAst, pattern, null);
+    }
+
+    /**
+     * Phase 2: validates a Phase-1 {@link Candidate} against the real
+     * Hyperscan compiler, using the term's final, complete flags. See class
+     * Javadoc for the two decomposition triggers this implements: the
+     * heuristic firing in Phase 1 ({@code candidate.isPreDecomposed()}), or
+     * real Hyperscan rejecting an under-budget single pattern as too large
+     * anyway (handled here, falling back to decomposition on the same leaves
+     * {@link PatternDecomposer} would have produced up front).
+     *
+     * @param candidate    this side's Phase-1 generation outcome
+     * @param ctx          shared {@link ParseContext} — used here only to re-derive
+     *                     leaves' patterns if a late decomposition is triggered;
+     *                     flags are NOT recomputed from it (the caller's {@code flags}
+     *                     parameter, computed once after ALL sides were generated, is final)
+     * @param flags        the term's final Hyperscan flag bitmask (computed once,
+     *                     after every side's Phase-1 generation — see {@link #translate})
+     * @param originalTerm the original term text, for error/warning messages
+     * @param sideLabel    "term", "required", or "excluded (AND NOT)" — for error/warning messages
+     * @param warnings     mutable list this method appends to when decomposition is applied
+     */
+    private SideResult validateSide(Candidate candidate, ParseContext ctx, int flags, String originalTerm,
+                                     String sideLabel, List<String> warnings) {
+        if (candidate.isPreDecomposed()) {
+            log.debug("'{}' side of '{}' was over budget by heuristic (score {}) — validating its "
+                            + "{} pre-generated leaf pattern(s)",
+                    sideLabel, originalTerm, PatternComplexityAnalyzer.estimate(candidate.sideAst()),
+                    candidate.preDecomposedLeaves().size());
+            return validateDecomposedLeaves(candidate.sideAst(), candidate.preDecomposedLeaves(), flags,
+                    originalTerm, sideLabel, warnings);
+        }
+
+        String pattern = candidate.singlePattern();
+        HyperscanCompiler.ValidationResult validation = compiler.validate(pattern, flags);
+        if (validation.isPass()) {
+            return new SideResult(List.of(pattern));
+        }
+
+        if (!isPatternTooLargeError(validation.errorMessage())) {
+            // A genuinely malformed pattern -- decomposition cannot fix this, only
+            // hide it behind a confusing partial result. Surface Hyperscan's real error.
+            throw new TranslationException(
+                    "This term's " + sideLabel + " expression translated to a pattern Hyperscan rejected"
+                    + " (not a size issue — decomposition would not help): " + validation.errorMessage()
+                    + " In term: '" + originalTerm + "'.");
+        }
+
+        log.info("'{}' side of '{}' passed the complexity heuristic (score {}, budget {}) but was REJECTED"
+                        + " by real Hyperscan as too large ({}) — falling back to decomposition",
+                sideLabel, originalTerm, PatternComplexityAnalyzer.estimate(candidate.sideAst()),
+                PatternComplexityAnalyzer.COMPLEXITY_BUDGET, validation.errorMessage());
+
+        // The leaves here are subtrees of sideAst, already visited once during this same
+        // side's single-pattern generation above — ctx (and therefore `flags`) already
+        // reflects everything they need; regenerating their pattern strings is cheap and
+        // does not require recomputing flags.
+        List<Ast> leaves = PatternDecomposer.collectLeaves(candidate.sideAst());
+        List<String> leafPatterns = new ArrayList<>(leaves.size());
+        for (Ast leaf : leaves) {
+            leafPatterns.add(PatternCodeGenerator.generate(leaf, ctx));
+        }
+        return validateDecomposedLeaves(candidate.sideAst(), leafPatterns, flags, originalTerm, sideLabel, warnings);
+    }
+
+    /**
+     * True when a Hyperscan validation failure message indicates the pattern
+     * was rejected for being too large/complex to compile — as opposed to
+     * being rejected for a genuine syntax/semantic problem, which
+     * decomposition cannot fix. Hyperscan's own wording for this case is
+     * "Pattern is too large" (propagated verbatim by
+     * {@code HyperscanCompiler.buildErrorMessage} into
+     * {@link HyperscanCompiler.ValidationResult#errorMessage()}), so a
+     * simple case-insensitive substring check is robust without being so
+     * broad it would misfire on an unrelated error.
+     */
+    private static boolean isPatternTooLargeError(String errorMessage) {
+        return errorMessage != null && errorMessage.toLowerCase(java.util.Locale.ROOT).contains("too large");
+    }
+
+    /**
+     * Validates every already-generated leaf pattern against real Hyperscan
+     * (using the term's final flags), records the precision-trade-off
+     * warning on success, and returns the decomposed {@link SideResult}.
+     *
+     * @throws TranslationException if there are fewer than 2 leaves (nothing
+     *                               to decompose — the side is already maximally
+     *                               flat and still over budget/rejected), or if
+     *                               any individual leaf is ALSO rejected by real
+     *                               Hyperscan on its own (decomposition cannot
+     *                               help there; the leaf itself needs simplifying
+     *                               by the author)
+     */
+    private SideResult validateDecomposedLeaves(Ast sideAst, List<String> leafPatterns, int flags,
+                                                 String originalTerm, String sideLabel, List<String> warnings) {
+        int wholeScore = PatternComplexityAnalyzer.estimate(sideAst);
+
+        if (leafPatterns.size() < 2) {
+            throw new TranslationException(
+                    "This term's " + sideLabel + " expression is too structurally complex for Hyperscan to"
+                    + " compile as a single pattern (estimated complexity " + wholeScore + ", budget "
+                    + PatternComplexityAnalyzer.COMPLEXITY_BUDGET + ") in term: '" + originalTerm + "',"
+                    + " and has no NEAR/FOLLOWEDBY structure to decompose — it is a single flat"
+                    + " expression (e.g. one large OR/AND group), so splitting it into independent"
+                    + " parts would not reduce its own complexity. To fix: reduce the number of"
+                    + " OR-alternatives, reduce wildcard usage, or split this into multiple simpler"
+                    + " lexicon terms.");
+        }
+
+        for (String leafPattern : leafPatterns) {
+            HyperscanCompiler.ValidationResult leafValidation = compiler.validate(leafPattern, flags);
+            if (!leafValidation.isPass()) {
+                throw new TranslationException(
+                        "This term's " + sideLabel + " expression (estimated complexity " + wholeScore
+                        + ", budget " + PatternComplexityAnalyzer.COMPLEXITY_BUDGET + ") was decomposed into "
+                        + leafPatterns.size() + " independent parts to avoid \"Pattern is too large\", but one"
+                        + " part ('" + leafPattern + "') was STILL rejected by Hyperscan: "
+                        + leafValidation.errorMessage() + " — decomposition cannot help here, since that part"
+                        + " has no further NEAR/FOLLOWEDBY structure of its own to split. In term: '"
+                        + originalTerm + "'. To fix: reduce the number of OR-alternatives or wildcard usage"
+                        + " within that specific part.");
+            }
+        }
+
+        warnings.add(
+                "This term's " + sideLabel + " expression (estimated complexity " + wholeScore + ", budget "
+                + PatternComplexityAnalyzer.COMPLEXITY_BUDGET + ") was too structurally complex for Hyperscan"
+                + " to compile as one pattern, and was DECOMPOSED into " + leafPatterns.size()
+                + " independent parts (each individually Hyperscan-validated) — see"
+                + ("excluded (AND NOT)".equals(sideLabel) ? " exclusionPattern" : " translatedPattern")
+                + " in the response. IMPORTANT — this changes the term's matching semantics: decomposition"
+                + " discards the original NEAR/FOLLOWEDBY proximity and ordering constraints entirely. The"
+                + " decomposed parts are combined with a boolean AND (natively via Hyperscan's logical"
+                + " combination for /compile/bundle, or by the caller for /compile and /compile/csv) and"
+                + " match only when ALL parts are found ANYWHERE in the message, in ANY order, at ANY"
+                + " distance apart — NOT in the specific order or proximity the original term expressed."
+                + " Term: '" + originalTerm + "'.");
+
+        return new SideResult(List.copyOf(leafPatterns));
+    }
+
     // ── Pre-processing ────────────────────────────────────────────────────────
 
     /**
-     * Normalises the raw expression before parsing:
+     * Normalises the raw expression before tokenizing:
      * <ol>
      *   <li>Trim whitespace</li>
      *   <li>Unescape CSV double-quote encoding: {@code ""} → {@code "}</li>
      *   <li>Unicode NFC normalisation (ICU4J) for consistent multi-language handling</li>
      * </ol>
      *
-     * <p>NOTE: Outer {@code "..."} wrapping is intentionally NOT stripped here.
-     * {@link #translateLeaf} detects a quoted phrase (starts and ends with {@code "})
-     * and runs {@link #escapeSpecialChars} on the inner content, correctly producing
-     * e.g. {@code \(net\)} for the input {@code "(net)"}.
-     * Stripping here would expose bare {@code (net)} to {@link #isWrappedInParens},
-     * which would then silently remove the parentheses and return {@code net}.
+     * <p>Outer {@code "..."} wrapping is intentionally NOT stripped here —
+     * {@link Tokenizer} recognises a quoted phrase as its own token type,
+     * and {@link ExpressionParser}/{@link PatternCodeGenerator} handle its
+     * content as always-literal. Stripping quotes at this stage would expose
+     * their content to normal tokenization, silently losing the "always
+     * literal" guarantee quotes are supposed to provide.
      */
     private String preprocess(String raw) {
-        String s = raw.trim();
-        // CSV double-quote escaping: "" → temporary marker → "
-        // This handles the RFC 4180 CSV format where "" represents a single "
-        s = s.replace("\"\"", "\u0000DQ\u0000");
-        s = s.replace("\u0000DQ\u0000", "\"");
-        // Unicode NFC normalisation for Arabic, Hebrew, Korean, CJK consistency
+        String normalizedText = raw.trim();
+        normalizedText = normalizedText.replace("\"\"", "\u0000DQ\u0000");
+        normalizedText = normalizedText.replace("\u0000DQ\u0000", "\"");
         try {
-            s = Normalizer2.getNFCInstance().normalize(s);
+            normalizedText = Normalizer2.getNFCInstance().normalize(normalizedText);
         } catch (Exception e) {
             log.debug("ICU4J normalisation skipped: {}", e.getMessage());
         }
-        return s;
-    }
-
-    // ── Core recursive-descent parser ─────────────────────────────────────────
-
-    /**
-     * Parses a lexicon expression into a PCRE pattern fragment.
-     *
-     * <p>Operator precedence (parsed lowest first, becomes outermost structure):
-     * <ol>
-     *   <li>OR (lowest)</li>
-     *   <li>AND NOT</li>
-     *   <li>AND</li>
-     *   <li>NEAR{n} / FOLLOWEDBY{n}</li>
-     *   <li>NOT / ! (prefix)</li>
-     *   <li>Atom: parentheses, quoted phrase, word (highest)</li>
-     * </ol>
-     */
-    private String parseExpression(String expr, ParseContext ctx) {
-        expr = expr.trim();
-        if (expr.isEmpty()) {
-            return "";
-        }
-
-        // ── Strip outer parentheses if they wrap the ENTIRE expression ─────────
-        if (isWrappedInParens(expr)) {
-            return parseExpression(expr.substring(1, expr.length() - 1).trim(), ctx);
-        }
-
-        // ── Level 1: OR ───────────────────────────────────────────────────────
-        List<String> orParts = splitTopLevel(expr, "OR");
-        if (orParts.size() > 1) {
-            return translateOr(orParts, ctx);
-        }
-
-        // ── Level 2: AND NOT (check before AND to avoid partial match) ────────
-        Optional<String[]> andNotSplit = splitOnAndNot(expr);
-        if (andNotSplit.isPresent()) {
-            String[] parts = andNotSplit.get();
-            return translateAndNot(parts[0], parts[1], ctx);
-        }
-
-        // ── Level 3: AND ──────────────────────────────────────────────────────
-        List<String> andParts = splitTopLevel(expr, "AND");
-        if (andParts.size() > 1) {
-            return translateAnd(andParts, ctx);
-        }
-
-        // ── Level 4: NEAR{n} / FOLLOWEDBY{n} ─────────────────────────────────
-        Optional<ProximityMatch> prox = findTopLevelProximity(expr);
-        if (prox.isPresent()) {
-            return translateProximity(prox.get(), ctx);
-        }
-
-        // ── Level 5: NOT / ! prefix ───────────────────────────────────────────
-        String upperTrimmed = expr.toUpperCase();
-        if (upperTrimmed.startsWith("NOT ")) {
-            return translateNot(expr.substring(4).trim(), ctx);
-        }
-        if (expr.startsWith("!")) {
-            return translateNot(expr.substring(1).trim(), ctx);
-        }
-
-        // ── Level 6: Atom ─────────────────────────────────────────────────────
-        return translateLeaf(expr, ctx);
-    }
-
-    // ── Operator translators ──────────────────────────────────────────────────
-
-    /**
-     * OR → {@code (?:A|B|C)}
-     */
-    private String translateOr(List<String> parts, ParseContext ctx) {
-        List<String> patterns = new ArrayList<>(parts.size());
-        for (String part : parts) {
-            patterns.add(parseExpression(part.trim(), ctx));
-        }
-        return "(?:" + String.join("|", patterns) + ")";
-    }
-
-    /**
-     * AND → {@code (?:A|B|C)} (OR pre-scan pattern) with DOTALL flag.
-     *
-     * <p>Hyperscan does NOT support variable-length positive lookaheads {@code (?=...)}.
-     * The OR pattern is a valid Hyperscan pre-scan filter; {@code requiresAndPostFilter=true}
-     * signals the scan engine to verify ALL individual operands match the document.
-     * Each operand is stored in {@code andOperands} for the scan-time post-filter step.
-     */
-    private String translateAnd(List<String> parts, ParseContext ctx) {
-        ctx.setHasAndOp();
-        List<String> patterns = new ArrayList<>(parts.size());
-        for (String part : parts) {
-            String operandPat = parseExpression(part.trim(), ctx);
-            patterns.add(operandPat);
-            ctx.addAndOperand(operandPat);
-        }
-        // (?:A|B|C) — valid Hyperscan; scan engine post-filters to verify ALL match
-        return "(?:" + String.join("|", patterns) + ")";
-    }
-
-    /**
-     * AND NOT → returns the positive operand pattern with DOTALL flag.
-     *
-     * <p>Hyperscan does NOT support negative lookaheads {@code (?!...)}.
-     * The positive (AND) pattern is returned as the Hyperscan scan expression;
-     * {@code requiresAndPostFilter=true} signals the scan engine to additionally
-     * verify the NOT operand does NOT match (applied as a Java-side post-filter).
-     */
-    private String translateAndNot(String andPart, String notPart, ParseContext ctx) {
-        ctx.setHasAndOp();
-        String andPat = parseExpression(andPart.trim(), ctx);
-        ctx.addAndOperand(andPat);
-        // Parse (but do not include) the NOT operand — validates syntax and accumulates flags
-        parseExpression(notPart.trim(), ctx);
-        return andPat;
-    }
-
-    /**
-     * NOT / ! → returns the operand pattern with DOTALL flag.
-     *
-     * <p>Hyperscan does NOT support negative lookaheads {@code (?!...)}.
-     * The operand pattern is returned as the Hyperscan scan expression;
-     * {@code requiresAndPostFilter=true} signals the scan engine to invert
-     * the match result (a Hyperscan hit means the document should be EXCLUDED).
-     */
-    private String translateNot(String expr, ParseContext ctx) {
-        ctx.setHasAndOp();
-        // Return the operand pattern; scan engine inverts match (hit → NOT a compliance event)
-        return parseExpression(expr, ctx);
-    }
-
-    /**
-     * NEAR{n}       → language-aware bidirectional proximity pattern.
-     * FOLLOWEDBY{n} → language-aware directional proximity pattern.
-     *
-     * <h3>Gap strategy (delegated to {@link MultiLanguagePatternBuilder})</h3>
-     * <ul>
-     *   <li><b>Word-based</b> {@code (?:\\s+\\S+){0,n}\\s+} — Latin, Arabic, Hebrew
-     *       (space-delimited scripts). Arabic/Hebrew also get UTF8+UCP so that
-     *       {@code \\S} matches their Unicode characters.</li>
-     *   <li><b>Char-based</b> {@code [\\s\\S]{0,N}} where N = n × avgCharsPerWord —
-     *       CJK (Chinese/Japanese), Korean (Hangul), Thai, and any mixed-script pair
-     *       containing a space-free script. Handles both spaced and non-spaced forms
-     *       (e.g. formal vs. informal Korean writing without spaces).</li>
-     * </ul>
-     *
-     * <h3>RTL note (Arabic / Hebrew)</h3>
-     * <p>Both scripts are stored in Unicode <em>logical</em> order (the typing/reading
-     * order). The regex engine operates on logical order, so FOLLOWEDBY(A, B)
-     * correctly matches when A precedes B in the stored byte sequence.
-     * A warning is logged for mixed RTL+LTR FOLLOWEDBY terms.
-     */
-    private String translateProximity(ProximityMatch prox, ParseContext ctx) {
-        String leftPat  = parseExpression(prox.left(),  ctx);
-        String rightPat = parseExpression(prox.right(), ctx);
-        int    n        = prox.distance();
-
-        // Mark proximity op → ParseContext.computeFlags() adds HS_FLAG_DOTALL
-        // so the gap can cross newlines in multi-line email / chat messages.
-        ctx.setHasProximityOp();
-
-        if (prox.bidirectional()) {
-            // NEAR{n}: A then B, OR B then A — language-aware gap
-            MultiLanguagePatternBuilder.BuildResult r =
-                    MultiLanguagePatternBuilder.buildNear(leftPat, rightPat, n);
-            propagateProximityFlags(r, ctx);
-            log.debug("NEAR{{}} built: script={} pattern={}", n, r.scriptType(), r.pattern());
-            return r.pattern();
-        } else {
-            // FOLLOWEDBY{n}: A then B only — language-aware gap, directional
-            MultiLanguagePatternBuilder.BuildResult r =
-                    MultiLanguagePatternBuilder.buildFollowedBy(leftPat, rightPat, n);
-            propagateProximityFlags(r, ctx);
-            if (r.hasWarning()) {
-                log.warn("FOLLOWEDBY mixed RTL+LTR in '{}{}{}{}{}': {}",
-                        prox.left(), " FOLLOWEDBY{", n, "} ", prox.right(), r.warning());
-            }
-            log.debug("FOLLOWEDBY{{}} built: script={} pattern={}", n, r.scriptType(), r.pattern());
-            return r.pattern();
-        }
-    }
-
-    /**
-     * Propagates script-derived flag recommendations from a
-     * {@link MultiLanguagePatternBuilder.BuildResult} into the {@link ParseContext}.
-     *
-     * <p>If the proximity script requires UTF8+UCP (Arabic, Hebrew, CJK, Korean,
-     * Thai, or any mixed combination involving those scripts) and those flags were
-     * not already accumulated by {@link #translateLeaf}, this call ensures they are
-     * included in the final {@link ParseContext#computeFlags()} bitmask.
-     *
-     * <p>Calling {@code setNeedsUtf8()} is idempotent — safe to call multiple times.
-     */
-    private static void propagateProximityFlags(
-            MultiLanguagePatternBuilder.BuildResult r, ParseContext ctx) {
-        if ((r.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
-            ctx.setNeedsUtf8();
-        }
-    }
-
-    // ── Leaf / atom translators ───────────────────────────────────────────────
-
-    /**
-     * Translates an atomic term (word, quoted phrase, emoji, non-English text).
-     *
-     * <p>Processing order:
-     * <ol>
-     *   <li>Quoted phrase: {@code "text"} → escape and preserve literal</li>
-     *   <li>Emoji characters → {@code \x{NNNN}} notation</li>
-     *   <li>Non-ASCII (non-emoji) → literal with UTF8 flag</li>
-     *   <li>Wildcard ({@code *}) → {@code \S*}</li>
-     *   <li>Plain word → PCRE-escape special characters</li>
-     * </ol>
-     */
-    private String translateLeaf(String term, ParseContext ctx) {
-        term = term.trim();
-
-        // ── Quoted phrase (checked FIRST — quotes protect any inner metacharacters) ──
-        // e.g. "(net)" → literal \(net\)    "[unclosed" → literal \[unclosed
-        if (term.startsWith("\"") && term.endsWith("\"") && term.length() > 1) {
-            String phrase = term.substring(1, term.length() - 1);
-            if (hasNonAscii(phrase)) {
-                ctx.setNeedsUtf8();
-            }
-            return escapeSpecialChars(phrase);
-        }
-
-        // ── User error: unclosed character class '[' without matching ']' ────────
-        // escapeSpecialChars would silently convert '[' → '\[' (a valid Hyperscan
-        // literal), masking the likely mistake. Surface it as a clear diagnostic.
-        // Note: this check runs AFTER the quoted-phrase branch so that
-        // "[unclosed" (with outer quotes) is correctly treated as a literal.
-        if (hasUnclosedCharClass(term)) {
-            throw new TranslationException(
-                    "Unclosed character class '[' in term: '" + term + "'."
-                    + " Either close it with ']' or wrap the term in quotes to"
-                    + " match it literally, e.g. \"[" + term.substring(1) + "\".");
-        }
-
-        // ── User error: NEAR{n} / FOLLOWEDBY{n} missing an operand ────────────────
-        // findTopLevelProximity() only recognises NEAR{n}/FOLLOWEDBY{n} when BOTH
-        // a left and a right operand are present (see its `!left.isEmpty() &&
-        // !right.isEmpty()` check). A term like "NEAR{5} (price)" (no left
-        // operand) or "(manipulate) NEAR{5}" (no right operand) is therefore
-        // never recognised as a proximity construct at all and falls all the way
-        // through to this leaf method — where escapeSpecialChars would silently
-        // turn it into a literal pattern matching the text "NEAR{5}" verbatim.
-        // That pattern would almost never match real communications, silently
-        // making the lexicon term a no-op that never raises an alert. As with
-        // hasUnclosedCharClass above, surface this as a clear diagnostic instead
-        // of masking it. Checked AFTER the quoted-phrase branch so a deliberately
-        // quoted term, e.g. "\"NEAR{5} as literal text\"", still matches literally.
-        Matcher leafNear = NEAR_OP.matcher(term);
-        if (leafNear.find()) {
-            throw new TranslationException(
-                    "NEAR{" + leafNear.group(1) + "} is missing a left and/or right operand in term: '"
-                    + term + "'. Expected format: 'word1 NEAR{n} word2'. To match this text"
-                    + " literally instead, wrap it in quotes, e.g. \"" + term + "\".");
-        }
-        Matcher leafFollowedBy = FOLLOWEDBY_OP.matcher(term);
-        if (leafFollowedBy.find()) {
-            throw new TranslationException(
-                    "FOLLOWEDBY{" + leafFollowedBy.group(1) + "} is missing a left and/or right operand in term: '"
-                    + term + "'. Expected format: 'word1 FOLLOWEDBY{n} word2'. To match this text"
-                    + " literally instead, wrap it in quotes, e.g. \"" + term + "\".");
-        }
-
-        // ── Non-ASCII detection (emoji + multilingual) ─────────────────────────
-        if (hasNonAscii(term)) {
-            ctx.setNeedsUtf8();
-        }
-
-        // ── Mixed emoji + text ────────────────────────────────────────────────
-        if (hasEmoji(term)) {
-            return convertMixedContent(term);
-        }
-
-        // ── Non-ASCII (non-emoji): Korean, Japanese, Chinese, Arabic, etc. ────
-        // Preserved as literal characters; UTF8+UCP flags enable matching.
-        if (hasNonAscii(term)) {
-            return escapeSpecialChars(term);
-        }
-
-        // ── Wildcard ──────────────────────────────────────────────────────────
-        if (term.contains("*")) {
-            return translateWildcard(term);
-        }
-
-        // ── Plain ASCII word / phrase ─────────────────────────────────────────
-        return escapeSpecialChars(term);
-    }
-
-    /**
-     * Translates a wildcard term.
-     *
-     * <ul>
-     *   <li>{@code word*}  → {@code word\S*}  (trailing wildcard)</li>
-     *   <li>{@code *word}  → {@code \S*word}  (leading wildcard)</li>
-     *   <li>{@code wo*d}   → {@code wo\S*d}   (embedded wildcard)</li>
-     *   <li>{@code *}      → {@code \S+}      (standalone wildcard)</li>
-     * </ul>
-     */
-    private String translateWildcard(String term) {
-        if (term.equals("*")) {
-            return "\\S+";
-        }
-        // Split on * and join parts with \S*
-        String[] parts = term.split("\\*", -1);
-        List<String> escaped = new ArrayList<>(parts.length);
-        for (String part : parts) {
-            escaped.add(escapeSpecialChars(part));
-        }
-        return String.join("\\S*", escaped);
-    }
-
-    /**
-     * Converts a term that may contain emojis mixed with other characters.
-     *
-     * <p>Emojis (supplementary Unicode planes ≥ U+1F300) are converted to
-     * {@code \x{NNNN}} Hyperscan codepoint notation. Other characters are
-     * handled as either non-ASCII literals or escaped ASCII.
-     */
-    private String convertMixedContent(String term) {
-        StringBuilder sb = new StringBuilder();
-        int i = 0;
-        while (i < term.length()) {
-            int cp = term.codePointAt(i);
-            int charCount = Character.charCount(cp);
-
-            if (isEmojiCodePoint(cp)) {
-                // Hyperscan \x{NNNN} notation for supplementary plane characters
-                sb.append(String.format("\\x{%X}", cp));
-            } else if (cp > 0x7F) {
-                // Non-ASCII, non-emoji: append as UTF-8 literal
-                sb.appendCodePoint(cp);
-            } else {
-                // ASCII: escape PCRE metacharacters
-                char c = (char) cp;
-                if (PCRE_META.indexOf(c) >= 0) {
-                    sb.append('\\');
-                }
-                sb.append(c);
-            }
-            i += charCount;
-        }
-        return sb.toString();
-    }
-
-    // ── Splitting utilities ───────────────────────────────────────────────────
-
-    /**
-     * Splits an expression on a top-level operator (depth=0, not inside quotes).
-     *
-     * <p>Case-insensitive. Operators must be surrounded by spaces: {@code A OR B}.
-     * When searching for {@code AND}, skips occurrences of {@code AND NOT}.
-     *
-     * @param expr     the expression to split
-     * @param operator the operator keyword (e.g. "OR", "AND")
-     * @return list of parts; single-element list if operator not found
-     */
-    List<String> splitTopLevel(String expr, String operator) {
-        String upperOp    = " " + operator.toUpperCase() + " ";
-        String upperAndNot = " AND NOT ";
-        List<String> parts = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        int depth   = 0;
-        boolean inQ = false;
-        int i       = 0;
-
-        while (i < expr.length()) {
-            char c = expr.charAt(i);
-            if (c == '"') {
-                inQ = !inQ;
-            }
-            if (!inQ) {
-                if (c == '(') {
-                    depth++;
-                } else if (c == ')') {
-                    depth--;
-                }
-            }
-
-            if (!inQ && depth == 0) {
-                String remaining = expr.substring(i).toUpperCase();
-
-                // When looking for AND, skip AND NOT occurrences
-                if ("AND".equalsIgnoreCase(operator) && remaining.startsWith(upperAndNot)) {
-                    current.append(expr, i, i + upperAndNot.length());
-                    i += upperAndNot.length();
-                    continue;
-                }
-
-                if (remaining.startsWith(upperOp)) {
-                    String part = current.toString().trim();
-                    if (!part.isEmpty()) {
-                        parts.add(part);
-                    }
-                    current = new StringBuilder();
-                    i += upperOp.length();
-                    continue;
-                }
-            }
-
-            current.append(c);
-            i++;
-        }
-
-        String last = current.toString().trim();
-        if (!last.isEmpty()) {
-            parts.add(last);
-        }
-
-        return parts.size() > 1 ? parts : List.of(expr);
-    }
-
-    /**
-     * Finds the first top-level {@code AND NOT} split.
-     *
-     * @return Optional containing [andPart, notPart], or empty if not found
-     */
-    Optional<String[]> splitOnAndNot(String expr) {
-        int depth   = 0;
-        boolean inQ = false;
-        String upper = expr.toUpperCase();
-
-        for (int i = 0; i < upper.length(); i++) {
-            char c = expr.charAt(i);
-            if (c == '"') {
-                inQ = !inQ;
-            }
-            if (!inQ) {
-                if (c == '(') {
-                    depth++;
-                } else if (c == ')') {
-                    depth--;
-                }
-            }
-            if (!inQ && depth == 0 && upper.startsWith(" AND NOT ", i)) {
-                String left  = expr.substring(0, i).trim();
-                String right = expr.substring(i + " AND NOT ".length()).trim();
-                if (!left.isEmpty() && !right.isEmpty()) {
-                    return Optional.of(new String[]{left, right});
-                }
-            }
-        }
-        return Optional.empty();
-    }
-
-    /**
-     * Finds the first top-level NEAR{n} or FOLLOWEDBY{n} operator.
-     *
-     * <p>Returns the left expression, right expression, distance, and directionality.
-     * Only matches at depth=0 (not inside parentheses or quotes).
-     */
-    Optional<ProximityMatch> findTopLevelProximity(String expr) {
-        int depth   = 0;
-        boolean inQ = false;
-
-        for (int i = 0; i < expr.length(); i++) {
-            char c = expr.charAt(i);
-            if (c == '"') {
-                inQ = !inQ;
-            }
-            if (!inQ) {
-                if (c == '(') {
-                    depth++;
-                } else if (c == ')') {
-                    depth--;
-                }
-            }
-            if (!inQ && depth == 0 && i > 0 && expr.charAt(i - 1) == ' ') {
-                // Try NEAR{n}
-                Matcher nearMatcher = NEAR_OP.matcher(expr.substring(i));
-                if (nearMatcher.lookingAt()) {
-                    int n     = Integer.parseInt(nearMatcher.group(1));
-                    String left  = expr.substring(0, i - 1).trim();
-                    String right = expr.substring(i + nearMatcher.end()).trim();
-                    if (!left.isEmpty() && !right.isEmpty()) {
-                        return Optional.of(new ProximityMatch(left, right, n, true));
-                    }
-                }
-                // Try FOLLOWEDBY{n}
-                Matcher fbMatcher = FOLLOWEDBY_OP.matcher(expr.substring(i));
-                if (fbMatcher.lookingAt()) {
-                    int n     = Integer.parseInt(fbMatcher.group(1));
-                    String left  = expr.substring(0, i - 1).trim();
-                    String right = expr.substring(i + fbMatcher.end()).trim();
-                    if (!left.isEmpty() && !right.isEmpty()) {
-                        return Optional.of(new ProximityMatch(left, right, n, false));
-                    }
-                }
-            }
-        }
-        return Optional.empty();
-    }
-
-    // ── Character-level helpers ───────────────────────────────────────────────
-
-    /**
-     * Returns true if the expression starts with {@code (} and that opening
-     * parenthesis has its matching {@code )} at the very end of the string.
-     * Respects quoted strings (ignores parens inside quotes).
-     */
-    boolean isWrappedInParens(String expr) {
-        if (expr.isEmpty() || expr.charAt(0) != '(') {
-            return false;
-        }
-        int depth   = 0;
-        boolean inQ = false;
-        for (int i = 0; i < expr.length(); i++) {
-            char c = expr.charAt(i);
-            if (c == '"') {
-                inQ = !inQ;
-            }
-            if (!inQ) {
-                if (c == '(') {
-                    depth++;
-                } else if (c == ')') {
-                    depth--;
-                    if (depth == 0) {
-                        return i == expr.length() - 1;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Escapes PCRE metacharacters in a literal string.
-     *
-     * <p>Metacharacters escaped: {@code \ . ^ $ | + ( ) [ ] { } < >}
-     * Non-ASCII characters are preserved as-is (safe with UTF8 flag).
-     * Apostrophe ({@code '}) and exclamation ({@code !}) are not PCRE metacharacters.
-     * Whitespace is preserved.
-     */
-    String escapeSpecialChars(String text) {
-        if (text == null || text.isEmpty()) {
-            return text;
-        }
-        StringBuilder sb = new StringBuilder(text.length() * 2);
-        int i = 0;
-        while (i < text.length()) {
-            int cp = text.codePointAt(i);
-            int charCount = Character.charCount(cp);
-
-            if (cp < 128) {
-                // ASCII: check for PCRE metacharacters
-                char c = (char) cp;
-                if (PCRE_META.indexOf(c) >= 0) {
-                    sb.append('\\');
-                }
-                sb.append(c);
-            } else {
-                // Non-ASCII: append as-is (UTF8 flag handles matching)
-                sb.appendCodePoint(cp);
-            }
-            i += charCount;
-        }
-        return sb.toString();
-    }
-
-    /**
-     * Returns true if the text contains any character outside ASCII (U+0000–U+007F).
-     */
-    boolean hasNonAscii(String text) {
-        if (text == null) {
-            return false;
-        }
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) > 0x7F) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Returns true if the text contains any emoji codepoint.
-     *
-     * <p>Covers all major emoji blocks including emoticons, symbols, transport,
-     * flags, and new supplemental symbol blocks.
-     */
-    boolean hasEmoji(String text) {
-        if (text == null) {
-            return false;
-        }
-        for (int i = 0; i < text.length(); ) {
-            int cp = text.codePointAt(i);
-            if (isEmojiCodePoint(cp)) {
-                return true;
-            }
-            i += Character.charCount(cp);
-        }
-        return false;
-    }
-
-    /**
-     * Returns true if the Unicode codepoint belongs to an emoji block.
-     *
-     * <p>Covers: Emoticons (1F600-1F64F), Misc Symbols and Pictographs (1F300-1F5FF),
-     * Transport (1F680-1F6FF), Supplemental Symbols (1F900-1F9FF, 1FA00-1FAFF),
-     * Misc Symbols BMP (2600-27BF), Flags (1F1E0-1F1FF),
-     * Variation Selectors (FE00-FE0F), Enclosed Alphanumeric (1F100-1F1FF).
-     */
-    boolean isEmojiCodePoint(int cp) {
-        return (cp >= 0x1F600 && cp <= 0x1F64F)  // Emoticons
-                || (cp >= 0x1F300 && cp <= 0x1F5FF)  // Misc Symbols & Pictographs
-                || (cp >= 0x1F680 && cp <= 0x1F6FF)  // Transport & Map
-                || (cp >= 0x1F700 && cp <= 0x1F77F)  // Alchemical Symbols
-                || (cp >= 0x1F780 && cp <= 0x1F7FF)  // Geometric Shapes Extended
-                || (cp >= 0x1F800 && cp <= 0x1F8FF)  // Supplemental Arrows-C
-                || (cp >= 0x1F900 && cp <= 0x1F9FF)  // Supplemental Symbols
-                || (cp >= 0x1FA00 && cp <= 0x1FA6F)  // Chess Symbols
-                || (cp >= 0x1FA70 && cp <= 0x1FAFF)  // Symbols & Pictographs Extended-A
-                || (cp >= 0x2600  && cp <= 0x26FF)   // Misc Symbols (BMP)
-                || (cp >= 0x2700  && cp <= 0x27BF)   // Dingbats
-                || (cp >= 0xFE00  && cp <= 0xFE0F)   // Variation Selectors
-                || (cp >= 0x1F1E0 && cp <= 0x1F1FF)  // Enclosed Alphanumeric Supplement (Flags)
-                || (cp >= 0x1F100 && cp <= 0x1F1FF); // Enclosed Alphanumeric
-    }
-
-    /**
-     * Returns {@code true} when {@code text} contains a {@code [} that is never
-     * closed by a matching {@code ]}, which would produce an unclosed character
-     * class — a guaranteed Hyperscan compile failure.
-     *
-     * <p>Accounts for backslash-escaped brackets so that {@code \[} (a valid
-     * escaped literal) is not mistaken for an opening character class.
-     *
-     * <p>Examples:
-     * <ul>
-     *   <li>{@code [unclosed}  → true  (opens, never closes)</li>
-     *   <li>{@code [a-z]}      → false (opens and closes)</li>
-     *   <li>{@code \[literal]} → false (escaped bracket, not a class opener)</li>
-     *   <li>{@code no bracket} → false</li>
-     * </ul>
-     */
-    private boolean hasUnclosedCharClass(String text) {
-        boolean open = false;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            // Skip the next character when we see a backslash escape (e.g. \[ or \])
-            if (c == '\\' && i + 1 < text.length()) {
-                i++;
-                continue;
-            }
-            if (c == '[') {
-                open = true;
-            } else if (c == ']' && open) {
-                open = false;
-            }
-        }
-        return open;
-    }
-
-    // ── Internal exception ────────────────────────────────────────────────────
-
-    /** Thrown when translation cannot proceed due to a logical error. */
-    static final class TranslationException extends RuntimeException {
-        TranslationException(String message) {
-            super(message);
-        }
+        return normalizedText;
     }
 }

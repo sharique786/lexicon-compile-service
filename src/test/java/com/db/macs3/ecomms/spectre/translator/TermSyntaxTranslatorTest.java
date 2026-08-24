@@ -1,762 +1,891 @@
 package com.db.macs3.ecomms.spectre.translator;
 
-import org.junit.jupiter.api.*;
+import com.db.macs3.ecomms.spectre.hyperscan.HyperscanCompiler;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit tests for {@link TermSyntaxTranslator}.
- * No Spring context — plain JDK 21 Java.
- *
- * <p>Tests all operators (OR, AND, AND NOT, NOT, NEAR{n}, FOLLOWEDBY{n}),
- * wildcards, quoted phrases, apostrophes, emojis, and all supported languages.
+ * Comprehensive tests for the Tokenizer → ExpressionParser → PatternCodeGenerator
+ * pipeline, organised around the specific bug reports and requirements that
+ * drove this rewrite. Every example given in the requirements document is
+ * reproduced here verbatim as a test case, plus the five real terms from the
+ * bug-report screenshot (reconstructed from the German lexicon rule set).
  */
-@DisplayName("TermSyntaxTranslator Tests")
-@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@DisplayName("TermSyntaxTranslator")
 class TermSyntaxTranslatorTest {
 
     private TermSyntaxTranslator translator;
 
     @BeforeEach
     void setUp() {
-        translator = new TermSyntaxTranslator();
-    }
-
-    // Helper: get success pattern
-    private String pattern(TranslationResult r) {
-        assertThat(r.isSuccess()).as("Expected success but got: %s",
-                r instanceof TranslationResult.Error e ? e.message() : "").isTrue();
-        return ((TranslationResult.Success) r).hsPattern();
-    }
-
-    private int flags(TranslationResult r) {
-        return ((TranslationResult.Success) r).hsFlags();
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // OR operator
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(1)
-    @DisplayName("OR: two terms → (?:A|B)")
-    void simpleOr() {
-        var r = translator.translate("price OR spread");
-        assertThat(pattern(r)).isEqualTo("(?:price|spread)");
-    }
-
-    @Test @Order(2)
-    @DisplayName("OR: three terms → (?:A|B|C)")
-    void threeTermOr() {
-        var r = translator.translate("price OR spread OR stock");
-        assertThat(pattern(r)).isEqualTo("(?:price|spread|stock)");
-    }
-
-    @Test @Order(3)
-    @DisplayName("OR: parenthesized groups → (?:price|spread|stock)")
-    void parenthesizedOr() {
-        var r = translator.translate("((price) OR (spread) OR (stock))");
-        assertThat(pattern(r)).isEqualTo("(?:price|spread|stock)");
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // AND operator
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(10)
-    @DisplayName("AND: two terms → (?:A|B) OR pre-scan (Hyperscan has no lookahead)")
-    void andTwoTerms() {
-        var r = translator.translate("insider AND announcement");
-        // Hyperscan rejects (?=...); translator emits OR pre-scan + requiresAndPostFilter
-        assertThat(pattern(r)).isEqualTo("(?:insider|announcement)");
-        assertThat(pattern(r)).doesNotContain("(?=");
-        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(ParseContext.HS_FLAG_DOTALL);
-    }
-
-    @Test @Order(11)
-    @DisplayName("AND: sets requiresAndPostFilter = true")
-    void andSetsPostFilter() {
-        var r = translator.translate("A AND B");
-        assertThat(((TranslationResult.Success) r).requiresAndPostFilter()).isTrue();
-    }
-
-    @Test @Order(12)
-    @DisplayName("AND: three terms → (?:A|B|C) all operands in OR group")
-    void andThreeTerms() {
-        var r = translator.translate("wire AND offshore AND transfer");
-        String p = pattern(r);
-        assertThat(p).startsWith("(?:").endsWith(")");
-        assertThat(p).contains("wire").contains("offshore").contains("transfer");
-        assertThat(p).doesNotContain("(?=");
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // AND NOT operator
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(20)
-    @DisplayName("AND NOT: returns positive operand only (Hyperscan has no negative lookahead)")
-    void andNot() {
-        var r = translator.translate("insider AND NOT disclaimer");
-        // Hyperscan rejects (?!...); translator returns positive part; engine excludes NOT at scan-time
-        assertThat(pattern(r)).isEqualTo("insider");
-        assertThat(pattern(r)).doesNotContain("(?=").doesNotContain("(?!");
-        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(ParseContext.HS_FLAG_DOTALL);
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // NOT operator
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(30)
-    @DisplayName("NOT prefix → returns operand pattern (Hyperscan has no negative lookahead)")
-    void notPrefix() {
-        var r = translator.translate("NOT spam");
-        // Hyperscan rejects (?!...); translator returns operand; engine inverts match at scan-time
-        assertThat(pattern(r)).isEqualTo("spam");
-        assertThat(pattern(r)).doesNotContain("(?!");
-        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(ParseContext.HS_FLAG_DOTALL);
-    }
-
-    @Test @Order(31)
-    @DisplayName("! prefix is alias for NOT — returns operand pattern")
-    void exclamationAsNot() {
-        var r = translator.translate("!spam");
-        assertThat(pattern(r)).isEqualTo("spam");
-        assertThat(pattern(r)).doesNotContain("(?!");
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // NEAR{n} operator
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(40)
-    @DisplayName("NEAR{5}: spec example 1 — bidirectional proximity pattern")
-    void nearSpecExample1() {
-        // JSON version (no wildcard)
-        var r = translator.translate("(manipulate) NEAR{5} ((price) OR (spread) OR (stock))");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("manipulate");
-        assertThat(p).contains("{0,5}");
-        assertThat(p).contains("(?:price|spread|stock)");
-        // Bidirectional: pattern appears twice (A|B and B|A structure)
-        assertThat(p).startsWith("(?:");
-    }
-
-    @Test @Order(41)
-    @DisplayName("NEAR{5}: wildcard version from CSV")
-    void nearWithWildcard() {
-        var r = translator.translate("(manipulate*) NEAR{5} ((price) OR (spread) OR (stock))");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("manipulate");
-        assertThat(p).contains("\\S*");
-        assertThat(p).contains("{0,5}");
-    }
-
-    @Test @Order(42)
-    @DisplayName("NEAR{3}: gap pattern has correct distance")
-    void nearDistance() {
-        var r = translator.translate("tip NEAR{3} trade");
-        assertThat(pattern(r)).contains("{0,3}");
-        assertThat(pattern(r)).contains("tip").contains("trade");
-    }
-
-    @Test @Order(43)
-    @DisplayName("NEAR is bidirectional: both A→B and B→A appear in pattern")
-    void nearIsBidirectional() {
-        var r = translator.translate("alpha NEAR{2} beta");
-        String p = pattern(r);
-        // Should contain both orderings
-        int alphaFirst = p.indexOf("alpha");
-        int betaFirst  = p.indexOf("beta");
-        int alphaSecond = p.lastIndexOf("alpha");
-        int betaSecond  = p.lastIndexOf("beta");
-        assertThat(alphaFirst).isNotEqualTo(alphaSecond);  // alpha appears twice
-        assertThat(betaFirst).isNotEqualTo(betaSecond);    // beta appears twice
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // FOLLOWEDBY{n} operator
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(50)
-    @DisplayName("FOLLOWEDBY{3}: directional — A then B only, compliance appears exactly once")
-    void followedBy() {
-        var r = translator.translate("don't FOLLOWEDBY{3} compliance");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("don't");
-        assertThat(p).contains("{0,3}");
-        assertThat(p).contains("compliance");
-        // Directional: "compliance" appears exactly once (NEAR has it twice, once per direction)
-        // Note: (?:\s+\S+){0,n} in the gap legitimately contains "(?:" — that is expected
-        assertThat(p.indexOf("compliance")).isEqualTo(p.lastIndexOf("compliance"));
-        assertThat(p).doesNotContain("|compliance");  // no bidirectional alternation
-    }
-
-    @Test @Order(51)
-    @DisplayName("FOLLOWEDBY: 'don't care about compliance' should match pattern")
-    void followedByMatchesExample() {
-        var r = translator.translate("don't FOLLOWEDBY{3} compliance");
-        String p = pattern(r);
-        // The pattern should be: don't(?:\s+\S+){0,3}\s+compliance
-        // "don't care about compliance" has 2 words gap → fits {0,3}
-        assertThat(p).matches(".*don't.*\\{0,3\\}.*compliance.*");
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Wildcards
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(60)
-    @DisplayName("Trailing wildcard: word* → word\\S*")
-    void trailingWildcard() {
-        assertThat(pattern(translator.translate("manipulate*"))).isEqualTo("manipulate\\S*");
-    }
-
-    @Test @Order(61)
-    @DisplayName("Leading wildcard: *word → \\S*word")
-    void leadingWildcard() {
-        assertThat(pattern(translator.translate("*running"))).isEqualTo("\\S*running");
-    }
-
-    @Test @Order(62)
-    @DisplayName("Embedded wildcard: fr*nt → fr\\S*nt")
-    void embeddedWildcard() {
-        assertThat(pattern(translator.translate("fr*nt"))).isEqualTo("fr\\S*nt");
-    }
-
-    @Test @Order(63)
-    @DisplayName("Standalone wildcard: * → \\S+")
-    void standaloneWildcard() {
-        assertThat(pattern(translator.translate("*"))).isEqualTo("\\S+");
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Quoted phrases
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(70)
-    @DisplayName("Spec example 2: quoted OR — \"please don't forward\" OR ...")
-    void quotedOrSpecExample2() {
-        var r = translator.translate(
-                "((\"please don't forward\") OR (\"do not share don't forward\"))");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("please don't forward");
-        assertThat(p).contains("do not share don't forward");
-    }
-
-    @Test @Order(71)
-    @DisplayName("CSV double-quote escaped: \"\"quoted\"\" → quoted")
-    void csvDoubleQuoteEscaping() {
-        var r = translator.translate("((\"\"please don't forward\"\") OR (\"\"do not share\"\"))");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains("please don't forward");
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Apostrophe and special characters
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(80)
-    @DisplayName("Apostrophe in word: don't preserved literally (not escaped)")
-    void apostrophePreserved() {
-        var r = translator.translate("don't");
-        assertThat(pattern(r)).isEqualTo("don't");
-    }
-
-    @Test @Order(81)
-    @DisplayName("Exclamation: stop! — literal in PCRE")
-    void exclamationLiteral() {
-        var r = translator.translate("\"stop!\"");
-        assertThat(pattern(r)).isEqualTo("stop!");
-    }
-
-    @Test @Order(82)
-    @DisplayName("PCRE metachar . is escaped in plain terms")
-    void dotEscaped() {
-        var r = translator.translate("price.spread");
-        assertThat(pattern(r)).isEqualTo("price\\.spread");
-    }
-
-    @Test @Order(83)
-    @DisplayName("PCRE metachar ( is escaped in plain terms")
-    void parenEscaped() {
-        // When a term has no OR/AND, a lone paren in a word is a leaf
-        var r = translator.translate("\"(net)\"");
-        assertThat(pattern(r)).isEqualTo("\\(net\\)");
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Emoji
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(90)
-    @DisplayName("Emoji: 💰 → \\x{1F4B0} with UTF8+UCP flags")
-    void singleEmoji() {
-        var r = translator.translate("💰");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).isEqualTo("\\x{1F4B0}");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-        assertThat(flags(r) & ParseContext.HS_FLAG_UCP).isEqualTo(ParseContext.HS_FLAG_UCP);
-    }
-
-    @Test @Order(91)
-    @DisplayName("Emoji OR: 💰 OR 🤫 OR 🤐 → (?:\\x{...}|\\x{...}|\\x{...})")
-    void emojiOr() {
-        var r = translator.translate("💰 OR 🤫 OR 🤐");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("\\x{1F4B0}");  // 💰
-        assertThat(p).contains("\\x{1F92B}");  // 🤫
-        assertThat(p).contains("\\x{1F910}");  // 🤐
-        assertThat(p).startsWith("(?:");
-    }
-
-    @Test @Order(92)
-    @DisplayName("Emoji detection: isEmojiCodePoint covers all major ranges")
-    void emojiDetection() {
-        assertThat(translator.isEmojiCodePoint(0x1F600)).isTrue();  // 😀
-        assertThat(translator.isEmojiCodePoint(0x1F4B0)).isTrue();  // 💰
-        assertThat(translator.isEmojiCodePoint(0x2764)).isTrue();   // ❤ (BMP)
-        assertThat(translator.isEmojiCodePoint(0x41)).isFalse();    // 'A'
-        assertThat(translator.isEmojiCodePoint(0x0041)).isFalse();  // ASCII
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Non-English languages
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(100)
-    @DisplayName("Korean: 비밀 OR 내부자 거래 → (?:비밀|내부자 거래) + UTF8+UCP")
-    void koreanOr() {
-        var r = translator.translate("비밀 OR 내부자 거래");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("비밀").contains("내부자 거래");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-    }
-
-    @Test @Order(101)
-    @DisplayName("Japanese: 株価操作 OR インサイダー → OR pattern + UTF8")
-    void japaneseOr() {
-        var r = translator.translate("株価操作 OR インサイダー");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains("株価操作").contains("インサイダー");
-        assertThat(translator.hasNonAscii("株価操作")).isTrue();
-    }
-
-    @Test @Order(102)
-    @DisplayName("Chinese/Mandarin: 内幕交易 OR 操纵市场 → OR pattern + UTF8")
-    void chineseOr() {
-        var r = translator.translate("内幕交易 OR 操纵市场");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains("内幕交易").contains("操纵市场");
-    }
-
-    @Test @Order(103)
-    @DisplayName("Arabic: مخالفة OR استثمار داخلي → OR pattern + UTF8")
-    void arabicOr() {
-        var r = translator.translate("مخالفة OR استثمار داخلي");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains("مخالفة").contains("استثمار");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-    }
-
-    @Test @Order(104)
-    @DisplayName("Hebrew: מסחר פנים OR מניפולציה → OR pattern + UTF8")
-    void hebrewOr() {
-        var r = translator.translate("מסחר פנים OR מניפולציה");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains("מסחר פנים").contains("מניפולציה");
-    }
-
-    @Test @Order(105)
-    @DisplayName("German: Übernahme OR Insiderhandel → OR pattern + UTF8")
-    void germanOr() {
-        var r = translator.translate("Übernahme OR Insiderhandel");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains("Übernahme").contains("Insiderhandel");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-    }
-
-    @Test @Order(106)
-    @DisplayName("Turkish: içeriden bilgi OR piyasa manipülasyonu → UTF8")
-    void turkishOr() {
-        var r = translator.translate("içeriden bilgi OR piyasa manipülasyonu");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains("içeriden bilgi");
-    }
-
-    @Test @Order(107)
-    @DisplayName("Mixed English + Korean: insider OR 내부자 → OR + UTF8")
-    void mixedEnglishKorean() {
-        var r = translator.translate("insider OR 내부자");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("insider").contains("내부자");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Leet-speak
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(110)
-    @DisplayName("Leet-speak: 1ns1d3r → literal pattern (intentional)")
-    void leetSpeak() {
-        var r = translator.translate("1ns1d3r OR insider");
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains("1ns1d3r").contains("insider");
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Flags
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(120)
-    @DisplayName("CASELESS flag always set")
-    void caselessAlwaysSet() {
-        var r = translator.translate("price");
-        assertThat(flags(r) & ParseContext.HS_FLAG_CASELESS)
-                .isEqualTo(ParseContext.HS_FLAG_CASELESS);
-    }
-
-    @Test @Order(121)
-    @DisplayName("DOTALL flag set for AND")
-    void dotallForAnd() {
-        var r = translator.translate("A AND B");
-        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(ParseContext.HS_FLAG_DOTALL);
-    }
-
-    @Test @Order(122)
-    @DisplayName("No DOTALL for pure OR")
-    void noDotallForOr() {
-        var r = translator.translate("A OR B");
-        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(0);
-    }
-
-    @Test @Order(123)
-    @DisplayName("UTF8+UCP for emoji")
-    void utf8ForEmoji() {
-        var r = translator.translate("💰");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-        assertThat(flags(r) & ParseContext.HS_FLAG_UCP).isEqualTo(ParseContext.HS_FLAG_UCP);
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // Edge cases and error handling
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(130)
-    @DisplayName("Null input → Error result")
-    void nullInput() {
-        var r = translator.translate(null);
-        assertThat(r.isSuccess()).isFalse();
-    }
-
-    @Test @Order(131)
-    @DisplayName("Blank input → Error result")
-    void blankInput() {
-        var r = translator.translate("   ");
-        assertThat(r.isSuccess()).isFalse();
-    }
-
-    @Test @Order(132)
-    @DisplayName("Nested OR inside NEAR: (A OR B) NEAR{3} C")
-    void nestedOrInsideNear() {
-        var r = translator.translate("(price OR spread) NEAR{3} (manipulate*)");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("(?:price|spread)");
-        assertThat(p).contains("manipulate");
-        assertThat(p).contains("{0,3}");
-    }
-
-    @Test @Order(133)
-    @DisplayName("splitTopLevel: OR splits correctly at depth=0")
-    void splitTopLevelOr() {
-        List<String> parts = translator.splitTopLevel("A OR B OR C", "OR");
-        assertThat(parts).containsExactly("A", "B", "C");
-    }
-
-    @Test @Order(134)
-    @DisplayName("splitTopLevel: does not split inside parentheses")
-    void splitTopLevelRespectParens() {
-        List<String> parts = translator.splitTopLevel("(A OR B) OR C", "OR");
-        assertThat(parts).containsExactly("(A OR B)", "C");
-    }
-
-    @Test @Order(135)
-    @DisplayName("splitTopLevel: AND skips AND NOT occurrences")
-    void splitAndSkipsAndNot() {
-        List<String> parts = translator.splitTopLevel("A AND NOT B", "AND");
-        // Should NOT split — AND NOT is a different operator
-        assertThat(parts).hasSize(1);
-    }
-
-    @Test @Order(136)
-    @DisplayName("isWrappedInParens: true for (A OR B)")
-    void wrappedInParens() {
-        assertThat(translator.isWrappedInParens("(A OR B)")).isTrue();
-    }
-
-    @Test @Order(137)
-    @DisplayName("isWrappedInParens: false for (A) OR (B)")
-    void notWrappedInParens() {
-        assertThat(translator.isWrappedInParens("(A) OR (B)")).isFalse();
-    }
-
-    @Test @Order(138)
-    @DisplayName("escapeSpecialChars: escapes PCRE metacharacters")
-    void escapeSpecialChars() {
-        assertThat(translator.escapeSpecialChars("a.b+c")).isEqualTo("a\\.b\\+c");
-        assertThat(translator.escapeSpecialChars("(net)")).isEqualTo("\\(net\\)");
-        assertThat(translator.escapeSpecialChars("don't")).isEqualTo("don't"); // apostrophe safe
-    }
-
-    @ParameterizedTest(name = "[{index}] term='{0}' contains '{1}'")
-    @CsvSource({
-            "price OR spread,           price",
-            "price OR spread,           spread",
-            "(price) NEAR{2} (spread),  price",
-            "don't FOLLOWEDBY{3} rule,  don't",
-    })
-    @DisplayName("Parametrised: key terms appear in output pattern")
-    void parametrisedPatternContains(String input, String expectedFragment) {
-        var r = translator.translate(input);
-        assertThat(r.isSuccess()).isTrue();
-        assertThat(pattern(r)).contains(expectedFragment);
-    }
-
-    // ═════════════════════════════════════════════════════════════════════════
-    // NEAR / FOLLOWEDBY — multi-language gap strategy (new tests)
-    // ═════════════════════════════════════════════════════════════════════════
-
-    @Test @Order(200)
-    @DisplayName("NEAR: DOTALL flag set for all proximity operators (multi-line messages)")
-    void dotallSetForNear() {
-        // Previously DOTALL was only set for AND/NOT; proximity operators also need it
-        // so gaps can cross newline boundaries in email bodies.
-        var r = translator.translate("tip NEAR{3} trade");
-        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(ParseContext.HS_FLAG_DOTALL);
-    }
-
-    @Test @Order(201)
-    @DisplayName("FOLLOWEDBY: DOTALL flag set (multi-line messages)")
-    void dotallSetForFollowedBy() {
-        var r = translator.translate("buy FOLLOWEDBY{2} shares");
-        assertThat(flags(r) & ParseContext.HS_FLAG_DOTALL).isEqualTo(ParseContext.HS_FLAG_DOTALL);
-    }
-
-    @Test @Order(202)
-    @DisplayName("[KO] NEAR: 내부자 NEAR{3} 거래 → char-based gap [\\s\\S]{0,18}")
-    void koreanNear_charBasedGap() {
-        var r = translator.translate("내부자 NEAR{3} 거래");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        // Char-based gap (not word-based) — no \\s+\\S+ requirement
-        assertThat(p).contains("[\\s\\S]");
-        assertThat(p).doesNotContain("(?:\\s+\\S+)");
-        // Bidirectional: both orderings
-        assertThat(p).contains("내부자");
-        assertThat(p).contains("거래");
-        // UTF8+UCP flags must be present for Korean
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-        assertThat(flags(r) & ParseContext.HS_FLAG_UCP).isEqualTo(ParseContext.HS_FLAG_UCP);
-    }
-
-    @Test @Order(203)
-    @DisplayName("[KO] NEAR pattern matches Korean without space (chat style)")
-    void koreanNear_matchesNoSpaceText() {
-        var r = translator.translate("내부자 NEAR{3} 거래");
-        String p = pattern(r);
-        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("내부자거래혐의").find())
-                .as("Korean no-space 내부자거래 must match").isTrue();
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("내부자 거래 혐의").find())
-                .as("Korean spaced 내부자 거래 must also match").isTrue();
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("거래 내부자 정보").find())
-                .as("Reversed order must match (NEAR is bidirectional)").isTrue();
-    }
-
-    @Test @Order(204)
-    @DisplayName("[KO] FOLLOWEDBY: 내부자 FOLLOWEDBY{2} 거래 → char-based, directional")
-    void koreanFollowedBy_charBasedDirectional() {
-        var r = translator.translate("내부자 FOLLOWEDBY{2} 거래");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("[\\s\\S]");
-        // Directional: 거래 appears exactly once
-        assertThat(p.indexOf("거래")).isEqualTo(p.lastIndexOf("거래"));
-
-        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("내부자거래").find()).isTrue();
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("거래 내부자").find())
-                .as("Reversed: FOLLOWEDBY must NOT match reverse order").isFalse();
-    }
-
-    @Test @Order(205)
-    @DisplayName("[ZH] NEAR: 内幕 NEAR{2} 交易 → char-based gap (Chinese no spaces)")
-    void chineseNear_charBasedGap() {
-        var r = translator.translate("内幕 NEAR{2} 交易");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("[\\s\\S]");
-        assertThat(p).contains("内幕").contains("交易");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-
-        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("内幕交易").find())
-                .as("Chinese no-space 内幕交易 must match").isTrue();
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("内幕的交易").find())
-                .as("Chinese with particle 的 must also match").isTrue();
-    }
-
-    @Test @Order(206)
-    @DisplayName("[ZH] FOLLOWEDBY: 内幕 FOLLOWEDBY{2} 交易 → char-based, directional")
-    void chineseFollowedBy_directional() {
-        var r = translator.translate("内幕 FOLLOWEDBY{2} 交易");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("[\\s\\S]");
-        // Directional: 交易 appears exactly once
-        assertThat(p.indexOf("交易")).isEqualTo(p.lastIndexOf("交易"));
-
-        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("内幕交易").find()).isTrue();
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("交易内幕").find())
-                .as("Reversed order must not match FOLLOWEDBY").isFalse();
-    }
-
-    @Test @Order(207)
-    @DisplayName("[JA] NEAR: インサイダー NEAR{3} 取引 → char-based (kana+kanji mix)")
-    void japaneseNear_charBasedGap() {
-        var r = translator.translate("インサイダー NEAR{3} 取引");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("[\\s\\S]");
-        assertThat(p).contains("インサイダー").contains("取引");
-
-        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("インサイダー取引が発覚").find())
-                .as("Japanese no-space インサイダー取引 must match").isTrue();
-    }
-
-    @Test @Order(208)
-    @DisplayName("[AR] NEAR: السعر NEAR{2} التلاعب → word-based gap + UTF8+UCP")
-    void arabicNear_wordBasedWithUcp() {
-        var r = translator.translate("السعر NEAR{2} التلاعب");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        // Arabic is space-delimited → word-based gap (\\s+\\S+)
-        assertThat(p).contains("(?:\\s+\\S+)");
-        assertThat(p).contains("السعر").contains("التلاعب");
-        // Must have UTF8+UCP for Arabic \S to match Arabic characters
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-        assertThat(flags(r) & ParseContext.HS_FLAG_UCP).isEqualTo(ParseContext.HS_FLAG_UCP);
-
-        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("ارتفاع السعر بسبب التلاعب").find())
-                .as("Arabic forward order must match").isTrue();
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("التلاعب في السعر").find())
-                .as("Arabic reverse order must match (NEAR is bidirectional)").isTrue();
-    }
-
-    @Test @Order(209)
-    @DisplayName("[AR] FOLLOWEDBY: معلومات FOLLOWEDBY{2} سرية → pure RTL, no warning")
-    void arabicFollowedBy_pureRtl_noWarning() {
-        var r = translator.translate("معلومات FOLLOWEDBY{2} سرية");
-        assertThat(r.isSuccess()).isTrue();
-        // Pure RTL FOLLOWEDBY: no warning expected
-        // (logical order = reading order for Arabic)
-        TranslationResult.Success s = (TranslationResult.Success) r;
-        // Pattern is directional: سرية appears exactly once
-        assertThat(pattern(r).indexOf("سرية")).isEqualTo(pattern(r).lastIndexOf("سرية"));
-    }
-
-    @Test @Order(210)
-    @DisplayName("[HE] NEAR: מידע NEAR{3} פנים → word-based + UTF8+UCP")
-    void hebrewNear_wordBasedWithUcp() {
-        var r = translator.translate("מידע NEAR{3} פנים");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        assertThat(p).contains("(?:\\s+\\S+)");
-        assertThat(p).contains("מידע").contains("פנים");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-
-        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("מסחר עם מידע פנים הוא בלתי חוקי").find())
-                .as("Hebrew NEAR must match").isTrue();
-    }
-
-    @Test @Order(211)
-    @DisplayName("[MIXED EN+KO] NEAR: insider NEAR{3} 내부자 → MIXED_CJK → char-based gap")
-    void mixedEnglishKoreanNear_charBasedGap() {
-        var r = translator.translate("insider NEAR{3} 내부자");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        // Korean presence forces char-based gap even though English is word-based
-        assertThat(p).contains("[\\s\\S]");
-        assertThat(p).contains("insider").contains("내부자");
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-
-        int jf = java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-               | java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.UNICODE_CHARACTER_CLASS;
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("he is an insider 내부자 suspect").find())
-                .as("Mixed EN+KO: insider before 내부자 must match").isTrue();
-        assertThat(java.util.regex.Pattern.compile(p, jf).matcher("내부자 was the insider suspect").find())
-                .as("Mixed EN+KO: 내부자 before insider must match").isTrue();
-    }
-
-    @Test @Order(212)
-    @DisplayName("[MIXED EN+AR] NEAR: price NEAR{3} السعر → MIXED_RTL → word-based")
-    void mixedEnglishArabicNear_wordBasedGap() {
-        var r = translator.translate("price NEAR{3} السعر");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        // Arabic+Latin both use spaces → word-based gap still applies
-        assertThat(p).contains("(?:\\s+\\S+)");
-        assertThat(p).contains("price").contains("السعر");
-        // Must have UTF8+UCP for Arabic
-        assertThat(flags(r) & ParseContext.HS_FLAG_UTF8).isEqualTo(ParseContext.HS_FLAG_UTF8);
-    }
-
-    @Test @Order(213)
-    @DisplayName("[MIXED EN+AR] FOLLOWEDBY with RTL operand → warning propagated in result")
-    void mixedFollowedBy_rtlWarning_patternStillGenerated() {
-        // Mixed RTL+LTR FOLLOWEDBY: a warning should be logged but pattern still generated
-        var r = translator.translate("insider FOLLOWEDBY{2} معلومات");
-        assertThat(r.isSuccess()).isTrue();
-        // Pattern must still be usable regardless of RTL warning
-        assertThat(pattern(r)).contains("insider").contains("معلومات");
-        // The 'معلومات' side appears once (directional)
-        assertThat(pattern(r).indexOf("معلومات")).isEqualTo(pattern(r).lastIndexOf("معلومات"));
-    }
-
-    @Test @Order(214)
-    @DisplayName("[NESTED] (price OR spread) NEAR{3} (Korean 거래) → char-based (CJK wins)")
-    void nestedGroupNear_withKoreanOperand_charBased() {
-        var r = translator.translate("(price OR spread) NEAR{3} 거래");
-        assertThat(r.isSuccess()).isTrue();
-        String p = pattern(r);
-        // Korean operand forces char-based gap
-        assertThat(p).contains("[\\s\\S]");
-        assertThat(p).contains("(?:price|spread)");
-        assertThat(p).contains("거래");
+        HyperscanCompiler compiler = new HyperscanCompiler();
+        compiler.selfTest();
+        translator = new TermSyntaxTranslator(compiler);
+    }
+
+    private TranslationResult.Success translateOk(String term) {
+        TranslationResult r = translator.translate(term);
+        assertThat(r).as("expected SUCCESS for '%s' but got: %s", term,
+                r.isSuccess() ? "" : ((TranslationResult.Error) r).message())
+                .isInstanceOf(TranslationResult.Success.class);
+        return (TranslationResult.Success) r;
+    }
+
+    private String translateError(String term) {
+        TranslationResult r = translator.translate(term);
+        assertThat(r).as("expected ERROR for '%s' but got SUCCESS", term)
+                .isInstanceOf(TranslationResult.Error.class);
+        return ((TranslationResult.Error) r).message();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Requirement 1: brackets resolve first, at any nesting depth
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Requirement 1 — bracket resolution order")
+    class BracketResolution {
+
+        @Test
+        @DisplayName("Example 1: (crap OR bad) NEAR{3} (bonus OR comp)")
+        void example1_orInsideNear() {
+            var s = translateOk("(crap OR bad) NEAR{3} (bonus OR comp)");
+            assertThat(s.hsPatterns().get(0)).isEqualTo(
+                    "(?:(?:crap|bad)(?:\\s+\\S+){0,3}\\s+(?:bonus|comp)"
+                    + "|(?:bonus|comp)(?:\\s+\\S+){0,3}\\s+(?:crap|bad))");
+        }
+
+        @Test
+        @DisplayName("Example 2: (F) FOLLOWEDBY{1} (((me) OR (cking))) — triple redundant wrapping")
+        void example2_deeplyRedundantWrapping() {
+            var s = translateOk("(F) FOLLOWEDBY{1} (((me) OR (cking)))");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("F(?:\\s+\\S+){0,1}\\s+(?:me|cking)");
+        }
+
+        @ParameterizedTest(name = "[{index}] {0}")
+        @ValueSource(strings = {
+                "(((me) OR (cking)))",
+                "((((me) OR (cking))))",
+                "(((((F)))))",
+        })
+        @DisplayName("Arbitrary depths of pure redundant wrapping resolve without error")
+        void arbitraryRedundantWrappingDepths(String term) {
+            assertThat(translator.translate(term).isSuccess()).as(term).isTrue();
+        }
+
+        @Test
+        @DisplayName("Triple-nested NEAR inside OR does not crash and resolves inner group first")
+        void tripleNestedNearInsideOr() {
+            var s = translateOk("(((crap) NEAR{3} (bad))) OR (bonus OR comp)");
+            assertThat(s.hsPatterns().get(0)).contains("crap").contains("bad").contains("bonus").contains("comp");
+        }
+
+        @Test
+        @DisplayName("Mixed nesting: OR-of-parens combined with a NEAR sibling")
+        void mixedNestingOrAndNear() {
+            var s = translateOk("((crap) OR (bad)) OR (bonus NEAR{3} comp)");
+            assertThat(s.hsPatterns().get(0)).contains("crap").contains("bad");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Requirement 2: multi-word phrases must be wrapped in parentheses
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Requirement 2 — multi-word phrases must be wrapped")
+    class MultiWordWrapping {
+
+        @Test
+        @DisplayName("Properly wrapped multi-word OR alternatives succeed (unchanged)")
+        void wrappedPhrasesSucceed() {
+            var s = translateOk("(bomb this place) OR (blow this place up)");
+            assertThat(s.hsPatterns().get(0)).contains("bomb this place").contains("blow this place up");
+        }
+
+        @Test
+        @DisplayName("Unwrapped multi-word phrase at top level is now ACCEPTED as an implicit phrase")
+        void unwrappedTopLevelPhraseAccepted() {
+            var s = translateOk("bomb this place OR blow this place up");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("(?:bomb this place|blow this place up)");
+        }
+
+        @Test
+        @DisplayName("Unwrapped multi-word OR-alternative nested inside an otherwise-wrapped group is also accepted")
+        void unwrappedNestedAlternativeAccepted() {
+            var s = translateOk("(für dich OR für Sie)");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("(?:f\u00fcr dich|f\u00fcr Sie)");
+        }
+
+        @Test
+        @DisplayName("A single (one-word) atom never needs wrapping")
+        void singleWordNeverNeedsWrapping() {
+            assertThat(translator.translate("fix OR rig").isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Unwrapped phrase inside NEAR/FOLLOWEDBY operands is also accepted")
+        void unwrappedPhraseInProximityOperand() {
+            var s = translateOk("insider trading NEAR{3} market manipulation");
+            assertThat(s.hsPatterns().get(0)).contains("insider trading").contains("market manipulation");
+        }
+
+        @Test
+        @DisplayName("Deeply-nested wrapping still resolves correctly even with implicit phrase collection active")
+        void deepNestingStillCorrectWithImplicitPhrases() {
+            var s = translateOk("(((crap) NEAR{3} (bad))) OR (bonus OR comp)");
+            assertThat(s.hsPatterns().get(0)).contains("crap").contains("bad").contains("bonus").contains("comp");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Requirement 3: '?' is always literal
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Requirement 3 — '?' is always literal")
+    class LiteralQuestionMark {
+
+        @Test
+        @DisplayName("he?d / she?d — '?' escaped as a literal character, never a live quantifier")
+        void questionMarkIsLiteral() {
+            var s = translateOk("((he?d kill) OR (she?d kill))");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("(?:he\\?d kill|she\\?d kill)");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Requirement 4: wildcard '*' — prefix, suffix, and non-ASCII words
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Requirement 4 — wildcard handling")
+    class Wildcards {
+
+        @Test
+        @DisplayName("Suffix wildcard: chimp* -> chimp\\S*")
+        void suffixWildcard() {
+            var s = translateOk("(check her out) OR (chimp*)");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("(?:check her out|chimp\\S*)");
+        }
+
+        @Test
+        @DisplayName("Prefix wildcard: *handler -> \\S*handler")
+        void prefixWildcard() {
+            var s = translateOk("(*handler)");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("\\S*handler");
+        }
+
+        @Test
+        @DisplayName("THE REPORTED BUG: suffix wildcard on a non-ASCII word must still convert to \\S*")
+        void wildcardOnNonAsciiWord_theReportedBug() {
+            var s = translateOk("(verschwör*)");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("verschw\u00f6r\\S*");
+            assertThat(s.hsPatterns().get(0)).doesNotContain("r*"); // bare, un-expanded '*' must not survive
+        }
+
+        @Test
+        @DisplayName("Prefix wildcard on a non-ASCII word")
+        void prefixWildcardOnNonAsciiWord() {
+            var s = translateOk("(*händler)");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("\\S*h\u00e4ndler");
+        }
+
+        @Test
+        @DisplayName("Wildcard inside a quoted phrase is a LITERAL asterisk, not expanded")
+        void wildcardInQuotesIsLiteral() {
+            var s = translateOk("\"chimp*\"");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("chimp\\*");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Requirement 5: AND / AND NOT
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Requirement 5 — AND / AND NOT (corrected co-occurrence semantics)")
+    class AndAndNot {
+
+        private final java.util.regex.Pattern NO_LOOKAROUND_CHECK = java.util.regex.Pattern.compile("\\(\\?[=<!]");
+
+        private boolean matches(String pattern, String message) {
+            return java.util.regex.Pattern.compile(pattern, java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(message).find();
+        }
+
+        @Test
+        @DisplayName("THE EXACT REPORTED SCENARIO — term 1: 'price AND rigging' matches message 1 " +
+                     "(both words present, any order/distance) but not message 2 (rigging absent)")
+        void reportedScenario_term1_priceAndRigging() {
+            String message1 = "There's price change and market rigging is going on";
+            String message2 = "There's price change";
+            var s = translateOk("price AND rigging");
+
+            assertThat(NO_LOOKAROUND_CHECK.matcher(s.hsPatterns().get(0)).find()).isFalse();
+            assertThat(matches(s.hsPatterns().get(0), message1)).isTrue();
+            assertThat(matches(s.hsPatterns().get(0), message2)).isFalse();
+            assertThat(s.requiresExclusionCheck()).isFalse();
+        }
+
+        @Test
+        @DisplayName("THE EXACT REPORTED SCENARIO — term 2: 'price AND NOT change' matches NEITHER " +
+                     "message (change appears alongside price in both)")
+        void reportedScenario_term2_priceAndNotChange() {
+            String message1 = "There's price change and market rigging is going on";
+            String message2 = "There's price change";
+            var s = translateOk("price AND NOT change");
+
+            assertThat(s.requiresExclusionCheck()).isTrue();
+            assertThat(NO_LOOKAROUND_CHECK.matcher(s.hsPatterns().get(0)).find()).isFalse();
+            assertThat(NO_LOOKAROUND_CHECK.matcher(s.exclusionPatterns().get(0)).find()).isFalse();
+
+            // Apply the two-pattern contract exactly as a caller must: matched iff
+            // hsPattern matches AND exclusionPattern does NOT match the same message.
+            boolean message1Matches = matches(s.hsPatterns().get(0), message1) && !matches(s.exclusionPatterns().get(0), message1);
+            boolean message2Matches = matches(s.hsPatterns().get(0), message2) && !matches(s.exclusionPatterns().get(0), message2);
+            assertThat(message1Matches).isFalse();
+            assertThat(message2Matches).isFalse();
+        }
+
+        @Test
+        @DisplayName("AND is fully self-contained in hsPattern — no post-filter metadata needed")
+        void plainAnd_selfContained() {
+            var s = translateOk("((want to) AND (fix))");
+            assertThat(s.requiresExclusionCheck()).isFalse();
+            assertThat(s.exclusionPatterns()).isNull();
+            assertThat(s.hsPatterns().get(0)).contains("want to").contains("fix");
+        }
+
+        @Test
+        @DisplayName("AND with 3 operands: all six orderings present, matches any order")
+        void threeOperandAnd_allOrderingsWork() {
+            var s = translateOk("alpha AND beta AND gamma");
+            assertThat(matches(s.hsPatterns().get(0), "gamma comes first, then alpha, then beta shows up")).isTrue();
+            assertThat(matches(s.hsPatterns().get(0), "alpha and beta only, no third word")).isFalse();
+        }
+
+        @Test
+        @DisplayName("AND NOT: exclusion is captured as a SEPARATE Hyperscan-valid pattern, " +
+                     "never baked into hsPattern as an invalid lookbehind")
+        void andNot_positivePatternAndSeparateExclusion() {
+            var s = translateOk("((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)");
+            assertThat(s.hsPatterns().get(0)).contains("fix|rig").contains("the rate");
+            assertThat(s.hsPatterns().get(0)).doesNotContain("fed rate move");
+            assertThat(NO_LOOKAROUND_CHECK.matcher(s.hsPatterns().get(0)).find()).isFalse();
+            assertThat(s.exclusionPatterns().get(0)).contains("fed rate move");
+        }
+
+        @Test
+        @DisplayName("THE REPORTED BUG: 'AND NOT(' with no space before the parenthesis is recognised correctly")
+        void andNotWithoutSpaceBeforeParen() {
+            var s = translateOk("(hello) AND NOT(world)");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+            assertThat(s.exclusionPatterns().get(0)).isEqualTo("(?:world)");
+        }
+
+        @Test
+        @DisplayName("Explicitly-nested FOLLOWEDBY inside an AND-NOT exclusion (different grammar levels) still resolves")
+        void nestedFollowedByInsideAndNotExclusion() {
+            var s = translateOk("(hello) AND NOT(((a OR b) FOLLOWEDBY{1} (c OR d)) FOLLOWEDBY{1} (e OR f))");
+            assertThat(s.exclusionPatterns().get(0)).contains("(?:a|b)").contains("(?:c|d)").contains("(?:e|f)");
+        }
+
+        @Test
+        @DisplayName("Nested NEAR inside an AND-NOT exclusion (one alternative of an OR-of-phrases) resolves correctly")
+        void nestedNearInsideAndNotExclusion() {
+            var s = translateOk("(hello) AND NOT((plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR))");
+            assertThat(s.exclusionPatterns().get(0)).contains("EURIBOR FIXING").contains("TENOR");
+        }
+
+        @Test
+        @DisplayName("Chained AND NOT: A AND NOT B AND NOT C combines B and C into one OR'd exclusion pattern")
+        void chainedAndNot() {
+            var s = translateOk("(a) AND NOT (b) AND NOT (c)");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+            assertThat(s.exclusionPatterns().get(0)).contains("b").contains("c");
+            // Either b or c present alone should trigger the exclusion.
+            assertThat(matches(s.exclusionPatterns().get(0), "just b here")).isTrue();
+            assertThat(matches(s.exclusionPatterns().get(0), "just c here")).isTrue();
+            assertThat(matches(s.exclusionPatterns().get(0), "neither here")).isFalse();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Requirement (this round) 1 — no independent NOT operator
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("No independent NOT operator — only valid as part of AND NOT")
+    class NoIndependentNot {
+
+        @Test
+        @DisplayName("Standalone 'NOT X' is rejected with a specific, actionable error")
+        void standaloneNotRejected() {
+            String msg = translateError("NOT confidential");
+            assertThat(msg).contains("Standalone NOT is not supported");
+            assertThat(msg).contains("AND NOT");
+        }
+
+        @Test
+        @DisplayName("Standalone '!X' no longer has any special meaning — '!' is now ordinary literal text")
+        void bangPrefixNoLongerSpecial() {
+            var s = translateOk("!confidential");
+            assertThat(s.hsPatterns().get(0)).contains("confidential");
+            assertThat(s.requiresExclusionCheck()).isFalse();
+        }
+
+        @Test
+        @DisplayName("'NOT' still works correctly as part of AND NOT")
+        void notStillWorksAsPartOfAndNot() {
+            var s = translateOk("(a) AND NOT (b)");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+        }
+
+        @Test
+        @DisplayName("The literal word 'not' (lowercase) is unaffected — reserved keywords are case-sensitive")
+        void lowercaseNotIsLiteral() {
+            var s = translateOk("(this is not a problem)");
+            assertThat(s.hsPatterns().get(0)).contains("not");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Requirement (this round) 4 — no multiple FOLLOWEDBY/NEAR at the same level
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Validation — chained NEAR/FOLLOWEDBY at the same level warns, but succeeds (backward compatibility)")
+    class ChainedProximityValidation {
+
+        @Test
+        @DisplayName("Chained FOLLOWEDBY at the same level SUCCEEDS with a warning — NOT rejected. " +
+                     "Existing lexicon terms using this pattern must keep compiling.")
+        void chainedFollowedBySameLevel_warnsButSucceeds() {
+            var s = translateOk(
+                    "((termA OR termB OR termC) FOLLOWEDBY{5} (termD OR termE) FOLLOWEDBY{6} (termF OR termG))");
+            assertThat(s.warnings()).isNotEmpty();
+            boolean hasChainWarning = s.warnings().stream()
+                    .anyMatch(w -> w.contains("FOLLOWEDBY") || w.contains("chain"));
+            assertThat(hasChainWarning).isTrue();
+        }
+
+        @Test
+        @DisplayName("Chained NEAR at the same level also succeeds with a warning")
+        void chainedNearSameLevel_warnsButSucceeds() {
+            var s = translateOk("(a) NEAR{3} (b) NEAR{4} (c)");
+            assertThat(s.warnings()).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("Mixed NEAR then FOLLOWEDBY chained at the same level also succeeds with a warning")
+        void chainedMixedProximity_warnsButSucceeds() {
+            var s = translateOk("(a) NEAR{3} (b) FOLLOWEDBY{4} (c)");
+            assertThat(s.warnings()).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("Chained proximity produces the IDENTICAL pattern to the explicit, left-associative " +
+                     "parenthesization — proving the warning-path AST construction is not just a " +
+                     "different, accidentally-also-working translation")
+        void chainedProximity_identicalToExplicitNesting() {
+            var chained  = translateOk("(termA) FOLLOWEDBY{5} (termD) FOLLOWEDBY{6} (termF)");
+            var explicit = translateOk("((termA) FOLLOWEDBY{5} (termD)) FOLLOWEDBY{6} (termF)");
+            assertThat(chained.hsPatterns()).isEqualTo(explicit.hsPatterns());
+        }
+
+        @Test
+        @DisplayName("Explicit nesting via parentheses works identically and produces no chain warning")
+        void explicitNestingStillWorks() {
+            var s = translateOk("((termA OR termB) FOLLOWEDBY{5} (termD OR termE)) FOLLOWEDBY{6} (termF OR termG)");
+            assertThat(s.hsPatterns().get(0)).isNotBlank();
+        }
+
+        @Test
+        @DisplayName("A single NEAR or FOLLOWEDBY (no chaining) is completely unaffected")
+        void singleProximityOperator_unaffected() {
+            assertThat(translator.translate("(a) NEAR{3} (b)").isSuccess()).isTrue();
+            assertThat(translator.translate("(a) FOLLOWEDBY{3} (b)").isSuccess()).isTrue();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // AND operand count ceiling
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Validation — AND operand count ceiling")
+    class AndOperandCeiling {
+
+        @Test
+        @DisplayName("More than 5 AND operands at the same level is rejected with a specific error")
+        void tooManyAndOperands_rejected() {
+            String msg = translateError("a AND b AND c AND d AND e AND f");
+            assertThat(msg).contains("Too many AND operands");
+        }
+
+        @Test
+        @DisplayName("Exactly 5 AND operands (the ceiling) succeeds")
+        void fiveAndOperands_succeeds() {
+            assertThat(translator.translate("a AND b AND c AND d AND e").isSuccess()).isTrue();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Validation rules
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Validation — reserved keywords are case-sensitive")
+    class CaseSensitiveKeywords {
+
+        @Test
+        @DisplayName("lowercase 'or' is literal text, not the OR operator")
+        void lowercaseOrIsLiteral() {
+            var s = translateOk("(price or spread)");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("price or spread");
+        }
+
+        @Test
+        @DisplayName("lowercase 'and' is literal text")
+        void lowercaseAndIsLiteral() {
+            var s = translateOk("(rock and roll)");
+            assertThat(s.hsPatterns().get(0)).isEqualTo("rock and roll");
+        }
+
+        @Test
+        @DisplayName("lowercase 'near' is literal text, not the NEAR operator")
+        void lowercaseNearIsLiteral() {
+            var s = translateOk("(the office near you)");
+            assertThat(s.hsPatterns().get(0)).contains("near");
+        }
+
+        @Test
+        @DisplayName("Mixed-case 'Or'/'And'/'Not' are literal, not operators")
+        void mixedCaseIsLiteral() {
+            assertThat(translator.translate("(Or And Not)").isSuccess()).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("Validation — NEAR/FOLLOWEDBY distance must be a single digit 1-9")
+    class ProximityDistanceValidation {
+
+        @ParameterizedTest(name = "[{index}] {0}{1} is rejected")
+        @CsvSource({
+                "NEAR, '{0}'",
+                "NEAR, '{-1}'",
+                "NEAR, '{abcd}'",
+                "NEAR, '{10}'",
+                "NEAR, '{0,6}'",
+                "FOLLOWEDBY, '{0}'",
+                "FOLLOWEDBY, '{-1}'",
+                "FOLLOWEDBY, '{abcd}'",
+                "FOLLOWEDBY, '{10}'",
+                "FOLLOWEDBY, '{0,6}'",
+        })
+        void invalidDistanceRejected(String keyword, String brace) {
+            String term = "(a) " + keyword + brace.replace("'", "") + " (b)";
+            assertThat(translator.translate(term).isSuccess()).as(term).isFalse();
+        }
+
+        @ParameterizedTest(name = "[{index}] distance {0} is accepted")
+        @ValueSource(ints = {1, 2, 3, 4, 5, 6, 7, 8, 9})
+        void validSingleDigitDistancesAccepted(int n) {
+            assertThat(translator.translate("(a) NEAR{" + n + "} (b)").isSuccess()).isTrue();
+            assertThat(translator.translate("(a) FOLLOWEDBY{" + n + "} (b)").isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Whitespace between NEAR and '{' is rejected")
+        void whitespaceBeforeBraceRejected_near() {
+            assertThat(translateError("(a) NEAR {3} (b)")).contains("whitespace");
+        }
+
+        @Test
+        @DisplayName("Whitespace between FOLLOWEDBY and '{' is rejected")
+        void whitespaceBeforeBraceRejected_followedBy() {
+            assertThat(translateError("(a) FOLLOWEDBY {3} (b)")).contains("whitespace");
+        }
+    }
+
+    @Nested
+    @DisplayName("Validation — structural correctness")
+    class StructuralValidation {
+
+        @Test
+        @DisplayName("Unmatched closing bracket without matching open is rejected")
+        void missingClosingParen() {
+            assertThat(translator.translate("(fix NEAR{3} (rate)").isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Unmatched opening bracket without matching close is rejected")
+        void missingOpeningParen() {
+            assertThat(translator.translate("fix NEAR{3} rate)").isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Empty parentheses are rejected")
+        void emptyParensRejected() {
+            assertThat(translator.translate("()").isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Unclosed quoted phrase is rejected")
+        void unclosedQuoteRejected() {
+            assertThat(translator.translate("\"unclosed phrase").isSuccess()).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("Validation — meaningful content required")
+    class MeaningfulContentValidation {
+
+        @ParameterizedTest(name = "[{index}] ''{0}'' is rejected as meaningless")
+        @ValueSource(strings = {"#@$#%$", "!!!", "()", "***", "   "})
+        void symbolOnlyContentRejected(String term) {
+            assertThat(translator.translate(term).isSuccess()).as(term).isFalse();
+        }
+
+        @Test
+        @DisplayName("A single letter is meaningful content, even alone")
+        void singleLetterIsMeaningful() {
+            assertThat(translator.translate("F").isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Non-Latin content (Korean) is meaningful")
+        void nonLatinContentIsMeaningful() {
+            assertThat(translator.translate("내부자").isSuccess()).isTrue();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // The five real terms from the bug-report screenshot
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Screenshot terms — no crash on any of the five real reported terms")
+    class ScreenshotTerms {
+
+        @Test
+        @DisplayName("Term 2: never throws (previously crashed with StringIndexOutOfBoundsException)")
+        void term2_neverCrashes() {
+            String term = "(Scheiße OR Scheisse OR Scheiß OR Scheiss OR Kacke OR Scheißdreck OR Scheissdreck "
+                    + "OR dreckige OR scheisse OR verdammte OR verfluchte OR Müll OR Muell OR Dreck OR schlecht "
+                    + "OR schlimm OR böse OR boese OR übel OR uebel OR unzureichend) "
+                    + "NEAR{5} (Bonus OR Bonuszahlung OR Gehaltszulage OR Comp OR Komp OR Kompensation OR Vergütung)";
+            assertThat(translator.translate(term)).isNotNull(); // must not throw
+        }
+
+        @Test
+        @DisplayName("Term 3: prefix-wildcard German words compile with wildcard correctly expanded")
+        void term3_prefixWildcardOnGermanWords() {
+            var s = translateOk("(gemobbt OR eingeschüchtert) NEAR{2} (broker OR *händler OR *haendler)");
+            assertThat(s.hsPatterns().get(0)).contains("\\S*h\u00e4ndler").contains("\\S*haendler");
+        }
+
+        @Test
+        @DisplayName("Term 1: original screenshot term (unwrapped multi-word OR-alternatives) now compiles directly")
+        void term1_originalUnwrappedFormNowCompiles() {
+            // "zusammen tun", "bereit stellen", etc. are unwrapped 2-word OR-alternatives —
+            // previously rejected by the (now-removed) bracket-wrapping requirement.
+            String term =
+                "((konspirier* OR verschwör* OR zusammentun OR zusammen tun OR zusammengetan OR zusammen getan) "
+                + "NEAR{4} (allokier* OR verteil* OR bereitstellen OR bereit stellen OR zuteilen OR zu teilen)) "
+                + "NEAR{4} (Löhne OR Lohn OR Gehalt OR benefit* OR Vergütung OR bonus*)";
+            assertThat(translator.translate(term)).isNotNull(); // must not throw, must not be rejected for wrapping
+            assertThat(translator.translate(term).isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Term 4: original screenshot term now needs explicit nesting for its chained FOLLOWEDBY " +
+                     "(unwrapped phrases still need no correction — two independent fixes, tested together here)")
+        void term4_withExplicitNestingForChainedFollowedBy() {
+            // The ORIGINAL screenshot term chains two FOLLOWEDBY at the same level inside
+            // the AND-NOT exclusion — under this round's fix that is now rejected outright
+            // (see ChainedProximityValidation), so it needs one explicit nesting parenthesis,
+            // same as any other chained-proximity term. Unwrapped OR-alternatives elsewhere
+            // in the term still need no correction at all.
+            var s = translateOk(
+                "((nur für dich OR nur fuer dich OR nur für Sie OR nur fuer Sie)) "
+                + "AND NOT(((für dich OR für Sie OR fuer dich OR fuer Sie) "
+                + "FOLLOWEDBY{1} (als OR zum OR zur)) FOLLOWEDBY{1} (Hintergrund OR Info OR Update OR Illustration))");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+            assertThat(s.exclusionPatterns().get(0)).isNotBlank();
+        }
+
+        @Test
+        @DisplayName("Term 5: original screenshot term (unwrapped 'EURIBOR FIXING' left operand) now compiles directly")
+        void term5_originalUnwrappedFormNowCompiles() {
+            var s = translateOk(
+                "(fixing NEAR{2} (tenor OR drive OR rig OR want the OR whack)) "
+                + "AND NOT((FIXING JISDOR G. TENOR) OR (Tenor Value Date Fixing) "
+                + "OR (EURIBOR FIXING NEAR{2} TENOR))");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Term 4 (fully corrected: wrapped phrases AND explicitly-nested FOLLOWEDBY)")
+        void term4_corrected() {
+            var s = translateOk(
+                "((nur für dich) OR (nur fuer dich)) "
+                + "AND NOT((((für dich) OR (fuer dich)) FOLLOWEDBY{1} (als OR zum)) FOLLOWEDBY{1} (Hintergrund OR Info))");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Term 5 (previously-required manual correction still also works)")
+        void term5_corrected() {
+            var s = translateOk(
+                "(fixing NEAR{2} (tenor OR drive OR rig)) "
+                + "AND NOT((plain phrase here) OR ((EURIBOR FIXING) NEAR{2} TENOR))");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // "Pattern too large" prevention — PatternComplexityAnalyzer
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Pattern complexity validation — prevents Hyperscan 'Pattern too large' failures")
+    class PatternComplexity {
+
+        @Test
+        @DisplayName("THE REPORTED FAILING TERM: nested FOLLOWEDBY with wide OR/wildcard operands " +
+                     "DECOMPOSES into independent leaves instead of failing outright, with an explicit warning")
+        void reportedFailingTerm_decomposesWithWarning() {
+            String term = "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) FOLLOWEDBY{4} "
+                    + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
+                    + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
+
+            var s = translateOk(term);
+            assertThat(s.hsPatterns()).hasSize(3); // decomposed into 3 independent leaves
+            assertThat(s.warnings()).isNotEmpty();
+            boolean hasComplexityWarning = s.warnings().stream()
+                    .anyMatch(w -> w.contains("estimated complexity") && w.contains("DECOMPOSED"));
+            assertThat(hasComplexityWarning).isTrue();
+        }
+
+        @Test
+        @DisplayName("Simple single-level NEAR/FOLLOWEDBY with small OR groups is never affected")
+        void simpleProximity_neverRejected() {
+            assertThat(translator.translate("(a OR b) NEAR{5} (c OR d)").isSuccess()).isTrue();
+            assertThat(translator.translate("(a OR b) FOLLOWEDBY{4} (c OR d)").isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Explicitly-nested FOLLOWEDBY with small OR groups (the requirement-4 workaround) still succeeds")
+        void nestedProximitySmallGroups_stillSucceeds() {
+            assertThat(translator.translate("((a OR b) FOLLOWEDBY{5} c) FOLLOWEDBY{6} d").isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Real-world worked examples from the README are unaffected by the complexity budget")
+        void readmeWorkedExamples_unaffected() {
+            assertThat(translator.translate("(manipulate) NEAR{5} ((price) OR (spread) OR (stock))").isSuccess()).isTrue();
+            assertThat(translator.translate("price AND NOT (rigging OR change)").isSuccess()).isTrue();
+            assertThat(translator.translate("((don't forward) AND NOT (compliance OR legal))").isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("AND NOT: an over-budget EXCLUDED side DECOMPOSES independently of the required side, " +
+                     "with a warning specifically naming the excluded side")
+        void andNot_overBudgetExcludedSide_decomposes() {
+            String nestedTerm = "(simple) AND NOT "
+                    + "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) FOLLOWEDBY{4} "
+                    + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
+                    + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
+            var s = translateOk(nestedTerm);
+            assertThat(s.hsPatterns()).hasSize(1);        // required side untouched, still simple
+            assertThat(s.exclusionPatterns()).hasSize(3); // excluded side decomposed into 3 leaves
+            boolean hasExcludedWarning = s.warnings().stream()
+                    .anyMatch(w -> w.contains("excluded (AND NOT)") && w.contains("estimated complexity"));
+            assertThat(hasExcludedWarning).isTrue();
+        }
+
+        @Test
+        @DisplayName("A term with wildcards in a wide OR group, but no nested proximity, still succeeds " +
+                     "(wildcards alone are not enough to trip the budget)")
+        void wideOrWithWildcardsNoNesting_stillSucceeds() {
+            assertThat(translator.translate(
+                    "(worda* OR wordb* OR wordc* OR wordd* OR worde* OR wordf*)").isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("REGRESSION (the exact bug real Hyperscan testing found): a WIDE single-level NEAR " +
+                     "must PASS even though it scores higher in raw terms than a NARROWER but NESTED " +
+                     "FOLLOWEDBY term, which must FAIL — nesting depth, not branch width, drives real " +
+                     "Hyperscan compile failure")
+        void nestingDepthNotBranchWidth_correctRelativeOrdering() {
+            // Real, un-simplified examples from production: single-level NEAR over an
+            // 18-alternative and an 8-alternative OR group (no nesting) — compiles
+            // successfully in real Hyperscan.
+            String wideSingleLevelTerm =
+                "((Steuer* OR Gesetz* OR Richtlinie OR Police OR Polizei OR Genehmigung OR Approval OR "
+                + "Compliance OR Kontrolle OR Behörde OR Behoerde OR Bafin OR Regulierung OR Regulation OR "
+                + "Regulator OR Regulatoren OR Regelung OR Strafe) NEAR{2} (vermied* OR vermied* OR umgeh* OR "
+                + "umgangen OR umging OR entgeh* OR ausweichen OR ausgewichen)) AND "
+                + "NOT(Ausnahmegenehmigung OR mit Steuern umgehen können OR mit Steuern umgehen koennen)";
+
+            // Two nested FOLLOWEDBY operators over much narrower 4-alternative OR groups —
+            // rejected by real Hyperscan with "Pattern is too large".
+            String nestedNarrowerTerm =
+                "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) FOLLOWEDBY{4} "
+                + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
+                + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
+
+            var wideResult = translator.translate(wideSingleLevelTerm);
+            assertThat(wideResult.isSuccess())
+                    .as("the wide single-level term must PASS as a simple (non-decomposed) pattern")
+                    .isTrue();
+            if (wideResult instanceof TranslationResult.Success wideSuccess) {
+                assertThat(wideSuccess.hsPatterns())
+                        .as("the wide term must NOT need decomposition")
+                        .hasSize(1);
+            }
+
+            var nestedResult = translator.translate(nestedNarrowerTerm);
+            assertThat(nestedResult.isSuccess())
+                    .as("the narrower but nested term must still SUCCEED via decomposition, not be rejected")
+                    .isTrue();
+            if (nestedResult instanceof TranslationResult.Success nestedSuccess) {
+                assertThat(nestedSuccess.hsPatterns())
+                        .as("the narrower but nested term must DECOMPOSE — proving nesting depth, not "
+                            + "branch width, is what drives the heuristic, matching real Hyperscan's own behavior")
+                        .hasSize(3);
+                assertThat(nestedSuccess.warnings()).isNotEmpty();
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("REGRESSION: AND NOT nested inside another operator — confirmed bug, now rejected")
+    class NestedAndNotRejection {
+
+        /**
+         * Confirmed bug: {@code parseParenGroup()} recurses back to
+         * {@code parseOr()}, so AND NOT is grammatically legal inside a
+         * parenthesised group anywhere a group is legal — e.g. as an operand
+         * of NEAR/FOLLOWEDBY/AND/OR. {@code translate()} only ever
+         * special-cases AND NOT when it is the ROOT of the whole term's AST.
+         * Before the fix, a term like this one compiled successfully to a
+         * PASS result equivalent to plain "insider NEAR{5} trading" — the
+         * "AND NOT compliance" constraint silently discarded, with no error,
+         * no warning, and requiresExclusionCheck() incorrectly false. A
+         * message containing "insider trading" would have incorrectly
+         * matched even when "compliance" was also present — exactly the
+         * case the term was written to exclude.
+         */
+        @Test
+        @DisplayName("AND NOT nested as the LEFT operand of NEAR is rejected, not silently mishandled")
+        void andNotNestedInNearLeftOperand_rejected() {
+            var result = translator.translate("(insider AND NOT compliance) NEAR{5} trading");
+
+            assertThat(result.isSuccess())
+                    .as("must be rejected, not silently compiled with the exclusion dropped")
+                    .isFalse();
+            var error = (TranslationResult.Error) result;
+            assertThat(error.message()).containsIgnoringCase("AND NOT");
+            assertThat(error.message()).containsIgnoringCase("top level");
+        }
+
+        @Test
+        @DisplayName("AND NOT nested as the RIGHT operand of NEAR is also rejected")
+        void andNotNestedInNearRightOperand_rejected() {
+            var result = translator.translate("trading NEAR{5} (insider AND NOT compliance)");
+            assertThat(result.isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("AND NOT nested inside FOLLOWEDBY is rejected")
+        void andNotNestedInFollowedBy_rejected() {
+            var result = translator.translate("(insider AND NOT compliance) FOLLOWEDBY{3} trading");
+            assertThat(result.isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("AND NOT nested inside OR is rejected")
+        void andNotNestedInOr_rejected() {
+            var result = translator.translate("price OR (insider AND NOT compliance)");
+            assertThat(result.isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("AND NOT nested inside AND is rejected")
+        void andNotNestedInAnd_rejected() {
+            var result = translator.translate("price AND (insider AND NOT compliance)");
+            assertThat(result.isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("A second AND NOT nested inside the EXCLUDED side of a top-level AND NOT is rejected")
+        void andNotNestedInExcludedSideOfTopLevelAndNot_rejected() {
+            var result = translator.translate("insider AND NOT (compliance AND NOT legal)");
+            assertThat(result.isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("A second AND NOT nested inside the REQUIRED side of a top-level AND NOT is rejected")
+        void andNotNestedInRequiredSideOfTopLevelAndNot_rejected() {
+            var result = translator.translate("(insider AND NOT compliance) AND NOT legal");
+            assertThat(result.isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("AND NOT deeply nested inside multiple wrapping parens and a NEAR is still rejected")
+        void andNotDeeplyNested_rejected() {
+            var result = translator.translate("((price NEAR{3} (insider AND NOT compliance)))");
+            assertThat(result.isSuccess()).isFalse();
+        }
+
+        // ── Legitimate usage must remain unaffected ─────────────────────────────
+
+        @Test
+        @DisplayName("Simple top-level AND NOT still compiles correctly")
+        void simpleTopLevelAndNot_stillAccepted() {
+            var result = translator.translate("insider AND NOT compliance");
+            assertThat(result.isSuccess()).isTrue();
+            var success = (TranslationResult.Success) result;
+            assertThat(success.requiresExclusionCheck()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Chained AND NOT (multiple excluded OPERANDS of one top-level node, not nesting) still compiles")
+        void chainedAndNot_stillAccepted() {
+            var result = translator.translate("insider AND NOT compliance AND NOT legal");
+            assertThat(result.isSuccess()).isTrue();
+            var success = (TranslationResult.Success) result;
+            assertThat(success.requiresExclusionCheck()).isTrue();
+        }
+
+        @Test
+        @DisplayName("AND NOT at the top level, with NEAR correctly scoped INSIDE the required side " +
+                     "(not the reverse), still compiles — only NEAR-containing-AndNot is rejected, " +
+                     "not AndNot-containing-NEAR")
+        void andNotAtTopLevelWithNearInsideRequiredSide_stillAccepted() {
+            var result = translator.translate("(insider NEAR{5} trading) AND NOT compliance");
+            assertThat(result.isSuccess()).isTrue();
+            var success = (TranslationResult.Success) result;
+            assertThat(success.requiresExclusionCheck()).isTrue();
+        }
+
+        @Test
+        @DisplayName("OR nested inside NEAR with no AND NOT anywhere is entirely unaffected by this check")
+        void orNestedInNear_unaffected() {
+            var result = translator.translate("(price OR spread) NEAR{3} (insider OR trading)");
+            assertThat(result.isSuccess()).isTrue();
+            var success = (TranslationResult.Success) result;
+            assertThat(success.requiresExclusionCheck()).isFalse();
+        }
     }
 }

@@ -38,6 +38,33 @@ import java.util.List;
  *   <li>Return {@link ValidationResult#pass} or {@link ValidationResult#failed}</li>
  * </ol>
  *
+ * <h2>AND NOT in the combined database: native Hyperscan logical combinations</h2>
+ * <p>Hyperscan 5.0+ supports logical combinations of patterns natively —
+ * {@code HS_FLAG_COMBINATION} lets a compiled expression be the STRING
+ * {@code "(101&!102)"} (operators {@code &}/{@code |}/{@code !} over other
+ * expressions' numeric ids), and Hyperscan reports a match for THAT id only
+ * when the boolean condition over the referenced sub-expressions is true —
+ * evaluated natively during the scan, no application-level combination
+ * needed after the fact. This is the correct mechanism for embedding AND NOT
+ * semantics into the {@code /compile/bundle} endpoint's combined {@code .hdb}
+ * file: unlike the separate {@code translatedPattern}/{@code exclusionPattern}
+ * fields returned by {@code /compile} (which assume the CALLER reads both
+ * and combines them in application code — reasonable for a caller like the
+ * Scanner Service that reads the JSON), a consumer that loads ONLY the
+ * {@code .hdb} file — the Lexicon Scan Engine's Dataproc job — has no JSON to
+ * read at all, so the exclusion logic must be encoded IN the database itself.
+ * See {@link #toSubExpressionFlags} / {@link #toCombinationExpressionFlags}
+ * and {@code LexiconCompileBundleService} for how a required/exclusion
+ * pattern pair becomes one combination expression id.
+ *
+ * <p><b>Dependency note:</b> {@code ExpressionFlag.COMBINATION} and
+ * {@code ExpressionFlag.QUIET} were added to {@code com.gliwka.hyperscan-java}
+ * in its v1.0.0 release; this project pins the wrapper's v2.0.0 line
+ * (version string {@code 5.4.0-2.0.0}), which post-dates that release. If a
+ * future dependency bump ever removed these constants, every call site below
+ * would fail to compile with an unambiguous "cannot find symbol" naming the
+ * exact missing flag — not a silent runtime behaviour change.
+ *
  * <h2>Thread safety</h2>
  * <p>{@link Database#compile} is thread-safe. Spring Boot 4 Tomcat uses JDK 21
  * virtual threads — many concurrent compilations are handled without OS-thread blocking.
@@ -75,7 +102,7 @@ public class HyperscanCompiler {
         log.info("Initialising Hyperscan (com.gliwka.hyperscan {})...", HYPERSCAN_VERSION);
         try {
             Expression probe = new Expression("selftest_probe",
-                    EnumSet.of(ExpressionFlag.CASELESS));
+                    EnumSet.of(ExpressionFlag.CASELESS, ExpressionFlag.SOM_LEFTMOST));
             try (Database db = Database.compile(probe)) {
                 log.info("Hyperscan self-test PASSED — native library operational.");
             }
@@ -161,9 +188,26 @@ public class HyperscanCompiler {
      * </pre>
      * If the bitmask is 0 (no flags set), CASELESS is added as a safe default.
      *
-     * <p>Public so {@code LexiconCompileBundleService} can build multi-pattern
+     * <h2>{@link ExpressionFlag#SOM_LEFTMOST} is always included here</h2>
+     * <p>This method builds flags for a PLAIN, standalone, reportable
+     * expression — never a {@code QUIET} sub-expression and never a
+     * {@code COMBINATION} formula (those go through {@link #toSubExpressionFlags}
+     * and {@link #toCombinationExpressionFlags} respectively, which never
+     * include SOM_LEFTMOST — see their Javadoc for why). SOM_LEFTMOST is
+     * therefore always safe to include here: Hyperscan's own documentation
+     * and a real compile-time error this project hit directly both confirm
+     * SOM_LEFTMOST is incompatible with QUIET (and separately, with
+     * SINGLEMATCH/PREFILTER) — but a plain expression carries none of those.
+     * There is deliberately no caller-supplied toggle for this any more —
+     * whether SOM_LEFTMOST is safe is a structural fact about which KIND of
+     * expression this is (plain vs. QUIET-sub-expression vs. COMBINATION),
+     * not a preference a caller should be choosing per-request.
+     *
+     * <p>Public so {@code LexiconCombinationHandler} can build multi-pattern
      * {@link Expression} lists for the combined-database endpoint using the
      * exact same flag-conversion logic as the single-pattern {@link #validate} path.
+     *
+     * @param bitmask HS_FLAG_* bitmask (CASELESS/DOTALL/UTF8/UCP)
      */
     public EnumSet<ExpressionFlag> toExpressionFlags(int bitmask) {
         EnumSet<ExpressionFlag> flags = EnumSet.noneOf(ExpressionFlag.class);
@@ -183,7 +227,76 @@ public class HyperscanCompiler {
         if (flags.isEmpty()) {
             flags.add(ExpressionFlag.CASELESS);
         }
+        flags.add(ExpressionFlag.SOM_LEFTMOST);
         return flags;
+    }
+
+    /**
+     * Flags for a required/exclusion pattern that feeds a logical combination
+     * (see class Javadoc) rather than being reported on its own.
+     *
+     * <p>{@link ExpressionFlag#QUIET} suppresses this sub-expression's own
+     * match reporting — without it, a plain "AND NOT" term's REQUIRED
+     * pattern would independently raise its own match event every time it's
+     * present, regardless of whether the exclusion pattern was also found,
+     * which is exactly the bug this whole fix addresses: the consumer would
+     * see two separate, uncorrelated match ids (the required pattern's raw
+     * hit, and the combination's hit) instead of one single, already-correct
+     * signal. Only the combination expression's id (built with
+     * {@link #toCombinationExpressionFlags}) should ever be reported for an
+     * AND NOT term.
+     *
+     * <h2>SOM_LEFTMOST is NEVER included here</h2>
+     * <p>Confirmed incompatible with {@code QUIET} both by a real Hyperscan
+     * compile-time error this project hit directly ("HS_FLAG_QUIET is not
+     * supported in combination with HS_FLAG_SOM_LEFTMOST") and by Hyperscan's
+     * own documentation, which lists flags incompatible with SOM_LEFTMOST.
+     * CASELESS/UTF8/UCP/DOTALL remain included as normal — only SOM_LEFTMOST
+     * is structurally excluded here, since match-position tracking has no
+     * meaning for an expression whose own match is never reported anyway
+     * (it only feeds a boolean combination formula).
+     *
+     * @param hsFlags the term's normal HS_FLAG_* bitmask (CASELESS/UTF8/UCP)
+     */
+    public EnumSet<ExpressionFlag> toSubExpressionFlags(int hsFlags) {
+        EnumSet<ExpressionFlag> flags = EnumSet.noneOf(ExpressionFlag.class);
+        if ((hsFlags & HS_FLAG_CASELESS) != 0) {
+            flags.add(ExpressionFlag.CASELESS);
+        }
+        if ((hsFlags & HS_FLAG_DOTALL) != 0) {
+            flags.add(ExpressionFlag.DOTALL);
+        }
+        if ((hsFlags & HS_FLAG_UTF8) != 0) {
+            flags.add(ExpressionFlag.UTF8);
+        }
+        if ((hsFlags & HS_FLAG_UCP) != 0) {
+            flags.add(ExpressionFlag.UCP);
+        }
+        if (flags.isEmpty()) {
+            flags.add(ExpressionFlag.CASELESS);
+        }
+        flags.add(ExpressionFlag.QUIET);
+        return flags;
+    }
+
+    /**
+     * Flags for a logical combination expression itself (see class Javadoc).
+     * Hyperscan's own documentation states a COMBINATION-flagged expression
+     * "ignores all other flags except HS_FLAG_SINGLEMATCH and HS_FLAG_QUIET" —
+     * confirmed across multiple official sources (Hyperscan API reference,
+     * the Compiling Patterns guide, and Intel's own published logical-combinations
+     * article). Neither SINGLEMATCH nor QUIET is added here by default: a
+     * combination expression is quiet only when it itself feeds an OUTER
+     * combination (never produced by this codebase — see class Javadoc "Why
+     * exactly one combination expression per term"), and SINGLEMATCH is an
+     * optional match-deduplication choice this codebase does not currently
+     * opt into. CASELESS/UTF8/etc. apply only to the sub-expressions being
+     * combined (via {@link #toSubExpressionFlags}), not to the boolean
+     * formula referencing their ids — Hyperscan ignores them here regardless,
+     * so they are never added.
+     */
+    public EnumSet<ExpressionFlag> toCombinationExpressionFlags() {
+        return EnumSet.of(ExpressionFlag.COMBINATION);
     }
 
     /**

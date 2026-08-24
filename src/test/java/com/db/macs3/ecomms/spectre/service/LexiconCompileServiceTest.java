@@ -1,20 +1,29 @@
 package com.db.macs3.ecomms.spectre.service;
 
 import com.db.macs3.ecomms.spectre.hyperscan.HyperscanCompiler;
-import com.db.macs3.ecomms.spectre.model.CompileRequest;
-import com.db.macs3.ecomms.spectre.model.CompileResponse;
 import com.db.macs3.ecomms.spectre.model.CompilationStatus;
+import com.db.macs3.ecomms.spectre.model.CompileResponse;
+import com.db.macs3.ecomms.spectre.model.TermType;
+import com.db.macs3.ecomms.spectre.model.TypedCompileRequest;
 import com.db.macs3.ecomms.spectre.translator.TermSyntaxTranslator;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.*;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit tests for {@link LexiconCompileService}.
  * No Spring context — uses real Hyperscan native library.
+ *
+ * <p>{@link TypedCompileRequest} is the single request type this service
+ * (and every compile endpoint) now uses — see that class's Javadoc. Every
+ * PASS term's {@code translatedPattern}/{@code exclusionPattern} are lists
+ * (one entry for a simple term, several when decomposed); there is no
+ * separate "was this decomposed" boolean any more.
  */
 @DisplayName("LexiconCompileService Tests")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -24,8 +33,8 @@ class LexiconCompileServiceTest {
 
     @BeforeEach
     void setUp() {
-        var translator = new TermSyntaxTranslator();
         var compiler   = new HyperscanCompiler();
+        var translator = new TermSyntaxTranslator(compiler);
         compiler.selfTest();
         service = new LexiconCompileService(translator, compiler, new SimpleMeterRegistry());
     }
@@ -33,12 +42,15 @@ class LexiconCompileServiceTest {
     // ── Helper ────────────────────────────────────────────────────────────────
 
     private CompileResponse compile(String ruleName, String... descriptions) {
-        var req = new CompileRequest();
+        var req = new TypedCompileRequest();
+        req.setRequestId(UUID.randomUUID().toString());
         req.setLexiconRuleName(ruleName);
+        req.setTermType(TermType.NATURAL_LANGUAGE);
+        List<TypedCompileRequest.TermInput> terms = new ArrayList<>();
         for (int i = 0; i < descriptions.length; i++) {
-            req.getTerms().add(new CompileRequest.TermInput(
-                    ruleName + "::" + (i + 1), descriptions[i], "Test Category"));
+            terms.add(new TypedCompileRequest.TermInput(ruleName + "::" + (i + 1), descriptions[i]));
         }
+        req.setTerms(terms);
         return service.compile(req);
     }
 
@@ -54,7 +66,8 @@ class LexiconCompileServiceTest {
         assertThat(resp.hasFailures()).isFalse();
         assertThat(resp.engineMode()).isEqualTo("HYPERSCAN_NATIVE");
         assertThat(resp.results().get(0).compilationStatus()).isEqualTo(CompilationStatus.PASS);
-        assertThat(resp.results().get(0).translatedPattern()).isNotBlank();
+        assertThat(resp.results().get(0).translatedPattern()).isNotEmpty();
+        assertThat(resp.results().get(0).translatedPattern().get(0)).isNotBlank();
         assertThat(resp.results().get(0).compiledAt()).isNotNull();
     }
 
@@ -66,7 +79,7 @@ class LexiconCompileServiceTest {
         assertThat(resp.passCount()).isEqualTo(1);
         var result = resp.results().get(0);
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
-        assertThat(result.translatedPattern()).contains("\\S*"); // wildcard translated
+        assertThat(result.translatedPattern().get(0)).contains("\\S*"); // wildcard translated
     }
 
     @Test @Order(3)
@@ -90,29 +103,31 @@ class LexiconCompileServiceTest {
     // ── Response structure ────────────────────────────────────────────────────
 
     @Test @Order(10)
-    @DisplayName("Response echoes all input fields for each term")
+    @DisplayName("Response echoes termId and termDescription for each term; requestId is propagated")
     void responseEchoesInputFields() {
-        var req = new CompileRequest();
+        var req = new TypedCompileRequest();
+        req.setRequestId("test-request-id-42");
         req.setLexiconRuleName("echo_test");
-        req.getTerms().add(new CompileRequest.TermInput(
-                "echo_test::42", "price OR spread", "Front Running"));
+        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setTerms(List.of(new TypedCompileRequest.TermInput("echo_test::42", "price OR spread")));
 
         var resp = service.compile(req);
         var result = resp.results().get(0);
 
         assertThat(result.termId()).isEqualTo("echo_test::42");
         assertThat(result.termDescription()).isEqualTo("price OR spread");
-        assertThat(result.riskDriverName()).isEqualTo("Front Running");
+        assertThat(resp.requestId()).isEqualTo("test-request-id-42");
     }
 
     @Test @Order(11)
     @DisplayName("Summary counts match individual term statuses")
     void summaryCounts() {
-        // (unclosed → \(unclosed (valid literal); [unclosed = truly invalid char class
+        // The translator escapes special regex chars like '[' or '(' to literals, so those
+        // do NOT fail — an unclosed quoted phrase is the Tokenizer's own confirmed failure path.
         var resp = compile("count_test",
                 "price OR spread",    // PASS
                 "insider AND news",   // PASS  (OR pre-scan after fix)
-                "[unclosed");         // FAILED — unclosed character class
+                "\"unclosed quote");   // FAILED — unclosed quoted phrase
 
         assertThat(resp.totalTerms()).isEqualTo(3);
         long actualPass = resp.results().stream()
@@ -125,15 +140,9 @@ class LexiconCompileServiceTest {
     }
 
     @Test @Order(12)
-    @DisplayName("FAILED term has a non-blank diagnostic — [unclosed is caught as a translation error")
+    @DisplayName("FAILED term has a non-blank diagnostic — an unclosed quoted phrase is caught as a translation error")
     void failedTermHasError() {
-        // "(unclosed" is escaped by the translator to "\(unclosed" — a valid Hyperscan literal.
-        // "[unclosed" is caught by TermSyntaxTranslator's own hasUnclosedCharClass diagnostic
-        // BEFORE Hyperscan is ever invoked, so this fails at the translation stage:
-        // translationError is populated and errorLog is correctly null (no Hyperscan
-        // compile was attempted). A failed term must always carry a diagnostic message
-        // in one of the two error fields, whichever stage caught it.
-        var resp = compile("err_test", "[unclosed");
+        var resp = compile("err_test", "\"unclosed quote");
         var failed = resp.results().stream()
                 .filter(r -> r.compilationStatus() == CompilationStatus.FAILED)
                 .findFirst();
@@ -151,6 +160,16 @@ class LexiconCompileServiceTest {
         assertThat(resp.engineMode()).isEqualTo("HYPERSCAN_NATIVE");
         assertThat(resp.engineMode()).doesNotContainIgnoringCase("re2j");
         assertThat(resp.engineMode()).doesNotContainIgnoringCase("fallback");
+    }
+
+    @Test @Order(14)
+    @DisplayName("A PASS term's translatedPattern is never null or empty — always at least one entry")
+    void translatedPatternNeverEmptyOnPass() {
+        var resp = compile("nonempty_test", "price OR spread");
+        var result = resp.results().get(0);
+        assertThat(result.isPass()).isTrue();
+        assertThat(result.translatedPattern()).isNotNull();
+        assertThat(result.translatedPattern()).isNotEmpty();
     }
 
     // ── Multi-language compilation ────────────────────────────────────────────
@@ -229,23 +248,37 @@ class LexiconCompileServiceTest {
     void followedByCompiles() {
         var resp = compile("fb_rule", "don't FOLLOWEDBY{3} compliance");
         assertThat(resp.passCount()).isEqualTo(1);
-        assertThat(resp.results().get(0).translatedPattern()).contains("don't");
-        assertThat(resp.results().get(0).translatedPattern()).contains("{0,3}");
+        assertThat(resp.results().get(0).translatedPattern().get(0)).contains("don't");
+        assertThat(resp.results().get(0).translatedPattern().get(0)).contains("{0,3}");
     }
 
-    // ── AND post-filter flag ──────────────────────────────────────────────────
+    // ── AND: corrected co-occurrence semantics ──────────────────────────────────
 
     @Test @Order(40)
-    @DisplayName("AND operator: compiles as OR pre-scan pattern; requiresAndPostFilter = true")
-    void andRequiresPostFilter() {
-        // After translator fix: AND → (?:A|B|C) — valid Hyperscan; passCount must be 1
+    @DisplayName("AND operator: compiles DIRECTLY into a correct co-occurrence pattern, self-contained, no exclusion needed")
+    void andCompilesSelfContained() {
         var resp = compile("and_rule", "insider AND announcement AND price");
         assertThat(resp.passCount()).isEqualTo(1);
         assertThat(resp.failedCount()).isEqualTo(0);
-        assertThat(resp.results().get(0).requiresAndPostFilter()).isTrue();
-        // OR pre-scan pattern must contain all operands
-        assertThat(resp.results().get(0).translatedPattern())
+        assertThat(resp.results().get(0).requiresExclusionCheck()).isFalse();
+        assertThat(resp.results().get(0).exclusionPattern()).isNull();
+        // All three operands appear somewhere in the pattern (every ordering permutation).
+        assertThat(resp.results().get(0).translatedPattern().get(0))
                 .contains("insider").contains("announcement").contains("price");
+    }
+
+    // ── AND NOT: the two-list contract ──────────────────────────────────────────
+
+    @Test @Order(41)
+    @DisplayName("AND NOT: requiresExclusionCheck true, exclusionPattern has exactly one entry for a simple exclusion")
+    void andNotProducesExclusionList() {
+        var resp = compile("and_not_rule", "insider AND NOT (compliance OR legal)");
+        assertThat(resp.passCount()).isEqualTo(1);
+        var result = resp.results().get(0);
+        assertThat(result.requiresExclusionCheck()).isTrue();
+        assertThat(result.exclusionPattern()).isNotNull();
+        assertThat(result.exclusionPattern()).hasSize(1);
+        assertThat(result.translatedPattern()).hasSize(1);
     }
 
     // ── Performance ───────────────────────────────────────────────────────────

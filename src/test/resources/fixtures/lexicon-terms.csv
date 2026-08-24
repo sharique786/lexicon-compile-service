@@ -1,0 +1,15 @@
+Term ID,Term Description
+lexicon_it_test::1,(crap OR bad) NEAR{3} (bonus OR comp)
+lexicon_it_test::2,(F) FOLLOWEDBY{1} (((me) OR (cking)))
+lexicon_it_test::3,bomb this place OR blow this place up
+lexicon_it_test::4,((he?d kill) OR (she?d kill))
+lexicon_it_test::5,(check her out) OR (chimp*)
+lexicon_it_test::6,((want to) AND (fix))
+lexicon_it_test::7,((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)
+lexicon_it_test::8,(gemobbt OR eingeschüchtert) NEAR{2} (broker OR *händler OR *haendler)
+lexicon_it_test::9,(Scheiße OR Scheisse OR Kacke) NEAR{5} (Bonus OR Vergütung)
+lexicon_it_test::10,(nur für dich) AND NOT((für dich) FOLLOWEDBY{1} (als OR zum) FOLLOWEDBY{1} (Hintergrund OR Info))
+lexicon_it_test::11,내부자 NEAR{3} 거래
+lexicon_it_test::12,"((""please don't forward"") OR (""do not share""))"
+lexicon_it_test::13,#@$#%$
+lexicon_it_test::14,(fix NEAR{3} (rate)

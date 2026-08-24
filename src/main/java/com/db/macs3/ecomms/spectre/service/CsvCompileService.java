@@ -1,7 +1,8 @@
 package com.db.macs3.ecomms.spectre.service;
 
-import com.db.macs3.ecomms.spectre.model.CompileRequest;
 import com.db.macs3.ecomms.spectre.model.CompileResponse;
+import com.db.macs3.ecomms.spectre.model.TermType;
+import com.db.macs3.ecomms.spectre.model.TypedCompileRequest;
 import com.opencsv.CSVParserBuilder;
 import com.opencsv.CSVReader;
 import com.opencsv.CSVReaderBuilder;
@@ -18,12 +19,20 @@ import java.util.List;
 /**
  * Parses a lexicon CSV upload and delegates to {@link LexiconCompileService}.
  *
- * <h2>Expected CSV format</h2>
+ * <h2>Expected CSV format (2-column)</h2>
  * <pre>
- * Term ID, Term Description, Risk Driver Name
- * lexicon_research_1::1, (manipulate*) NEAR{5} ((price) OR (spread)), Front Running
- * lexicon_research_1::2, "((""please don't forward"") OR (""do not share""))", Research
+ * Term ID, Term Description
+ * lexicon_research_1::1, (manipulate*) NEAR{5} ((price) OR (spread))
+ * lexicon_research_1::2, "((""please don't forward"") OR (""do not share""))"
  * </pre>
+ *
+ * <p>The {@code Risk Driver Name} column has been removed. Rows with a third
+ * column are still parsed without error — the extra value is simply ignored.
+ *
+ * <p>CSV rows are always operator-language syntax — this service builds a
+ * {@link TypedCompileRequest} with {@code termType = NATURAL_LANGUAGE}
+ * (the single request type shared with {@code /compile} and
+ * {@code /compile/bundle} — see {@link TypedCompileRequest} class Javadoc).
  *
  * <h2>Features</h2>
  * <ul>
@@ -50,25 +59,31 @@ public class CsvCompileService {
      *
      * @param csvStream  raw CSV bytes (may be BOM-prefixed UTF-8)
      * @param ruleName   lexicon rule name for the response
-     * @return compile response
+     * @param requestId  caller-supplied or generated UUID, echoed in the response
+     * @return compile response with {@code request_id} set
      * @throws IOException if the CSV cannot be parsed
      */
-    public CompileResponse compileFromCsv(InputStream csvStream, String ruleName)
+    public CompileResponse compileFromCsv(InputStream csvStream, String ruleName, String requestId)
             throws IOException {
-        List<CompileRequest.TermInput> terms = parseCsv(csvStream, ruleName);
-        log.info("CSV parsed: {} terms for rule '{}'", terms.size(), ruleName);
+        List<TypedCompileRequest.TermInput> terms = parseCsv(csvStream, ruleName);
+        log.info("CSV parsed: {} terms for rule '{}' (request_id={})",
+                terms.size(), ruleName, requestId);
 
-        CompileRequest request = new CompileRequest();
+        TypedCompileRequest request = new TypedCompileRequest();
+        request.setRequestId(requestId);
         request.setLexiconRuleName(ruleName);
+        request.setTermType(TermType.NATURAL_LANGUAGE);
         request.setTerms(terms);
+        // SOM_LEFTMOST application is decided internally, per-expression, based on whether
+        // it's a plain, QUIET, or COMBINATION expression -- see HyperscanCompiler.
         return compileService.compile(request);
     }
 
     // ── CSV parsing ───────────────────────────────────────────────────────────
 
-    private List<CompileRequest.TermInput> parseCsv(InputStream raw, String source)
+    private List<TypedCompileRequest.TermInput> parseCsv(InputStream raw, String source)
             throws IOException {
-        List<CompileRequest.TermInput> terms = new ArrayList<>();
+        List<TypedCompileRequest.TermInput> terms = new ArrayList<>();
 
         try (CSVReader reader = new CSVReaderBuilder(
                 new InputStreamReader(stripBom(raw), StandardCharsets.UTF_8))
@@ -102,10 +117,9 @@ public class CsvCompileService {
                     continue;
                 }
 
-                terms.add(new CompileRequest.TermInput(
+                terms.add(new TypedCompileRequest.TermInput(
                         row[0].trim(),
-                        row[1].trim(),
-                        row.length > 2 ? row[2].trim() : null));
+                        row[1].trim()));   // riskDriverName removed; any extra columns ignored
             }
 
         } catch (CsvException e) {

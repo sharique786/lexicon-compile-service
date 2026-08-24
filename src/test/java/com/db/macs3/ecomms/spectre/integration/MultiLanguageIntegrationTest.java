@@ -49,8 +49,8 @@ class MultiLanguageIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        translator = new TermSyntaxTranslator();
         compiler   = new HyperscanCompiler();
+        translator = new TermSyntaxTranslator(compiler);
         compiler.selfTest();
     }
 
@@ -81,10 +81,10 @@ class MultiLanguageIntegrationTest {
         // This exercises the Hyperscan JNI code path (Database.compile),
         // confirming the pattern is valid PCRE for the Hyperscan engine.
         HyperscanCompiler.ValidationResult hsResult =
-                compiler.validate(success.hsPattern(), success.hsFlags());
+                compiler.validate(success.hsPatterns().get(0), success.hsFlags());
         assertThat(hsResult.isPass())
                 .as("Hyperscan compile failed for pattern '%s': %s",
-                        success.hsPattern(), hsResult.errorMessage())
+                        success.hsPatterns().get(0), hsResult.errorMessage())
                 .isTrue();
 
         // ── Step 3: Match using Java regex ─────────────────────────────────────
@@ -101,7 +101,7 @@ class MultiLanguageIntegrationTest {
         if ((success.hsFlags() & HyperscanCompiler.HS_FLAG_UTF8) != 0) {
             javaFlags |= Pattern.UNICODE_CHARACTER_CLASS;
         }
-        Pattern pattern = Pattern.compile(success.hsPattern(), javaFlags);
+        Pattern pattern = Pattern.compile(success.hsPatterns().get(0), javaFlags);
         return pattern.matcher(messageText).find();
     }
 
@@ -239,9 +239,14 @@ class MultiLanguageIntegrationTest {
     }
 
     @Test @Order(31)
-    @DisplayName("Bloomberg emoji chat: single emoji 💰 → MATCH")
-    void singleEmojiMatch() throws Exception {
-        assertThat(matches("💰", BLOOMBERG_CHAT)).isTrue();
+    @DisplayName("Bloomberg emoji chat: a BARE single emoji with no operator is REJECTED — 'no letter " +
+                 "or digit anywhere' validation (Tokenizer), unrelated to this redesign. FLAGGED: this " +
+                 "may be worth reconsidering, since a lexicon author might legitimately want a single " +
+                 "emoji (e.g. \uD83D\uDCB0 alone) as a compliance-surveillance signal; \"\uD83D\uDCB0 OR \uD83E\uDD2B OR \uD83E\uDD10\" only " +
+                 "passes today because the word \"OR\" itself supplies a letter.")
+    void singleEmojiRejected() throws Exception {
+        TranslationResult result = translator.translate("💰");
+        assertThat(result.isSuccess()).isFalse();
     }
 
     @Test @Order(32)

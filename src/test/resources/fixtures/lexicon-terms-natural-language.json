@@ -1,0 +1,14 @@
+{
+  "request_id": "it-test-natural-language-0001",
+  "lexiconRuleName": "lexicon_it_test_nl",
+  "termType": "Natural Language",
+  "terms": [
+    { "termId": "nl::1", "termDescription": "(crap OR bad) NEAR{3} (bonus OR comp)" },
+    { "termId": "nl::2", "termDescription": "bomb this place OR blow this place up" },
+    { "termId": "nl::3", "termDescription": "((want to) AND (fix))" },
+    { "termId": "nl::4", "termDescription": "((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)" },
+    { "termId": "nl::5", "termDescription": "(check her out) OR (chimp*)" },
+    { "termId": "nl::6", "termDescription": "내부자 NEAR{3} 거래" },
+    { "termId": "nl::7", "termDescription": "#@$#%$" }
+  ]
+}

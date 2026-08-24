@@ -147,7 +147,7 @@ public final class TikaLanguageSupport {
                     try {
                         detector = new OptimaizeLangDetector().loadModels();
                         log.debug("Tika Optimaize language detector loaded");
-                    } catch (RuntimeException e) {
+                    } catch (IOException | RuntimeException e) {
                         log.warn("Tika language detector unavailable: {}", e.getMessage());
                         detector = null; // will retry on next call (acceptable)
                     }

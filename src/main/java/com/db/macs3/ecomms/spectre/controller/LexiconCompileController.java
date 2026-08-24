@@ -1,11 +1,11 @@
 package com.db.macs3.ecomms.spectre.controller;
 
-import com.db.macs3.ecomms.spectre.model.CompileRequest;
 import com.db.macs3.ecomms.spectre.model.CompileResponse;
 import com.db.macs3.ecomms.spectre.model.TypedCompileRequest;
 import com.db.macs3.ecomms.spectre.service.CsvCompileService;
 import com.db.macs3.ecomms.spectre.service.LexiconCompileBundleService;
 import com.db.macs3.ecomms.spectre.service.LexiconCompileService;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,7 +15,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import tools.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -24,6 +23,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -37,7 +37,7 @@ import java.util.zip.ZipOutputStream;
  *   <dt>POST /api/lexicon/compile/csv</dt>
  *   <dd>Multipart CSV file → compile results</dd>
  *   <dt>POST /api/lexicon/compile/bundle</dt>
- *   <dd>JSON body with per-term {@code termType} (Standard/NLT) → zip file
+ *   <dd>JSON body with per-term {@code termType} (Natural Language/Regex) → zip file
  *       containing the JSON results (same shape as {@code /compile}) and a
  *       single combined Hyperscan database file</dd>
  *   <dt>GET /api/lexicon/health</dt>
@@ -58,7 +58,7 @@ public class LexiconCompileController {
     private final LexiconCompileService       compileService;
     private final CsvCompileService           csvCompileService;
     private final LexiconCompileBundleService bundleService;
-    private final ObjectMapper objectMapper;
+    private final ObjectMapper                objectMapper;
 
     public LexiconCompileController(LexiconCompileService compileService,
                                      CsvCompileService csvCompileService,
@@ -74,6 +74,12 @@ public class LexiconCompileController {
 
     /**
      * Compiles lexicon terms from a JSON body.
+     *
+     * <p>{@link TypedCompileRequest} is the single request type shared with
+     * {@code /compile/bundle} (see that class's Javadoc) — {@code request_id}
+     * is now required for every {@code /compile} call too, and {@code termType}
+     * lets a caller submit Regex-type terms here as well, not just
+     * Natural Language.
      *
      * <p>Recommended client request:
      * <pre>
@@ -92,10 +98,10 @@ public class LexiconCompileController {
             produces = MediaType.APPLICATION_JSON_VALUE
     )
     public ResponseEntity<CompileResponse> compileJson(
-            @Valid @RequestBody CompileRequest request) {
+            @Valid @RequestBody TypedCompileRequest request) {
 
-        log.info("POST /compile — rule='{}', terms={}",
-                request.getLexiconRuleName(), request.getTerms().size());
+        log.info("POST /compile — rule='{}', terms={}, request_id={}",
+                request.getLexiconRuleName(), request.getTerms().size(), request.getRequestId());
         return ResponseEntity.ok(compileService.compile(request));
     }
 
@@ -104,11 +110,16 @@ public class LexiconCompileController {
     /**
      * Compiles lexicon terms from a CSV multipart file upload.
      *
-     * <p>The CSV must have columns: {@code Term ID, Term Description, Risk Driver Name}
+     * <p>The CSV must have two columns: {@code Term ID} and
+     * {@code Term Description}. The {@code Risk Driver Name} column is no
+     * longer required and is silently ignored if present.
+     *
+     * <p>A UUID {@code request_id} is generated automatically for each call
+     * and echoed back in the response for end-to-end request tracking.
      *
      * @param file     CSV file (UTF-8, BOM optional)
      * @param ruleName optional rule name override (defaults to filename without extension)
-     * @return compile response with per-term results
+     * @return compile response with per-term results and a generated {@code request_id}
      */
     @PostMapping(
             value    = "/compile/csv",
@@ -127,12 +138,16 @@ public class LexiconCompileController {
                 ? ruleName
                 : stripExtension(file.getOriginalFilename());
 
-        log.info("POST /compile/csv — file='{}', ruleName='{}', size={}",
-                file.getOriginalFilename(), effectiveRule, file.getSize());
+        // Generate a UUID for this request — echoed back in the response
+        // so callers can correlate requests to responses end-to-end.
+        String requestId = UUID.randomUUID().toString();
+
+        log.info("POST /compile/csv — file='{}', ruleName='{}', size={}, request_id={}",
+                file.getOriginalFilename(), effectiveRule, file.getSize(), requestId);
 
         try {
             return ResponseEntity.ok(
-                    csvCompileService.compileFromCsv(file.getInputStream(), effectiveRule));
+                    csvCompileService.compileFromCsv(file.getInputStream(), effectiveRule, requestId));
         } catch (IOException e) {
             log.error("Failed to parse CSV: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
@@ -142,8 +157,8 @@ public class LexiconCompileController {
     // ── POST /api/lexicon/compile/bundle ──────────────────────────────────────
 
     /**
-     * Compiles lexicon terms with per-term {@code termType} ("Standard" or
-     * "NLT") and returns a zip file containing the JSON compile results
+     * Compiles lexicon terms with per-term {@code termType} ("Natural Language" or
+     * "Regex") and returns a zip file containing the JSON compile results
      * (identical shape to {@code /compile}'s response) and a single combined
      * Hyperscan database file built from every term that reached PASS.
      *

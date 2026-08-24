@@ -98,10 +98,31 @@ tracking two simultaneous gap-counters — multiplicative, not additive; see
 `COMPLEXITY_BUDGET = 700`, calibrated against two known real Hyperscan
 outcomes — a heuristic, not a proof). When a term is judged too complex,
 `PatternDecomposer` breaks it into independent leaves rather than
-rejecting it — but **this discards the original proximity/ordering
-constraint entirely**: decomposed leaves are combined with pure boolean
-AND ("all these appear somewhere"), not "in this order, within this
-distance." `warnings` always carries an explicit entry when this
+rejecting it — but **this discards the ordering/distance constraint
+BETWEEN leaves**: decomposed leaves are combined with pure boolean AND
+("all these appear somewhere"), independently of each other, not "in this
+order, within this distance relative to one another."
+
+**Confirmed-fixed regression, worth knowing the shape of**: an earlier
+revision of `PatternDecomposer` (`collectLeaves`) discarded each
+NEAR/FOLLOWEDBY node's gap *entirely*, not just the cross-leaf
+relationship — e.g. `(A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C` decomposed to
+three totally independent leaves `A`, `B`, `C`, with no trace of either
+`{4}` left anywhere, incorrectly allowing `B` or `C` to match as the
+message's literal first token. `PatternDecomposer.decompose()` now bakes
+each NEAR/FOLLOWEDBY node's own gap fragment (word- or character-based,
+chosen the same way `MultiLanguagePatternBuilder` would for the
+equivalent non-decomposed pattern) into the START of the leaf that
+immediately followed it in the original term text — for the example
+above: `[A, "(?:\s+\S+){0,4}\s+"+B, "(?:\s+\S+){0,4}\s+"+C]`. This is
+still **not** the original proximity constraint — the gap is a literal
+prefix baked into one leaf's own pattern, not a cross-expression
+constraint (Hyperscan has no mechanism for one independently-scanned
+expression's match position to depend on another's), so it does not
+require that preceding content be the OTHER leaf's own match. What it
+restores is narrower but real: a leaf that sat on the right of a
+NEAR/FOLLOWEDBY can no longer match with literally nothing before it.
+`warnings` always carries an explicit entry when the decomposition
 trade-off applies — never silently discard that field downstream.
 
 ---
@@ -114,11 +135,12 @@ someone unfamiliar with the history. Don't.
 ### 1. `HS_FLAG_QUIET` + `HS_FLAG_SOM_LEFTMOST` is a real, confirmed-incompatible combination
 
 Hit as a real production Hyperscan compile error early in this project's
-history. `HyperscanCompiler.toExpressionFlags()` (plain expressions) always
-adds `SOM_LEFTMOST`; `toSubExpressionFlags()` (QUIET expressions) never
-does — structurally, per expression kind, not via any caller-supplied
-toggle (an earlier `trackMatchPosition` request field existed for this and
-was removed, because the two settings were never actually independent
+history. `HyperscanCompiler.toExpressionFlags()` (the simple, single-pattern,
+non-AND-NOT PASS-term case) always adds `SOM_LEFTMOST`; `toSubExpressionFlags()`
+(pure-decomposition-leaf QUIET expressions) never does — structurally, per
+expression kind, not via any caller-supplied toggle (an earlier
+`trackMatchPosition` request field existed for this and was removed, because
+the two settings were never actually independent
 choices).
 
 ### 2. Native `HS_FLAG_COMBINATION` is unsafe for AND NOT — confirmed via Hyperscan's own documentation
@@ -170,6 +192,38 @@ was rejected as a "fix" (it would silently change what the term means).
 
 ---
 
+## Hyperscan `ExpressionFlag` scheme: three fixed cases, not per-content
+
+Which `ExpressionFlag`s an expression gets is decided by which of **three
+mutually exclusive cases** it falls into — matching the three branches
+already in `HyperscanCombinationHandler.addExpressions()`:
+
+| Case | Method | Flags |
+|---|---|---|
+| AND NOT — every required/excluded pattern, regardless of decomposition on either side | `toAndNotExpressionFlags()` | `CASELESS` only |
+| Pure decomposition leaf, no AND NOT | `toSubExpressionFlags()` | `CASELESS`, `QUIET` only |
+| Simple, single-pattern, non-AND-NOT, error-free, complexity-under-budget PASS term (also the flag set `HyperscanCompiler.validate()` always uses for the "too large" pre-check) | `toExpressionFlags(bitmask)` | `CASELESS`, `DOTALL`, `SOM_LEFTMOST` always; `UTF8`/`UCP` only when `bitmask` indicates non-Latin content |
+
+**AND NOT deliberately does not get `SOM_LEFTMOST`** any more, even though
+it would be structurally *safe* there (AND NOT patterns are plain, never
+QUIET, so the QUIET+SOM_LEFTMOST incompatibility above doesn't apply to
+them) — the AND NOT case is scoped to `CASELESS` only regardless. Don't
+"restore" SOM_LEFTMOST there as a safety-motivated cleanup; it was removed
+on purpose.
+
+**UTF8/UCP stay conditional in the simple-term case ONLY, on purpose — this
+was tried unconditionally first and reverted after two confirmed
+regressions**: (1) Hyperscan rejects `\b` (word boundary) when UCP is
+active ("`\b` unsupported in UCP mode"), breaking any caller-supplied
+Regex-type term using it; (2) UCP mode measurably slows Hyperscan
+compilation even for plain-ASCII patterns (~15x in this project's own
+performance test, `LexiconCompileServiceTest.performance`). Do not make
+UTF8/UCP unconditional in `toExpressionFlags()` without re-checking both of
+those. The AND NOT and pure-decomposition-leaf cases have NO conditional
+bits at all — not even for non-Latin content — by design.
+
+---
+
 ## The cross-service JSON contract — read before changing `TermCompilationResult`
 
 `requiresExclusionCheck: false` (simple or purely-decomposed term):
@@ -180,6 +234,21 @@ null.
 `requiresExclusionCheck: true` (AND NOT): `hyperscanExpressionId` **null**.
 `requiredExpressionIds`/`excludedExpressionIds` populated instead — one
 allocated id per pattern, none of which is the term number.
+
+`patternMapping` (added for the Lexicon Scan Engine): a boolean formula
+string over this term's expression id(s), `&`/`!`-joined the same way
+Hyperscan's own `HS_FLAG_COMBINATION` formulas are — e.g. `"(5&6&7)"` for a
+pure-decomposition term, `"(8&!(9&10&11))"` for AND NOT. Null for a simple,
+single-expression term (nothing to map). **For a pure-decomposition term
+this mirrors a formula the `.hdb` ALSO encodes natively** (safe — no
+negation). **For an AND NOT term this is the ONLY place the formula
+exists** — the `.hdb` never encodes it (confirmed unsafe via eager
+COMBINATION evaluation, see the AND NOT section above), so a consumer
+reading only the `.hdb` cannot derive it; the Lexicon Scan Engine must read
+`patternMapping` from this JSON and evaluate it itself, after the whole
+scan completes, against the complete matched-id set. See
+`TermCompilationResult` class Javadoc "patternMapping" and
+`HyperscanCombinationHandler.buildAndNotFormula`/`joinFormula`.
 
 **Both downstream services parse this shape directly and depend on it
 being exactly this.** The Lexicon Scan Engine's `TermExpressionMetadata`
@@ -291,3 +360,20 @@ verification scaffolding, not a repository fixture.
    Lexicon Scanner Service, and (4)'s id-scheme change was found to have
    silently broken the Lexicon Scan Engine's own assumptions, fixed there
    via `TermExpressionMetadata`/`TermMetadataLoader`.
+7. **Decomposition gap-preservation fix**: `PatternDecomposer` previously
+   discarded every NEAR/FOLLOWEDBY node's gap entirely on decomposition, not
+   just the cross-leaf relationship — a real regression from the
+   non-decomposed pattern's own semantics. Fixed by baking each node's own
+   gap fragment into the leaf that followed it in the original term text.
+8. **`ExpressionFlag` scheme fix**: flags were previously derived per-term
+   from script content across every case. Replaced with the three fixed
+   cases above (AND NOT / decomposition leaf / simple term). UTF8/UCP were
+   briefly made unconditional in the simple-term case too, then reverted
+   after confirming it broke `\b`-based Regex-type terms and cost ~15x
+   compile time even for pure-ASCII patterns — see that section above.
+9. **`patternMapping` added**: `TermCompilationResult` gained a
+   `patternMapping` field so the Lexicon Scan Engine has a place to read an
+   AND NOT term's combination formula, since (per (4) above) the `.hdb`
+   itself deliberately never encodes one. Also populated for
+   pure-decomposition terms, mirroring the formula already written into the
+   `.hdb`'s native `COMBINATION` expression there.

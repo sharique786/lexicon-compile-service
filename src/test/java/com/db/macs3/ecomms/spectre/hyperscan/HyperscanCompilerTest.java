@@ -209,6 +209,49 @@ class HyperscanCompilerTest {
         assertThat(r.errorMessage()).isEqualTo("some error");
     }
 
+    // ── Case-by-case ExpressionFlag application ─────────────────────────────────
+
+    @Test
+    @Order(42)
+    @DisplayName("toExpressionFlags(): simple/plain term case, ASCII-only bitmask — CASELESS, DOTALL, "
+            + "SOM_LEFTMOST always; UTF8/UCP stay OFF since the bitmask doesn't request them")
+    void toExpressionFlagsAsciiOnly() {
+        assertThat(compiler.toExpressionFlags(HyperscanCompiler.HS_FLAG_CASELESS)).isEqualTo(java.util.EnumSet.of(
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.CASELESS,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.DOTALL,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.SOM_LEFTMOST));
+    }
+
+    @Test
+    @Order(43)
+    @DisplayName("toExpressionFlags(): simple/plain term case, non-ASCII bitmask — additionally UTF8 + UCP")
+    void toExpressionFlagsNonAscii() {
+        int bitmask = HyperscanCompiler.HS_FLAG_CASELESS | HyperscanCompiler.HS_FLAG_UTF8 | HyperscanCompiler.HS_FLAG_UCP;
+        assertThat(compiler.toExpressionFlags(bitmask)).isEqualTo(java.util.EnumSet.of(
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.CASELESS,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.DOTALL,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.UTF8,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.UCP,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.SOM_LEFTMOST));
+    }
+
+    @Test
+    @Order(44)
+    @DisplayName("toAndNotExpressionFlags(): AND NOT case — exactly CASELESS, unconditionally")
+    void toAndNotExpressionFlagsIsCaselessOnly() {
+        assertThat(compiler.toAndNotExpressionFlags()).isEqualTo(
+                java.util.EnumSet.of(com.gliwka.hyperscan.wrapper.ExpressionFlag.CASELESS));
+    }
+
+    @Test
+    @Order(45)
+    @DisplayName("toSubExpressionFlags(): decomposed-leaf case — exactly CASELESS + QUIET, unconditionally")
+    void toSubExpressionFlagsIsCaselessAndQuiet() {
+        assertThat(compiler.toSubExpressionFlags()).isEqualTo(java.util.EnumSet.of(
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.CASELESS,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.QUIET));
+    }
+
     // ── Thread safety ─────────────────────────────────────────────────────────
 
     @Test

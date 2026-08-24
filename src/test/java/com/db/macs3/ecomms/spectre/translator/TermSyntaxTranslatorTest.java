@@ -677,6 +677,23 @@ class TermSyntaxTranslatorTest {
         }
 
         @Test
+        @DisplayName("BUG FIX: decomposed leaves must carry their enclosing FOLLOWEDBY's own gap fragment "
+                + "as a literal prefix, not drop it entirely — real German lexicon term that exposed the "
+                + "regression, nested FOLLOWEDBY over wildcard/multi-word OR groups")
+        void decomposedLeaves_carryFollowedByGapPrefix() {
+            String term = "(((versuch nicht OR mach* nicht OR tu* nicht OR vermeide) FOLLOWEDBY{4} "
+                    + "(frontrun* OR front run* OR übergeh* OR überspring*)) FOLLOWEDBY{4} "
+                    + "(das OR dies OR mich OR sie OR flow OR Druck OR Ausdruck))";
+
+            var s = translateOk(term);
+
+            assertThat(s.hsPatterns()).containsExactly(
+                    "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide)",
+                    "(?:\\s+\\S+){0,4}\\s+(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
+                    "(?:\\s+\\S+){0,4}\\s+(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
+        }
+
+        @Test
         @DisplayName("Simple single-level NEAR/FOLLOWEDBY with small OR groups is never affected")
         void simpleProximity_neverRejected() {
             assertThat(translator.translate("(a OR b) NEAR{5} (c OR d)").isSuccess()).isTrue();

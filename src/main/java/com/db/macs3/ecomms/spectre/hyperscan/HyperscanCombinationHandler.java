@@ -141,7 +141,8 @@ public class HyperscanCombinationHandler {
 
     /**
      * The result of assigning expression id(s) to one term — exactly one
-     * of the two shapes below is populated, never both:
+     * of {@code hyperscanExpressionId} / {@code requiredExpressionIds}+
+     * {@code excludedExpressionIds} is populated, never both:
      *
      * @param hyperscanExpressionId populated for a term that does NOT require
      *                              an exclusion check (simple or purely
@@ -153,11 +154,21 @@ public class HyperscanCombinationHandler {
      * @param excludedExpressionIds populated ONLY for an AND NOT term — the id(s)
      *                              of the excluded side's plain expression(s), one
      *                              per entry of {@code exclusionPattern}. Null otherwise.
+     * @param patternMapping        the logical formula over this term's expression id(s)
+     *                              — see {@code TermCompilationResult} class Javadoc
+     *                              "patternMapping". Null for a simple, single-pattern,
+     *                              non-AND-NOT term (nothing to map — its one id IS the
+     *                              whole answer). Non-null for pure decomposition (mirrors
+     *                              the native COMBINATION formula also written into the
+     *                              {@code .hdb}) and for AND NOT (the ONLY place this
+     *                              formula is recorded, since AND NOT never gets a native
+     *                              COMBINATION in the {@code .hdb} itself).
      */
     public record ExpressionAssignment(
             Integer hyperscanExpressionId,
             List<Integer> requiredExpressionIds,
-            List<Integer> excludedExpressionIds
+            List<Integer> excludedExpressionIds,
+            String patternMapping
     ) {
     }
 
@@ -167,14 +178,19 @@ public class HyperscanCombinationHandler {
      * class Javadoc for why AND NOT terms and non-AND-NOT terms are handled
      * completely differently now.
      *
-     * <p>Whether {@code SOM_LEFTMOST} ends up on an expression remains
-     * decided structurally: every expression this method adds for an AND
-     * NOT term is a plain, non-QUIET, non-COMBINATION expression (each
-     * reports individually), so each safely receives {@code SOM_LEFTMOST}
-     * via {@link HyperscanCompiler#toExpressionFlags} exactly like the
-     * simple, non-AND-NOT case — none of them are QUIET, so the confirmed
-     * QUIET+SOM_LEFTMOST incompatibility never applies to them. QUIET
-     * remains used only for the (still-safe) pure-decomposition COMBINATION path.
+     * <p>Which {@code ExpressionFlag} set an expression gets is decided
+     * strictly by which of these three cases it falls into — never by the
+     * term's own script content any more:
+     * <ul>
+     *   <li>AND NOT (any term, regardless of decomposition on either side) —
+     *       {@link HyperscanCompiler#toAndNotExpressionFlags} ({@code CASELESS} only)</li>
+     *   <li>Simple, single-pattern, non-AND-NOT PASS term —
+     *       {@link HyperscanCompiler#toExpressionFlags} ({@code CASELESS},
+     *       {@code DOTALL}, {@code SOM_LEFTMOST} always, plus {@code UTF8}/
+     *       {@code UCP} when the term's content needs them)</li>
+     *   <li>Pure decomposition leaf, no AND NOT —
+     *       {@link HyperscanCompiler#toSubExpressionFlags} ({@code CASELESS}, {@code QUIET})</li>
+     * </ul>
      *
      * @param termResult     a PASS result
      * @param termNumber     this term's own term number, parsed from its {@code termId}
@@ -189,9 +205,10 @@ public class HyperscanCombinationHandler {
         if (termResult.requiresExclusionCheck()) {
             // AND NOT — no combination, regardless of decomposition on either side.
             // Every pattern (both sides) is its own plain, individually-reportable expression.
-            List<Integer> requiredIds = addPlainSide(requiredPatterns, idAllocator, expressionsOut, termResult.hyperscanFlags());
-            List<Integer> excludedIds = addPlainSide(termResult.exclusionPattern(), idAllocator, expressionsOut, termResult.hyperscanFlags());
-            return new ExpressionAssignment(null, requiredIds, excludedIds);
+            List<Integer> requiredIds = addPlainSide(requiredPatterns, idAllocator, expressionsOut);
+            List<Integer> excludedIds = addPlainSide(termResult.exclusionPattern(), idAllocator, expressionsOut);
+            String patternMapping = buildAndNotFormula(requiredIds, excludedIds);
+            return new ExpressionAssignment(null, requiredIds, excludedIds, patternMapping);
         }
 
         if (requiredPatterns.size() == 1) {
@@ -200,15 +217,15 @@ public class HyperscanCombinationHandler {
                     requiredPatterns.getFirst(),
                     compiler.toExpressionFlags(termResult.hyperscanFlags()),
                     termNumber));
-            return new ExpressionAssignment(termNumber, null, null);
+            return new ExpressionAssignment(termNumber, null, null, null);
         }
 
         // Pure decomposition, no AND NOT — native COMBINATION remains safe here (no negation
         // involved) — see class Javadoc for why this path is unaffected by the AND NOT fix.
-        List<Integer> leafIds = addQuietSide(requiredPatterns, idAllocator, expressionsOut, termResult.hyperscanFlags());
+        List<Integer> leafIds = addQuietSide(requiredPatterns, idAllocator, expressionsOut);
         String combinationFormula = "(" + joinWithAnd(leafIds) + ")";
         expressionsOut.add(new Expression(combinationFormula, compiler.toCombinationExpressionFlags(), termNumber));
-        return new ExpressionAssignment(termNumber, null, null);
+        return new ExpressionAssignment(termNumber, null, null, combinationFormula);
     }
 
     /**
@@ -216,15 +233,16 @@ public class HyperscanCombinationHandler {
      * non-COMBINATION, individually reportable) expression — used only for
      * AND NOT terms now, where every required/excluded pattern must report
      * on its own so the caller can evaluate the boolean condition after the
-     * whole scan completes. Includes SOM_LEFTMOST, safely, since none of
-     * these are QUIET.
+     * whole scan completes. Flagged via {@link HyperscanCompiler#toAndNotExpressionFlags}
+     * ({@code CASELESS} only — no SOM_LEFTMOST, even though these are plain,
+     * non-QUIET expressions for which SOM_LEFTMOST would be structurally safe).
      */
     private List<Integer> addPlainSide(List<String> patterns, HyperscanIdAllocator idAllocator,
-                                       List<Expression> expressionsOut, int hyperscanFlags) {
+                                       List<Expression> expressionsOut) {
         List<Integer> ids = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
             int id = idAllocator.allocate();
-            expressionsOut.add(new Expression(pattern, compiler.toExpressionFlags(hyperscanFlags), id));
+            expressionsOut.add(new Expression(pattern, compiler.toAndNotExpressionFlags(), id));
             ids.add(id);
         }
         return ids;
@@ -234,17 +252,42 @@ public class HyperscanCombinationHandler {
      * Adds every pattern in {@code patterns} as its own QUIET expression,
      * returning their allocated ids. Used only for the pure-decomposition
      * (no AND NOT) COMBINATION path, which remains safe — see class Javadoc.
-     * Never includes SOM_LEFTMOST — confirmed incompatible with QUIET.
+     * Flagged via {@link HyperscanCompiler#toSubExpressionFlags}
+     * ({@code CASELESS} + {@code QUIET} — never SOM_LEFTMOST, confirmed
+     * incompatible with QUIET).
      */
     private List<Integer> addQuietSide(List<String> patterns, HyperscanIdAllocator idAllocator,
-                                       List<Expression> expressionsOut, int hyperscanFlags) {
+                                       List<Expression> expressionsOut) {
         List<Integer> ids = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
             int id = idAllocator.allocate();
-            expressionsOut.add(new Expression(pattern, compiler.toSubExpressionFlags(hyperscanFlags), id));
+            expressionsOut.add(new Expression(pattern, compiler.toSubExpressionFlags(), id));
             ids.add(id);
         }
         return ids;
+    }
+
+    /**
+     * Builds the AND NOT logical formula for {@code TermCompilationResult.patternMapping}
+     * — {@code "(<required>&!<excluded>)"}, where each side is {@link #joinFormula}'d
+     * independently (bare id if that side has exactly one; parenthesised
+     * {@code (id1&id2&...)} AND-join if it was decomposed into several — same
+     * "AND convention" documented on {@code requiredExpressionIds}/{@code excludedExpressionIds}).
+     * This is the ONLY place this formula is recorded — never written into the
+     * {@code .hdb} itself as a native {@code COMBINATION}, since that combination
+     * shape is confirmed unsafe for AND NOT (see class Javadoc).
+     */
+    private static String buildAndNotFormula(List<Integer> requiredIds, List<Integer> excludedIds) {
+        return "(" + joinFormula(requiredIds) + "&!" + joinFormula(excludedIds) + ")";
+    }
+
+    /**
+     * One side's AND-join sub-formula: a bare id when {@code ids} has exactly
+     * one entry, or a parenthesised {@code (id1&id2&...)} when it was
+     * decomposed into several.
+     */
+    private static String joinFormula(List<Integer> ids) {
+        return ids.size() == 1 ? String.valueOf(ids.getFirst()) : "(" + joinWithAnd(ids) + ")";
     }
 
     private static String joinWithAnd(List<Integer> ids) {

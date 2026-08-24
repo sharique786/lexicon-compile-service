@@ -342,11 +342,7 @@ public final class TermSyntaxTranslator {
      */
     private Candidate generateSide(Ast sideAst, ParseContext ctx) {
         if (PatternComplexityAnalyzer.isOverBudget(sideAst)) {
-            List<Ast> leaves = PatternDecomposer.collectLeaves(sideAst);
-            List<String> leafPatterns = new ArrayList<>(leaves.size());
-            for (Ast leaf : leaves) {
-                leafPatterns.add(PatternCodeGenerator.generate(leaf, ctx));
-            }
+            List<String> leafPatterns = PatternDecomposer.decompose(sideAst, ctx);
             return new Candidate(sideAst, null, leafPatterns);
         }
         String pattern = PatternCodeGenerator.generate(sideAst, ctx);
@@ -408,11 +404,7 @@ public final class TermSyntaxTranslator {
         // side's single-pattern generation above — ctx (and therefore `flags`) already
         // reflects everything they need; regenerating their pattern strings is cheap and
         // does not require recomputing flags.
-        List<Ast> leaves = PatternDecomposer.collectLeaves(candidate.sideAst());
-        List<String> leafPatterns = new ArrayList<>(leaves.size());
-        for (Ast leaf : leaves) {
-            leafPatterns.add(PatternCodeGenerator.generate(leaf, ctx));
-        }
+        List<String> leafPatterns = PatternDecomposer.decompose(candidate.sideAst(), ctx);
         return validateDecomposedLeaves(candidate.sideAst(), leafPatterns, flags, originalTerm, sideLabel, warnings);
     }
 
@@ -482,11 +474,15 @@ public final class TermSyntaxTranslator {
                 + " independent parts (each individually Hyperscan-validated) — see"
                 + ("excluded (AND NOT)".equals(sideLabel) ? " exclusionPattern" : " translatedPattern")
                 + " in the response. IMPORTANT — this changes the term's matching semantics: decomposition"
-                + " discards the original NEAR/FOLLOWEDBY proximity and ordering constraints entirely. The"
+                + " discards the original NEAR/FOLLOWEDBY ordering/distance constraint BETWEEN parts. The"
                 + " decomposed parts are combined with a boolean AND (natively via Hyperscan's logical"
                 + " combination for /compile/bundle, or by the caller for /compile and /compile/csv) and"
-                + " match only when ALL parts are found ANYWHERE in the message, in ANY order, at ANY"
-                + " distance apart — NOT in the specific order or proximity the original term expressed."
+                + " match when ALL parts are found ANYWHERE in the message, independently of each other —"
+                + " NOT tied to the specific order or proximity the original term expressed relative to ONE"
+                + " ANOTHER. Each part after the first still carries its own original NEAR/FOLLOWEDBY gap as"
+                + " a literal prefix in its own pattern text (so it cannot match with nothing preceding it),"
+                + " but that gap is no longer anchored to the specific part that preceded it in the original"
+                + " term — only the cross-part relationship is lost, not the gap width itself."
                 + " Term: '" + originalTerm + "'.");
 
         return new SideResult(List.copyOf(leafPatterns));

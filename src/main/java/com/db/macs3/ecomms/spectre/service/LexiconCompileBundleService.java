@@ -136,9 +136,9 @@ public class LexiconCompileBundleService {
                 HyperscanCombinationHandler.ExpressionAssignment assignment =
                         combinationHandler.addExpressions(termResult, termNumber, idAllocator, passingExpressions);
                 termResult = (assignment.hyperscanExpressionId() != null)
-                        ? termResult.withHyperscanExpressionId(assignment.hyperscanExpressionId())
+                        ? termResult.withHyperscanExpressionId(assignment.hyperscanExpressionId(), assignment.patternMapping())
                         : termResult.withExpressionIds(assignment.requiredExpressionIds(),
-                        assignment.excludedExpressionIds());
+                        assignment.excludedExpressionIds(), assignment.patternMapping());
             }
             termResults.add(termResult);
         }

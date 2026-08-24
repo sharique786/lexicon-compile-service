@@ -51,7 +51,7 @@ class HyperscanCombinationHandlerTest {
                 "t::1", "desc", CompilationStatus.PASS,
                 translatedPattern, null, null,
                 1, requiresExclusionCheck, exclusionPattern, List.of(),
-                null, null, null, Instant.now());
+                null, null, null, null, Instant.now());
     }
 
     @Nested
@@ -127,6 +127,16 @@ class HyperscanCombinationHandlerTest {
         }
 
         @Test
+        @DisplayName("patternMapping is null — a single expression IS the whole answer, nothing to map")
+        void patternMappingIsNull() {
+            var result = passResult(List.of("insider"), false, null);
+            List<Expression> out = new ArrayList<>();
+            var assignment = handler.addExpressions(result, 7, new HyperscanCombinationHandler.HyperscanIdAllocator(8), out);
+
+            assertThat(assignment.patternMapping()).isNull();
+        }
+
+        @Test
         @DisplayName("A plain term's expression is NOT flagged QUIET — it must report directly")
         void plainTermNotQuiet() {
             var result = passResult(List.of("insider"), false, null);
@@ -180,6 +190,18 @@ class HyperscanCombinationHandlerTest {
         }
 
         @Test
+        @DisplayName("Every leaf carries ONLY CASELESS + QUIET — no DOTALL/UTF8/UCP/SOM_LEFTMOST")
+        void leavesCarryOnlyCaselessAndQuiet() {
+            var result = passResult(List.of("leafA", "leafB"), false, null);
+            List<Expression> out = new ArrayList<>();
+            handler.addExpressions(result, 3, new HyperscanCombinationHandler.HyperscanIdAllocator(4), out);
+
+            List<Expression> leaves = out.stream().filter(e -> e.getId() != 3).toList();
+            assertThat(leaves).allMatch((Expression e) -> e.getFlags().equals(
+                    java.util.EnumSet.of(ExpressionFlag.CASELESS, ExpressionFlag.QUIET)));
+        }
+
+        @Test
         @DisplayName("Combination formula ANDs every leaf id together")
         void combinationFormulaAndsLeafIds() {
             var result = passResult(List.of("leafA", "leafB", "leafC"), false, null);
@@ -189,6 +211,18 @@ class HyperscanCombinationHandlerTest {
             Expression combo = out.stream().filter(e -> e.getId() == 1).findFirst().orElseThrow();
             // ids 2, 3, 4 allocated in order for the 3 leaves
             assertThat(combo.getExpression()).isEqualTo("(2&3&4)");
+        }
+
+        @Test
+        @DisplayName("patternMapping mirrors the exact same formula written into the .hdb's native " +
+                "COMBINATION expression")
+        void patternMappingMirrorsCombinationFormula() {
+            var result = passResult(List.of("leafA", "leafB", "leafC"), false, null);
+            List<Expression> out = new ArrayList<>();
+            var assignment = handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
+
+            Expression combo = out.stream().filter(e -> e.getId() == 1).findFirst().orElseThrow();
+            assertThat(assignment.patternMapping()).isEqualTo(combo.getExpression()).isEqualTo("(2&3&4)");
         }
     }
 
@@ -223,6 +257,17 @@ class HyperscanCombinationHandlerTest {
         }
 
         @Test
+        @DisplayName("patternMapping is the AND-NOT formula \"(required&!excluded)\" — the ONLY place this " +
+                "formula is recorded, since the .hdb never encodes a native combination for AND NOT")
+        void patternMappingIsAndNotFormula() {
+            var result = passResult(List.of("required"), true, List.of("excluded"));
+            List<Expression> out = new ArrayList<>();
+            var assignment = handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
+
+            assertThat(assignment.patternMapping()).isEqualTo("(2&!3)");
+        }
+
+        @Test
         @DisplayName("Both expressions are plain — never QUIET — since each must report individually " +
                 "for the caller to evaluate the boolean condition after the whole scan completes")
         void bothExpressionsPlainNotQuiet() {
@@ -234,14 +279,14 @@ class HyperscanCombinationHandlerTest {
         }
 
         @Test
-        @DisplayName("Both expressions safely carry SOM_LEFTMOST — safe since neither is QUIET, unlike " +
-                "the earlier design where required/excluded were QUIET sub-expressions")
-        void bothExpressionsCarrySomLeftmost() {
+        @DisplayName("AND NOT expressions carry ONLY CASELESS — no SOM_LEFTMOST/DOTALL/UTF8/UCP, " +
+                "even though SOM_LEFTMOST would be structurally safe (neither side is QUIET)")
+        void bothExpressionsCarryOnlyCaseless() {
             var result = passResult(List.of("required"), true, List.of("excluded"));
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
 
-            assertThat(out).allMatch((Expression e) -> e.getFlags().contains(ExpressionFlag.SOM_LEFTMOST));
+            assertThat(out).allMatch((Expression e) -> e.getFlags().equals(java.util.EnumSet.of(ExpressionFlag.CASELESS)));
         }
     }
 
@@ -289,6 +334,52 @@ class HyperscanCombinationHandlerTest {
             assertThat(assignment.requiredExpressionIds()).hasSize(3);
             assertThat(assignment.excludedExpressionIds()).hasSize(3);
         }
+
+        @Test
+        @DisplayName("patternMapping: single required id, decomposed excluded side — bare id AND-NOT a " +
+                "parenthesised AND-join of the excluded leaves")
+        void patternMappingWithDecomposedExcludedSide() {
+            var result = passResult(List.of("required"), true, List.of("exclA", "exclB", "exclC"));
+            List<Expression> out = new ArrayList<>();
+            var assignment = handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
+
+            assertThat(assignment.patternMapping()).isEqualTo("(2&!(3&4&5))");
+        }
+
+        @Test
+        @DisplayName("patternMapping: decomposed required side, single excluded pattern — parenthesised " +
+                "AND-join of the required leaves AND-NOT a bare excluded id")
+        void patternMappingWithDecomposedRequiredSide() {
+            var result = passResult(List.of("reqA", "reqB", "reqC"), true, List.of("excluded"));
+            List<Expression> out = new ArrayList<>();
+            var assignment = handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
+
+            assertThat(assignment.patternMapping()).isEqualTo("((2&3&4)&!5)");
+        }
+
+        @Test
+        @DisplayName("patternMapping: decomposed on both sides — parenthesised AND-join on each side")
+        void patternMappingWithBothSidesDecomposed() {
+            var result = passResult(List.of("reqA", "reqB", "reqC"), true, List.of("exclA", "exclB", "exclC"));
+            List<Expression> out = new ArrayList<>();
+            var assignment = handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
+
+            assertThat(assignment.patternMapping()).isEqualTo("((2&3&4)&!(5&6&7))");
+        }
+
+        @Test
+        @DisplayName("WORKED EXAMPLE from the bug report: required id=8 (single), excluded ids 9/10/11 " +
+                "(decomposed FOLLOWEDBY chain) — patternMapping is exactly \"(8&!(9&10&11))\", the value " +
+                "a consumer with only the .hdb (no COMBINATION for AND NOT) cannot derive on its own")
+        void patternMappingMatchesReportedWorkedExample() {
+            var result = passResult(List.of("insider"), true, List.of("exclA", "exclB", "exclC"));
+            List<Expression> out = new ArrayList<>();
+            var assignment = handler.addExpressions(result, 4, new HyperscanCombinationHandler.HyperscanIdAllocator(8), out);
+
+            assertThat(assignment.requiredExpressionIds()).containsExactly(8);
+            assertThat(assignment.excludedExpressionIds()).containsExactly(9, 10, 11);
+            assertThat(assignment.patternMapping()).isEqualTo("(8&!(9&10&11))");
+        }
     }
 
     @Nested
@@ -318,6 +409,36 @@ class HyperscanCombinationHandlerTest {
 
             assertThat(out).hasSize(1);
             assertThat(out.getFirst().getFlags().contains(ExpressionFlag.SOM_LEFTMOST)).isTrue();
+        }
+
+        @Test
+        @DisplayName("A plain (non-combination, non-AND-NOT) ASCII-only term's single expression carries " +
+                "EXACTLY CASELESS + DOTALL + SOM_LEFTMOST, unconditionally — UTF8/UCP stay conditional " +
+                "on content (forcing them on unconditionally broke \\b-based regex terms and cost ~15x " +
+                "compile time, even for pure-ASCII patterns)")
+        void plainAsciiTermCarriesExactlyThreeFlags() {
+            var result = passResult(List.of("insider"), false, null); // hyperscanFlags=1 (CASELESS only)
+            List<Expression> out = new ArrayList<>();
+            handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
+
+            assertThat(out.getFirst().getFlags()).isEqualTo(java.util.EnumSet.of(
+                    ExpressionFlag.CASELESS, ExpressionFlag.DOTALL, ExpressionFlag.SOM_LEFTMOST));
+        }
+
+        @Test
+        @DisplayName("A plain non-ASCII term's single expression additionally carries UTF8 + UCP")
+        void plainNonAsciiTermAlsoCarriesUtf8Ucp() {
+            var result = new TermCompilationResult(
+                    "t::1", "desc", CompilationStatus.PASS,
+                    List.of("내부자"), null, null,
+                    97, false, null, List.of(), // CASELESS(1) | UTF8(32) | UCP(64) = 97
+                    null, null, null, null, Instant.now());
+            List<Expression> out = new ArrayList<>();
+            handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
+
+            assertThat(out.getFirst().getFlags()).isEqualTo(java.util.EnumSet.of(
+                    ExpressionFlag.CASELESS, ExpressionFlag.DOTALL, ExpressionFlag.UTF8,
+                    ExpressionFlag.UCP, ExpressionFlag.SOM_LEFTMOST));
         }
     }
 }

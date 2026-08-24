@@ -38,24 +38,26 @@ import java.util.List;
  *   <li>Return {@link ValidationResult#pass} or {@link ValidationResult#failed}</li>
  * </ol>
  *
- * <h2>AND NOT in the combined database: native Hyperscan logical combinations</h2>
+ * <h2>Native Hyperscan logical combinations — pure decomposition ONLY, never AND NOT</h2>
  * <p>Hyperscan 5.0+ supports logical combinations of patterns natively —
  * {@code HS_FLAG_COMBINATION} lets a compiled expression be the STRING
- * {@code "(101&!102)"} (operators {@code &}/{@code |}/{@code !} over other
+ * {@code "(101&102)"} (operators {@code &}/{@code |}/{@code !} over other
  * expressions' numeric ids), and Hyperscan reports a match for THAT id only
  * when the boolean condition over the referenced sub-expressions is true —
  * evaluated natively during the scan, no application-level combination
- * needed after the fact. This is the correct mechanism for embedding AND NOT
- * semantics into the {@code /compile/bundle} endpoint's combined {@code .hdb}
- * file: unlike the separate {@code translatedPattern}/{@code exclusionPattern}
- * fields returned by {@code /compile} (which assume the CALLER reads both
- * and combines them in application code — reasonable for a caller like the
- * Scanner Service that reads the JSON), a consumer that loads ONLY the
- * {@code .hdb} file — the Lexicon Scan Engine's Dataproc job — has no JSON to
- * read at all, so the exclusion logic must be encoded IN the database itself.
- * See {@link #toSubExpressionFlags} / {@link #toCombinationExpressionFlags}
- * and {@code LexiconCompileBundleService} for how a required/exclusion
- * pattern pair becomes one combination expression id.
+ * needed after the fact. This is used in the {@code /compile/bundle}
+ * endpoint's combined {@code .hdb} file ONLY for a term decomposed by
+ * {@code PatternDecomposer} with NO {@code AND NOT} involved — a positive-only
+ * {@code R1&R2&...&Rn} formula has no negation, so Hyperscan's eager,
+ * progressive combination evaluation is safe for it. AND NOT is explicitly
+ * NOT built this way any more — see {@code HyperscanCombinationHandler} class
+ * Javadoc for why a combination mixing a positive requirement with a
+ * negation (confirmed broken via Hyperscan's own documented evaluation
+ * model) was replaced with every required/excluded pattern reporting as its
+ * own plain expression, evaluated by the caller after the whole scan
+ * completes. See {@link #toSubExpressionFlags} (decomposition leaves),
+ * {@link #toAndNotExpressionFlags} (AND NOT sides), and
+ * {@link #toCombinationExpressionFlags} (the combination formula itself).
  *
  * <p><b>Dependency note:</b> {@code ExpressionFlag.COMBINATION} and
  * {@code ExpressionFlag.QUIET} were added to {@code com.gliwka.hyperscan-java}
@@ -174,27 +176,32 @@ public class HyperscanCompiler {
     // ── Flag conversion ───────────────────────────────────────────────────────
 
     /**
-     * Converts an HS_FLAG_* bitmask to the {@link ExpressionFlag} EnumSet
-     * required by {@link Expression}.
+     * Flags for a term that compiles as one plain, top-level, independently
+     * reportable Hyperscan expression — a simple PASS term: not decomposed
+     * (estimated complexity under {@code PatternComplexityAnalyzer.COMPLEXITY_BUDGET},
+     * i.e. 700), not AND NOT, and compiled without error.
      *
-     * <p><b>Return type note:</b> this returns {@link EnumSet} specifically
-     * (not the wider {@link java.util.Set} interface) because every
-     * {@code Expression} constructor in {@code com.gliwka.hyperscan.wrapper}
-     * requires an {@code EnumSet<ExpressionFlag>} argument — Java's static
-     * type system does not implicitly narrow {@code Set} to {@code EnumSet}
-     * at the call site, even when the runtime object actually is an
-     * {@code EnumSet}. Declaring the narrower return type here lets
-     * {@link #validate} and {@link #compileCombinedDatabase} pass the result
-     * straight into {@code new Expression(...)} without a cast.
+     * <p><b>{@code CASELESS}, {@code DOTALL}, and {@code SOM_LEFTMOST} are
+     * always included, unconditionally.</b> {@code UTF8}/{@code UCP} remain
+     * CONDITIONAL on {@code bitmask} — deliberately, not an oversight: always
+     * forcing them on was tried and confirmed to cause two real regressions —
+     * (1) Hyperscan rejects {@code \b} (word boundary) when UCP is active
+     * ("{@code \b} unsupported in UCP mode"), breaking any caller-supplied
+     * Regex-type term that uses it; (2) UCP mode measurably slows down
+     * Hyperscan compilation even for plain-ASCII patterns (~15x in this
+     * project's own performance test). UTF8/UCP are added only when
+     * {@code bitmask} indicates non-ASCII content is actually present — see
+     * {@link #toAndNotExpressionFlags} for the AND NOT case and
+     * {@link #toSubExpressionFlags} for the pure-decomposition-leaf case —
+     * both intentionally narrower than this one, and both intentionally have
+     * NO conditional bits at all (see their own Javadoc for why).
      *
-     * <p>Bitmask values mirror {@code hs_compile.h}:
-     * <pre>
-     *  1  = HS_FLAG_CASELESS
-     *  2  = HS_FLAG_DOTALL
-     * 32  = HS_FLAG_UTF8
-     * 64  = HS_FLAG_UCP
-     * </pre>
-     * If the bitmask is 0 (no flags set), CASELESS is added as a safe default.
+     * <h2>Also the general validation flag set</h2>
+     * <p>{@link #validate} always uses this method (regardless of what a
+     * candidate pattern will eventually be compiled as downstream) — this is
+     * historically the flag set {@code PatternComplexityAnalyzer}'s
+     * {@code COMPLEXITY_BUDGET} was calibrated against, so validating every
+     * candidate under it keeps the "too large" pre-check accurate.
      *
      * <h2>{@link ExpressionFlag#SOM_LEFTMOST} is always included here</h2>
      * <p>This method builds flags for a PLAIN, standalone, reportable
@@ -206,85 +213,66 @@ public class HyperscanCompiler {
      * and a real compile-time error this project hit directly both confirm
      * SOM_LEFTMOST is incompatible with QUIET (and separately, with
      * SINGLEMATCH/PREFILTER) — but a plain expression carries none of those.
-     * There is deliberately no caller-supplied toggle for this any more —
-     * whether SOM_LEFTMOST is safe is a structural fact about which KIND of
-     * expression this is (plain vs. QUIET-sub-expression vs. COMBINATION),
-     * not a preference a caller should be choosing per-request.
      *
      * <p>Public so {@code LexiconCombinationHandler} can build multi-pattern
      * {@link Expression} lists for the combined-database endpoint using the
      * exact same flag-conversion logic as the single-pattern {@link #validate} path.
      *
-     * @param bitmask HS_FLAG_* bitmask (CASELESS/DOTALL/UTF8/UCP)
+     * @param bitmask HS_FLAG_* bitmask (only the UTF8/UCP bits matter here —
+     *                CASELESS/DOTALL/SOM_LEFTMOST are added regardless of this value)
      */
     public EnumSet<ExpressionFlag> toExpressionFlags(int bitmask) {
-        EnumSet<ExpressionFlag> flags = EnumSet.noneOf(ExpressionFlag.class);
-        if ((bitmask & HS_FLAG_CASELESS) != 0) {
-            flags.add(ExpressionFlag.CASELESS);
-        }
-        if ((bitmask & HS_FLAG_DOTALL) != 0) {
-            flags.add(ExpressionFlag.DOTALL);
-        }
+        EnumSet<ExpressionFlag> flags = EnumSet.of(
+                ExpressionFlag.CASELESS, ExpressionFlag.DOTALL, ExpressionFlag.SOM_LEFTMOST);
         if ((bitmask & HS_FLAG_UTF8) != 0) {
             flags.add(ExpressionFlag.UTF8);
         }
         if ((bitmask & HS_FLAG_UCP) != 0) {
             flags.add(ExpressionFlag.UCP);
         }
-        // Default: CASELESS
-        if (flags.isEmpty()) {
-            flags.add(ExpressionFlag.CASELESS);
-        }
-        flags.add(ExpressionFlag.SOM_LEFTMOST);
         return flags;
     }
 
     /**
-     * Flags for a required/exclusion pattern that feeds a logical combination
-     * (see class Javadoc) rather than being reported on its own.
+     * Flags for a required/excluded pattern belonging to an AND NOT term —
+     * see {@code HyperscanCombinationHandler} class Javadoc for why AND NOT
+     * no longer uses native COMBINATION and why every required/excluded
+     * pattern compiles as its own plain, individually-reportable expression.
      *
-     * <p>{@link ExpressionFlag#QUIET} suppresses this sub-expression's own
-     * match reporting — without it, a plain "AND NOT" term's REQUIRED
-     * pattern would independently raise its own match event every time it's
-     * present, regardless of whether the exclusion pattern was also found,
-     * which is exactly the bug this whole fix addresses: the consumer would
-     * see two separate, uncorrelated match ids (the required pattern's raw
-     * hit, and the combination's hit) instead of one single, already-correct
-     * signal. Only the combination expression's id (built with
-     * {@link #toCombinationExpressionFlags}) should ever be reported for an
-     * AND NOT term.
-     *
-     * <h2>SOM_LEFTMOST is NEVER included here</h2>
-     * <p>Confirmed incompatible with {@code QUIET} both by a real Hyperscan
-     * compile-time error this project hit directly ("HS_FLAG_QUIET is not
-     * supported in combination with HS_FLAG_SOM_LEFTMOST") and by Hyperscan's
-     * own documentation, which lists flags incompatible with SOM_LEFTMOST.
-     * CASELESS/UTF8/UCP/DOTALL remain included as normal — only SOM_LEFTMOST
-     * is structurally excluded here, since match-position tracking has no
-     * meaning for an expression whose own match is never reported anyway
-     * (it only feeds a boolean combination formula).
-     *
-     * @param hsFlags the term's normal HS_FLAG_* bitmask (CASELESS/UTF8/UCP)
+     * <p><b>Fixed, unconditional set — always exactly {@code CASELESS}</b>,
+     * deliberately narrower than {@link #toExpressionFlags}: no
+     * {@code DOTALL}/{@code UTF8}/{@code UCP}, and no {@code SOM_LEFTMOST} —
+     * an AND NOT term's required/excluded patterns are still plain
+     * (non-QUIET) expressions, so SOM_LEFTMOST would be structurally SAFE to
+     * add here (unlike the QUIET-sub-expression case), but this case is
+     * scoped to CASELESS only regardless.
      */
-    public EnumSet<ExpressionFlag> toSubExpressionFlags(int hsFlags) {
-        EnumSet<ExpressionFlag> flags = EnumSet.noneOf(ExpressionFlag.class);
-        if ((hsFlags & HS_FLAG_CASELESS) != 0) {
-            flags.add(ExpressionFlag.CASELESS);
-        }
-        if ((hsFlags & HS_FLAG_DOTALL) != 0) {
-            flags.add(ExpressionFlag.DOTALL);
-        }
-        if ((hsFlags & HS_FLAG_UTF8) != 0) {
-            flags.add(ExpressionFlag.UTF8);
-        }
-        if ((hsFlags & HS_FLAG_UCP) != 0) {
-            flags.add(ExpressionFlag.UCP);
-        }
-        if (flags.isEmpty()) {
-            flags.add(ExpressionFlag.CASELESS);
-        }
-        flags.add(ExpressionFlag.QUIET);
-        return flags;
+    public EnumSet<ExpressionFlag> toAndNotExpressionFlags() {
+        return EnumSet.of(ExpressionFlag.CASELESS);
+    }
+
+    /**
+     * Flags for a decomposed leaf pattern that feeds a native logical
+     * combination — pure decomposition, no AND NOT (see
+     * {@code HyperscanCombinationHandler} class Javadoc) — rather than being
+     * reported on its own.
+     *
+     * <p>{@link ExpressionFlag#QUIET} suppresses this leaf's own match
+     * reporting — without it, a decomposed term's leaves would each
+     * independently raise their own match event, instead of only the
+     * combination expression's id (built with
+     * {@link #toCombinationExpressionFlags}) being reported for the term.
+     *
+     * <p><b>Fixed, unconditional set — always exactly {@code CASELESS} and
+     * {@code QUIET}</b>: no {@code DOTALL}/{@code UTF8}/{@code UCP}, and
+     * never {@code SOM_LEFTMOST} — confirmed incompatible with {@code QUIET}
+     * both by a real Hyperscan compile-time error this project hit directly
+     * ("HS_FLAG_QUIET is not supported in combination with
+     * HS_FLAG_SOM_LEFTMOST") and by Hyperscan's own documentation, which
+     * lists flags incompatible with SOM_LEFTMOST.
+     */
+    public EnumSet<ExpressionFlag> toSubExpressionFlags() {
+        return EnumSet.of(ExpressionFlag.CASELESS, ExpressionFlag.QUIET);
     }
 
     /**

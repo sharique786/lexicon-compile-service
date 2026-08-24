@@ -27,18 +27,24 @@ import java.util.List;
  *
  * <p><b>This is a real precision trade-off, not a lossless rewrite, whenever
  * a list has more than one entry.</b> Decomposition discards the DISTANCE and
- * ORDER constraints a nested NEAR/FOLLOWEDBY structure expressed — the leaf
- * patterns are combined with pure boolean AND ("all of these appear
- * somewhere in the message"), not with any positional relationship. A term
+ * ORDER constraint BETWEEN leaf patterns that a nested NEAR/FOLLOWEDBY
+ * structure expressed — the leaves are combined with pure boolean AND ("all
+ * of these appear somewhere in the message"), not with any positional
+ * relationship to EACH OTHER. It does NOT, however, discard the gap width
+ * itself: {@code PatternDecomposer} bakes each originating NEAR/FOLLOWEDBY
+ * node's own gap fragment into the start of the leaf that followed it in the
+ * original term text, so that leaf can never match with nothing preceding
+ * it — only its anchor (specifically the PRECEDING leaf, rather than
+ * whichever text is actually there) is lost, not the bound itself. A term
  * originally written as {@code (A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C} — "these
- * in this order, this close together" — becomes, once decomposed, "A and B
- * and C all appear somewhere in this message, in any order, any distance
- * apart". This trade-off exists specifically so a term that would otherwise
- * be REJECTED outright still produces a usable (if less precise) result —
- * see {@link #warnings()}, which always carries an explicit warning whenever
- * this trade-off applies to either side, so no caller can silently treat a
- * decomposed match as a genuine proximity match without realizing precision
- * was reduced.
+ * in this order, this close together" — becomes, once decomposed, "A and
+ * (something FOLLOWEDBY{4} B) and (something FOLLOWEDBY{4} C) all appear
+ * somewhere in this message, independently of each other". This trade-off
+ * exists specifically so a term that would otherwise be REJECTED outright
+ * still produces a usable (if less precise) result — see {@link #warnings()},
+ * which always carries an explicit warning whenever this trade-off applies to
+ * either side, so no caller can silently treat a decomposed match as a
+ * genuine proximity match without realizing precision was reduced.
  *
  * <h2>AND NOT: a two-side contract, not a single regex</h2>
  * <p>Hyperscan cannot express "absent from the whole message" — that is

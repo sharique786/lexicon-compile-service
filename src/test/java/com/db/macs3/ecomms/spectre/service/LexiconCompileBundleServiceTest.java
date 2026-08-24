@@ -431,6 +431,8 @@ class LexiconCompileBundleServiceTest {
 
         assertThat(result.requiresExclusionCheck()).isFalse();
         assertThat(result.hyperscanExpressionId()).isEqualTo(1);
+        // A single expression IS the whole answer here -- nothing to map.
+        assertThat(result.patternMapping()).isNull();
     }
 
     @Test
@@ -549,12 +551,43 @@ class LexiconCompileBundleServiceTest {
         assertThat(result.isPass()).isTrue();
         assertThat(result.translatedPattern()).hasSize(3); // decomposed into 3 leaves, as in the report
         assertThat(bundle.hasDatabase()).isTrue();
+        // patternMapping mirrors the exact native COMBINATION formula written into the .hdb for this
+        // term — term number 1, so the offset for auxiliary leaf ids is 2 (2, 3, 4 for the 3 leaves).
+        assertThat(result.patternMapping()).isEqualTo("(2&3&4)");
 
         // The critical regression check: this used to throw CompileErrorException with the exact
         // message quoted above. Reaching this line at all means the fix holds.
         try (Database db = Database.load(new ByteArrayInputStream(bundle.hyperscanDatabaseBytes()))) {
             assertThat(scanMatchesIds(db, "wordG wordN wordT")).contains(1);
         }
+    }
+
+    @Test
+    @Order(815)
+    @DisplayName("WORKED EXAMPLE from the bug report: German nested-FOLLOWEDBY term, termId " +
+            "'lexicon_term::4' — decomposes into 3 leaves at auxiliary ids 5/6/7 (offset = term number "
+            + "4 + 1), and patternMapping is exactly \"(5&6&7)\", mirroring the .hdb's own COMBINATION")
+    void patternMapping_matchesReportedWorkedExample() {
+        String term = "(((versuch nicht OR mach* nicht OR tu* nicht OR vermeide) FOLLOWEDBY{4} "
+                + "(frontrun* OR front run* OR übergeh* OR überspring*)) FOLLOWEDBY{4} "
+                + "(das OR dies OR mich OR sie OR flow OR Druck OR Ausdruck))";
+
+        var req = new TypedCompileRequest();
+        req.setRequestId("worked-example-1");
+        req.setLexiconRuleName("worked_example_1");
+        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setTerms(List.of(new TypedCompileRequest.TermInput("lexicon_term::4", term)));
+
+        var bundle = bundleService.buildBundle(req);
+        var result = bundle.jsonResponse().results().getFirst();
+
+        assertThat(result.isPass()).isTrue();
+        assertThat(result.translatedPattern()).containsExactly(
+                "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide)",
+                "(?:\\s+\\S+){0,4}\\s+(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
+                "(?:\\s+\\S+){0,4}\\s+(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
+        assertThat(result.hyperscanExpressionId()).isEqualTo(4);
+        assertThat(result.patternMapping()).isEqualTo("(5&6&7)");
     }
 
     @Test
@@ -582,6 +615,9 @@ class LexiconCompileBundleServiceTest {
         assertThat(result.hyperscanExpressionId()).isNull();
         assertThat(result.requiredExpressionIds()).hasSize(1);
         assertThat(result.excludedExpressionIds()).hasSize(1);
+        // patternMapping is the ONLY place this AND-NOT formula is recorded -- the .hdb itself has no
+        // combination for it at all (see class Javadoc). Term number 1, so auxiliary ids start at 2.
+        assertThat(result.patternMapping()).isEqualTo("(2&!3)");
 
         try (Database db = Database.load(new ByteArrayInputStream(bundle.hyperscanDatabaseBytes()))) {
             // Required pattern present, exclusion ALSO present -> post-scan evaluation must exclude.
@@ -590,6 +626,38 @@ class LexiconCompileBundleServiceTest {
                     .as("required present AND exclusion present -> term must NOT match")
                     .isFalse();
         }
+    }
+
+    @Test
+    @Order(825)
+    @DisplayName("WORKED EXAMPLE from the bug report: AND NOT term with a decomposed (nested-FOLLOWEDBY) " +
+            "excluded side — required id=8 (single), excluded ids 9/10/11 (decomposed) — patternMapping " +
+            "is exactly \"(8&!(9&10&11))\", the AND-NOT formula the .hdb itself never encodes")
+    void patternMapping_andNot_matchesReportedWorkedExample() {
+        String term = "(insider AND NOT (wordA word B OR wordC* wordD OR wordE* wordF OR wordG) "
+                + "FOLLOWEDBY{2} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN) "
+                + "FOLLOWEDBY{2} (wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
+
+        var req = new TypedCompileRequest();
+        req.setRequestId("worked-example-2");
+        req.setLexiconRuleName("worked_example_2");
+        req.setTermType(TermType.NATURAL_LANGUAGE);
+        // A dummy term at ::7 pushes the id offset to 8, so THIS term's required/excluded leaves land
+        // on exactly the ids the bug report used (8, 9, 10, 11), for a byte-for-byte comparison.
+        req.setTerms(List.of(
+                new TypedCompileRequest.TermInput("lexicon_term::7", "dummy"),
+                new TypedCompileRequest.TermInput("lexicon_term::4", term)));
+
+        var bundle = bundleService.buildBundle(req);
+        var result = bundle.jsonResponse().results().get(1);
+
+        assertThat(result.isPass()).isTrue();
+        assertThat(result.requiresExclusionCheck()).isTrue();
+        assertThat(result.translatedPattern()).hasSize(1); // required side: "insider" alone
+        assertThat(result.exclusionPattern()).hasSize(3);  // excluded side: decomposed into 3 leaves
+        assertThat(result.requiredExpressionIds()).containsExactly(8);
+        assertThat(result.excludedExpressionIds()).containsExactly(9, 10, 11);
+        assertThat(result.patternMapping()).isEqualTo("(8&!(9&10&11))");
     }
 
     @Test

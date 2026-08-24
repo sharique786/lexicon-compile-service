@@ -141,34 +141,58 @@ excluded side) then has multiple entries — see `TermCompilationResult`
 class Javadoc.
 
 **This is a real precision trade-off, always flagged in `warnings`.**
-Decomposition discards the original NEAR/FOLLOWEDBY distance and ordering
-constraints entirely: the leaf patterns are combined with pure boolean AND
-("all of these appear somewhere in the message"), not with any positional
-relationship. A term originally meaning "these three things, in this
-order, this close together" becomes "these three things, somewhere in this
-message, in any order, any distance apart" once decomposed. No caller can
-silently treat a decomposed match as a genuine proximity match, because
-`warnings` always carries an explicit entry whenever this trade-off
-applied to either side.
+Decomposition discards the NEAR/FOLLOWEDBY distance and ordering
+constraint *between* leaf patterns: the leaves are combined with pure
+boolean AND ("all of these appear somewhere in the message"), independently
+of each other. It does not discard the gap width itself, though — each
+leaf after the first still carries its originating NEAR/FOLLOWEDBY node's
+own gap fragment as a literal prefix in its own pattern text (so it can
+never match with nothing preceding it), just no longer anchored to the
+specific leaf that preceded it in the original term. A term originally
+meaning "these three things, in this order, this close together" becomes
+"these three things, each somewhere in this message, independently of one
+another" once decomposed. No caller can silently treat a decomposed match
+as a genuine proximity match, because `warnings` always carries an
+explicit entry whenever this trade-off applied to either side.
 
 ---
 
 ## Hyperscan flags
 
-| Flag | Bit | When applied |
-|---|---|---|
-| `CASELESS` | 1 | Always |
-| `DOTALL` | 2 | Always (part of the Latin baseline — see below) |
-| `UTF8` | 32 | Any non-Latin script |
-| `UCP` | 64 | Any non-Latin script — makes `\s`/`\S`/`\w` honour Unicode character properties |
-| `QUIET` | — | Every auxiliary sub-expression a combination needs (decomposition leaves, exclusion pattern(s)) — never the term's own reportable expression |
-| `COMBINATION` | — | The one expression per term that evaluates a boolean formula over other expressions' ids |
-| `SOM_LEFTMOST` | — | Every plain, standalone expression (never QUIET, never COMBINATION) — decided structurally per-expression, not by any caller-supplied flag. See "SOM_LEFTMOST and the QUIET incompatibility" below. |
-| `SINGLEMATCH` | — | Not currently applied by default — see constraint below |
+Which `ExpressionFlag`s an expression gets is decided by which of **three
+cases** it falls into — never by the term's script content alone any more
+(content still narrows UTF8/UCP within case 3 — see below):
 
-**Without UCP, `\S+` only matches ASCII non-whitespace and silently skips
-Arabic, Hebrew, CJK, and other non-Latin characters** — this is why every
-non-Latin script gets both UTF8 and UCP, not UTF8 alone.
+| Case | Method | Flags |
+|---|---|---|
+| AND NOT — every required/excluded pattern (regardless of decomposition on either side) | `HyperscanCompiler.toAndNotExpressionFlags()` | `CASELESS` only |
+| Pure decomposition leaf, no AND NOT (feeds a native `COMBINATION`) | `HyperscanCompiler.toSubExpressionFlags()` | `CASELESS`, `QUIET` only |
+| Simple, single-pattern, non-AND-NOT PASS term (also the general validation flag set `HyperscanCompiler.validate()` always uses) | `HyperscanCompiler.toExpressionFlags(bitmask)` | `CASELESS`, `DOTALL`, `SOM_LEFTMOST` always, plus `UTF8`/`UCP` when `bitmask` indicates non-Latin content |
+| The one combination expression per decomposed (non-AND-NOT) term | `HyperscanCompiler.toCombinationExpressionFlags()` | `COMBINATION` only |
+
+**UTF8/UCP are conditional in the "simple term" case only, deliberately —
+this was tried unconditionally and reverted.** Forcing UTF8+UCP onto every
+expression regardless of content caused two confirmed regressions: (1)
+Hyperscan rejects `\b` (word boundary) when UCP is active ("`\b` unsupported
+in UCP mode"), breaking any caller-supplied Regex-type term using it; (2) UCP
+mode measurably slows Hyperscan compilation even for plain-ASCII patterns
+(~15x in this project's own performance test). **Without UCP, `\S+` only
+matches ASCII non-whitespace and silently skips Arabic, Hebrew, CJK, and
+other non-Latin characters** — this is why any script needing UTF8 also
+needs UCP, not UTF8 alone.
+
+The AND NOT and pure-decomposition-leaf cases carry NO conditional bits at
+all (not even for non-Latin content) — this is intentional, not an
+oversight; see each method's Javadoc.
+
+### SOM_LEFTMOST: AND NOT no longer gets it, on purpose
+
+Earlier revisions gave every plain (non-QUIET) expression SOM_LEFTMOST,
+including AND NOT's required/excluded patterns. AND NOT is now scoped to
+`CASELESS` only (see table above) — no SOM_LEFTMOST, even though it would be
+structurally SAFE there (AND NOT patterns are plain, never QUIET, so the
+QUIET+SOM_LEFTMOST incompatibility below doesn't apply to them). This is a
+deliberate narrowing of the AND NOT case, not a safety-driven omission.
 
 ### SOM_LEFTMOST and the QUIET incompatibility
 
@@ -180,14 +204,13 @@ QUIET's incompatibility is confirmed directly by the error message itself
 rather than by that particular doc passage, which doesn't name QUIET
 explicitly.)
 
-Whether an expression gets SOM_LEFTMOST is decided **structurally**, per
-expression, not by any caller-supplied request field:
-
-- A **plain, standalone expression** (never QUIET, never COMBINATION) always
+- The **simple-term expression** (never QUIET, never COMBINATION) always
   gets SOM_LEFTMOST — safe, since it carries neither of the incompatible flags.
-- Every **QUIET sub-expression** (a decomposition leaf, or an AND NOT side)
-  never gets SOM_LEFTMOST — `HyperscanCompiler.toSubExpressionFlags` never
-  adds it.
+- Every **QUIET sub-expression** (a pure-decomposition leaf) never gets
+  SOM_LEFTMOST — `HyperscanCompiler.toSubExpressionFlags` never adds it.
+- **AND NOT's required/excluded patterns** never get it either — not because
+  it would be unsafe (it wouldn't — see above), but because the AND NOT case
+  is scoped to `CASELESS` only.
 - A **COMBINATION expression** never gets it either — Hyperscan ignores all
   flags on a combination expression except SINGLEMATCH and QUIET anyway
   (see above), so it would have no effect regardless.
@@ -197,10 +220,11 @@ letting a caller opt out of SOM_LEFTMOST for an entire request. It has been
 **removed entirely** — it was solving the wrong problem. The real issue was
 never "does this caller want match positions"; it was that SOM_LEFTMOST was
 being applied unconditionally to every expression, including QUIET ones,
-which is invalid regardless of any caller's preference. A term needing
-decomposition or AND NOT always produces QUIET sub-expressions, so no
-caller-supplied toggle could have resolved the conflict correctly — only
-the compiler applying the right flags for the right kind of expression could.
+which is invalid regardless of any caller's preference. Whether an
+expression may safely carry SOM_LEFTMOST — and, independently, whether its
+flag case is even scoped to include it — is a structural fact about which
+of the three cases above it falls into, not a preference a caller should be
+choosing per-request.
 
 ### The COMBINATION flag constraint
 

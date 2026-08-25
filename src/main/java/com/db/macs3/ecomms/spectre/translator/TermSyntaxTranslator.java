@@ -183,6 +183,7 @@ public final class TermSyntaxTranslator {
                 SideResult excluded
                         = validateSide(excludedCandidate, ctx, flags,
                         preprocessed, "excluded (AND NOT)", warnings);
+                warnings.addAll(ctx.getWarnings());
 
                 log.debug("Translated (AND NOT): '{}' -> required={} excluded={} flags={} warnings={}",
                         rawExpression, required, excluded, flags, warnings.size());
@@ -202,6 +203,7 @@ public final class TermSyntaxTranslator {
             Candidate candidate = generateSide(ast, ctx);
             int flags = ctx.computeFlags();
             SideResult required = validateSide(candidate, ctx, flags, preprocessed, "term", warnings);
+            warnings.addAll(ctx.getWarnings());
 
             log.debug("Translated: '{}' -> {} flags={} warnings={}",
                     rawExpression, required, flags, warnings.size());

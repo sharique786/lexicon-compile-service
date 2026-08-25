@@ -1,5 +1,8 @@
 package com.db.macs3.ecomms.spectre.translator;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Mutable context passed through {@link PatternCodeGenerator} while walking
  * one term's {@link Ast}. Accumulates flags and the (at most one) AND-NOT
@@ -65,12 +68,38 @@ class ParseContext {
 
     private boolean needsUtf8 = false;
     private String exclusionPattern = null;
+    private final List<String> warnings = new ArrayList<>();
 
     /**
      * Mark that a non-ASCII character was encountered.
      */
     void setNeedsUtf8() {
         this.needsUtf8 = true;
+    }
+
+    /**
+     * Records a non-fatal precision/behavior warning discovered while
+     * generating this term's pattern(s) — e.g. a mixed RTL+LTR FOLLOWEDBY
+     * direction warning, or a char-based NEAR/FOLLOWEDBY gap clamped to
+     * {@link MultiLanguagePatternBuilder#MAX_CHAR_GAP}. Null/blank is
+     * ignored so callers can pass a possibly-absent warning unconditionally.
+     */
+    void addWarning(String warning) {
+        if (warning != null && !warning.isBlank()) {
+            warnings.add(warning);
+        }
+    }
+
+    /**
+     * @return every warning recorded so far via {@link #addWarning}, in
+     * recording order. Read by {@link TermSyntaxTranslator#translate} after
+     * generating (and re-generating, if decomposition falls back) each side,
+     * so the term's final {@code TranslationResult.Success.warnings()} always
+     * includes anything discovered while building the pattern(s) — not just
+     * the decomposition/AND-NOT warnings assembled directly there.
+     */
+    List<String> getWarnings() {
+        return List.copyOf(warnings);
     }
 
     /**

@@ -35,6 +35,12 @@ import org.slf4j.LoggerFactory;
  *       <td>{@code (?:\\s+\\S+){0,n}\\s+} with UTF8+UCP</td></tr>
  * </table>
  *
+ * <p>Every char-based {@code N} above is clamped to {@link #MAX_CHAR_GAP} —
+ * real Hyperscan rejects {@code [\s\S]{0,N}} under this script family's
+ * required UTF8+UCP flags well before the raw formula's {@code N} gets large,
+ * independent of which script it is (see {@link #MAX_CHAR_GAP} Javadoc for
+ * the calibration data). A clamp emits a warning rather than failing the term.
+ *
  * <p><b>NEAR — always bidirectional</b>
  * <p>NEAR{n} means A is within n word/char gaps of B, in either order:
  * <pre>{@code (?:A<gap>B|B<gap>A)}</pre>
@@ -64,10 +70,50 @@ public final class MultiLanguagePatternBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(MultiLanguagePatternBuilder.class);
 
+    /**
+     * Hard ceiling on a character-based gap's width ({@code N} in
+     * {@code [\s\S]{0,N}}) — empirically calibrated, not reasoned from first
+     * principles. Real Hyperscan, compiled under exactly the flags
+     * {@code HyperscanCompiler.toExpressionFlags()} produces for a non-Latin
+     * script (CASELESS + DOTALL + SOM_LEFTMOST + UTF8 + UCP — the same flags
+     * {@code TermSyntaxTranslator}'s validation step actually uses), rejects
+     * {@code [\s\S]{0,N}} with "Pattern is too large" once {@code N} reaches
+     * the low-to-mid 30s — confirmed by a bisection sweep run against the
+     * real native library (Docker, {@code linux-x86_64}) across CJK, Thai,
+     * and Hangul operands, at both a 2-character pair and a ~20-character
+     * pair, in both the bidirectional NEAR shape
+     * ({@code (?:A[\s\S]{0,N}B|B[\s\S]{0,N}A)}) and the standalone
+     * decomposed-leaf shape ({@code [\s\S]{0,N}B}):
+     * <pre>
+     *   CJK-short   (内幕/交易):  safeNear=32  safeLeaf=31
+     *   CJK-long    (~20 chars):  safeNear=31  safeLeaf=31
+     *   THAI-short  (ราคา/การซื้อขาย): safeNear=31  safeLeaf=31
+     *   HANGUL-short(내부자/거래):  safeNear=31  safeLeaf=31
+     * </pre>
+     * The boundary is remarkably script- and shape-independent (31-32
+     * everywhere tested), consistent with a fixed internal Hyperscan limit
+     * for bounded repeats of a wide/multi-byte character class under UTF8,
+     * not something that scales with the specific script's average word
+     * length. 30 is one below the smallest measured safe value, as a margin
+     * against Hyperscan-version/input variance the sweep didn't cover.
+     * Re-tune if a future Hyperscan version or a wider sweep changes this.
+     */
+    static final int MAX_CHAR_GAP = 30;
+
     private MultiLanguagePatternBuilder() {
     }
 
-    // ── Result record ─────────────────────────────────────────────────────
+    // ── Result records ────────────────────────────────────────────────────
+
+    /**
+     * Holds a gap sub-pattern and, when the requested width had to be
+     * clamped to {@link #MAX_CHAR_GAP}, a non-null precision-loss warning.
+     */
+    record GapResult(String pattern, String warning) {
+        boolean hasWarning() {
+            return warning != null && !warning.isBlank();
+        }
+    }
 
     /**
      * Holds the generated PCRE pattern and the recommended Hyperscan flags.
@@ -114,7 +160,8 @@ public final class MultiLanguagePatternBuilder {
      */
     public static BuildResult buildNear(String termA, String termB, int maxDistance) {
         ScriptType script = ScriptDetector.detectCombined(termA, termB);
-        String gap = buildGap(script, maxDistance);
+        GapResult gr = buildGap(script, maxDistance);
+        String gap = gr.pattern();
 
         // Bidirectional: (A gap B) OR (B gap A)
         String pattern = "(?:%s%s%s|%s%s%s)".formatted(termA, gap, termB, termB, gap, termA);
@@ -122,7 +169,7 @@ public final class MultiLanguagePatternBuilder {
         log.debug("NEAR{} built: script={}, gap={}, pattern={}",
                 maxDistance, script, gap, pattern);
 
-        return new BuildResult(pattern, script, script.recommendedHsFlags());
+        return new BuildResult(pattern, script, script.recommendedHsFlags(), gr.warning());
     }
 
     /**
@@ -145,25 +192,41 @@ public final class MultiLanguagePatternBuilder {
      */
     public static BuildResult buildFollowedBy(String termA, String termB, int maxDistance) {
         ScriptType script = ScriptDetector.detectCombined(termA, termB);
-        String gap = buildGap(script, maxDistance);
+        GapResult gr = buildGap(script, maxDistance);
+        String gap = gr.pattern();
 
         // Directional: A then B
         String pattern = "%s%s%s".formatted(termA, gap, termB);
 
         // Warn for mixed RTL+LTR FOLLOWEDBY — reading order may differ visually
-        String warning = null;
+        String rtlWarning = null;
         if (ScriptDetector.hasRtlComponent(termA, termB)
                 && !ScriptDetector.isPurelyRtl(termA, termB)) {
-            warning = "FOLLOWEDBY with mixed RTL+LTR operands matches in logical "
+            rtlWarning = "FOLLOWEDBY with mixed RTL+LTR operands matches in logical "
                     + "(stored) byte order, not visual reading order. "
                     + "Verify the intended direction for: '" + termA + "' FOLLOWEDBY '" + termB + "'";
-            log.warn(warning);
+            log.warn(rtlWarning);
         }
+        if (gr.hasWarning()) {
+            log.warn(gr.warning());
+        }
+        String warning = combineWarnings(rtlWarning, gr.warning());
 
         log.debug("FOLLOWEDBY{} built: script={}, gap={}, pattern={}",
                 maxDistance, script, gap, pattern);
 
         return new BuildResult(pattern, script, script.recommendedHsFlags(), warning);
+    }
+
+    /**
+     * Joins any number of possibly-null/blank warning fragments with a space,
+     * skipping the blank ones; returns {@code null} when nothing remains.
+     */
+    private static String combineWarnings(String... parts) {
+        String joined = java.util.Arrays.stream(parts)
+                .filter(p -> p != null && !p.isBlank())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return joined.isBlank() ? null : joined;
     }
 
     /**
@@ -188,11 +251,11 @@ public final class MultiLanguagePatternBuilder {
      * <p>Dispatches to either a word-based or character-based gap based on
      * the detected {@link ScriptType}.
      */
-    static String buildGap(ScriptType script, int maxDistance) {
+    static GapResult buildGap(ScriptType script, int maxDistance) {
         if (script.isCharBased()) {
             return charBasedGap(script, maxDistance);
         }
-        return wordBasedGap(maxDistance);
+        return new GapResult(wordBasedGap(maxDistance), null);
     }
 
     /**
@@ -233,14 +296,52 @@ public final class MultiLanguagePatternBuilder {
      * and furigana.  The trade-off is slightly more false positives vs.
      * fewer false negatives — acceptable for a surveillance alerting system.
      *
+     * <p><b>Clamped to {@link #MAX_CHAR_GAP}</b> — the raw formula below can
+     * produce a width real Hyperscan refuses to compile ("Pattern is too
+     * large") well before any structural complexity budget would ever flag
+     * the term, since a simple two-word NEAR/FOLLOWEDBY has no nesting for
+     * {@code PatternComplexityAnalyzer} to penalize. When the raw width
+     * exceeds {@link #MAX_CHAR_GAP}, the returned {@link GapResult} carries a
+     * non-null warning describing the precision loss instead of silently
+     * narrowing the match window.
+     *
      * @param script      the resolved script type (provides avgCharsPerWord)
      * @param maxDistance maximum "word" distance specified by the lexicon term author
      */
-    static String charBasedGap(ScriptType script, int maxDistance) {
-        // maxChars = maxDistance words × average chars per word
-        // A small additive buffer (+maxDistance) covers punctuation, spaces, and mixed chars
-        int maxChars = maxDistance * script.getAvgCharsPerWord() + maxDistance;
-        return "[\\s\\S]{0,%d}".formatted(maxChars);
+    static GapResult charBasedGap(ScriptType script, int maxDistance) {
+        // rawChars = maxDistance words × average chars per word, plus a small
+        // additive buffer (+maxDistance) covering punctuation, spaces, and mixed chars
+        int rawChars = maxDistance * script.getAvgCharsPerWord() + maxDistance;
+        int actualChars = effectiveGapWidth(script, maxDistance);
+        String pattern = "[\\s\\S]{0,%d}".formatted(actualChars);
+        String warning = (actualChars < rawChars)
+                ? ("NEAR/FOLLOWEDBY gap for %s at distance %d would require [\\s\\S]{0,%d}, which real "
+                        + "Hyperscan testing found unsafe to compile under this script's required UTF8+UCP "
+                        + "flags (\"Pattern is too large\"); clamped to the calibrated safe maximum "
+                        + "[\\s\\S]{0,%d}. PRECISION LOSS: matches requiring more than %d intervening "
+                        + "characters between the two operands will be missed. Consider a smaller "
+                        + "NEAR/FOLLOWEDBY distance for this term.")
+                        .formatted(script, maxDistance, rawChars, actualChars, actualChars)
+                : null;
+        return new GapResult(pattern, warning);
+    }
+
+    /**
+     * The clamped character-gap width {@link #charBasedGap} will actually
+     * use for {@code script}/{@code maxDistance} — the single source of
+     * truth for this calculation, shared with {@link PatternComplexityAnalyzer}
+     * so its cost estimate matches the pattern that will really be generated.
+     *
+     * @return {@code 0} for a word-based script (no character-width concept
+     * applies); otherwise {@code min(maxDistance * avgCharsPerWord +
+     * maxDistance, MAX_CHAR_GAP)}
+     */
+    static int effectiveGapWidth(ScriptType script, int maxDistance) {
+        if (!script.isCharBased()) {
+            return 0;
+        }
+        int rawChars = maxDistance * script.getAvgCharsPerWord() + maxDistance;
+        return Math.min(rawChars, MAX_CHAR_GAP);
     }
 
     // ══════════════════════════════════════════════════════════════════════

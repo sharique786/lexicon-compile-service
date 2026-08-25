@@ -30,7 +30,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   HS_FLAG_UTF8+UCP  → Pattern.UNICODE_CHARACTER_CLASS
  * </pre>
  */
-@Disabled
 @DisplayName("MultiLanguagePatternBuilder")
 class MultiLanguagePatternBuilderTest {
 
@@ -122,6 +121,12 @@ class MultiLanguagePatternBuilderTest {
         }
 
         @Test
+        @Disabled("Pre-existing, unrelated to this fix: found failing when this whole class's "
+                + "class-level @Disabled was removed for the CJK/Hangul/Thai char-based-gap fix. "
+                + "'داخلية'/'معلومات' only appear here as suffixes of prefixed compound tokens "
+                + "('الداخلية', 'ومعلومات') with no internal whitespace, which the word-based "
+                + "gap's trailing mandatory \\s+ genuinely cannot bridge into — a word-based Arabic "
+                + "gap-matching question, out of scope here. Needs its own follow-up.")
         @DisplayName("NEAR: Arabic insider information — typical phrase")
         void arabicNear_insiderInfo() {
             // معلومات = information,  داخلية = insider/internal
@@ -246,9 +251,25 @@ class MultiLanguagePatternBuilderTest {
         @Test
         @DisplayName("CJK char-based gap formula: n=3, avgCharsPerWord=3 → {0,12}")
         void cjkGapFormula() {
-            // n=3, avgCharsPerWord=3, +n buffer = 3*3+3 = 12
-            String gap = MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 3);
-            assertThat(gap).isEqualTo("[\\s\\S]{0,12}");
+            // n=3, avgCharsPerWord=3, +n buffer = 3*3+3 = 12 (well under MAX_CHAR_GAP=30, no clamp)
+            MultiLanguagePatternBuilder.GapResult gap = MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 3);
+            assertThat(gap.pattern()).isEqualTo("[\\s\\S]{0,12}");
+            assertThat(gap.hasWarning()).isFalse();
+        }
+
+        @Test
+        @DisplayName("REPORTED BUG: NEAR: 内幕 NEAR{10} 交易 — wide distance gets clamped with a "
+                + "warning instead of producing an unsafe {0,40} gap")
+        void chineseNear_wideDistanceGetsClampedWithWarning() {
+            BuildResult r = MultiLanguagePatternBuilder.buildNear("内幕", "交易", 10);
+            assertThat(r.hasWarning()).isTrue();
+            assertThat(r.warning()).contains("PRECISION LOSS");
+            assertThat(r.pattern()).contains("{0,30}").doesNotContain("{0,40}");
+
+            // Short-gap match semantics are unaffected by the clamp
+            assertThat(matches(r.pattern(), "内幕交易被调查")).isTrue();
+            assertThat(matches(r.pattern(), "交易内幕信息")).isTrue();
+            assertThat(matches(r.pattern(), "正常的商业活动记录")).isFalse();
         }
     }
 
@@ -431,6 +452,11 @@ class MultiLanguagePatternBuilderTest {
 
         @Test
         @DisplayName("NEAR: English + Arabic — word-based gap (both space-delimited)")
+        @Disabled("Pre-existing, unrelated to this fix: found failing when this whole class's "
+                + "class-level @Disabled was removed for the CJK/Hangul/Thai char-based-gap fix. "
+                + "The second sample sentence has 5 intervening words ('is the Arabic word for') "
+                + "between the two operands, exceeding the stated NEAR{3} — a wrong test fixture, "
+                + "not a word-based-gap bug. Needs its own follow-up.")
         void englishArabicNear() {
             // Both English and Arabic use spaces → word-based gap applies
             BuildResult r = MultiLanguagePatternBuilder.buildNear("price", "السعر", 3);
@@ -566,22 +592,22 @@ class MultiLanguagePatternBuilderTest {
         @Test
         @DisplayName("charBasedGap CJK n=1: {0,4}")
         void charGapCjkN1() {
-            assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 1))
-                    .isEqualTo("[\\s\\S]{0,4}"); // 1*3+1 = 4
+            assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 1).pattern())
+                    .isEqualTo("[\\s\\S]{0,4}"); // 1*3+1 = 4, under MAX_CHAR_GAP=30
         }
 
         @Test
         @DisplayName("charBasedGap Hangul n=3: {0,18}")
         void charGapHangulN3() {
-            assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.HANGUL, 3))
-                    .isEqualTo("[\\s\\S]{0,18}"); // 3*5+3 = 18
+            assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.HANGUL, 3).pattern())
+                    .isEqualTo("[\\s\\S]{0,18}"); // 3*5+3 = 18, under MAX_CHAR_GAP=30
         }
 
         @Test
         @DisplayName("charBasedGap MIXED_CJK n=2: {0,10}")
         void charGapMixedCjkN2() {
-            assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.MIXED_CJK, 2))
-                    .isEqualTo("[\\s\\S]{0,10}"); // 2*4+2 = 10
+            assertThat(MultiLanguagePatternBuilder.charBasedGap(ScriptType.MIXED_CJK, 2).pattern())
+                    .isEqualTo("[\\s\\S]{0,10}"); // 2*4+2 = 10, under MAX_CHAR_GAP=30
         }
 
         @Test
@@ -628,10 +654,14 @@ class MultiLanguagePatternBuilderTest {
         }
 
         @Test
-        @DisplayName("Large n=10: CJK gap ceiling is 10*3+10=40 chars")
+        @DisplayName("Large n=10: raw CJK gap ceiling (10*3+10=40) exceeds MAX_CHAR_GAP and is "
+                + "clamped, with a warning — this is the literal REPORTED BUG's width: real Hyperscan "
+                + "confirmed unsafe to compile {0,40} under CJK's required UTF8+UCP flags")
         void largeN() {
-            String gap = MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 10);
-            assertThat(gap).isEqualTo("[\\s\\S]{0,40}");
+            MultiLanguagePatternBuilder.GapResult gap = MultiLanguagePatternBuilder.charBasedGap(ScriptType.CJK, 10);
+            assertThat(gap.pattern()).isEqualTo("[\\s\\S]{0,30}");
+            assertThat(gap.hasWarning()).isTrue();
+            assertThat(gap.warning()).contains("40").contains("30").contains("PRECISION LOSS");
         }
 
         @Test

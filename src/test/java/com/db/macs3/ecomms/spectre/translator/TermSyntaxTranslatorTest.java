@@ -783,6 +783,36 @@ class TermSyntaxTranslatorTest {
                 assertThat(nestedSuccess.warnings()).isNotEmpty();
             }
         }
+
+        @Test
+        @DisplayName("REPORTED BUG: 内幕 NEAR{9} 交易 (\"insider trading\") now compiles end-to-end via "
+                + "real Hyperscan — previously failed even after the decomposition fallback, since both "
+                + "paths reused the same unclamped char-based gap width. (NEAR{9}, not the reported "
+                + "NEAR{10}: the grammar caps NEAR/FOLLOWEDBY distances at a single digit 1-9 — see "
+                + "Tokenizer.validateDistance — but 9 already exceeds the safe cap for CJK, 4*9=36 > 30, "
+                + "so it reproduces and proves the same fix.)")
+        void reportedCjkNearBug_nowCompiles() {
+            var s = translateOk("内幕 NEAR{9} 交易");
+            assertThat(s.hsPatterns()).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("Forced decomposition of a CJK NEAR (via outer nesting) — every leaf, including the "
+                + "clamped-gap leaf, still passes real Hyperscan")
+        void cjkNearForcedDecomposition_everyLeafCompiles() {
+            String term = "(内幕 NEAR{9} 交易) FOLLOWEDBY{6} 案件";
+            var s = translateOk(term);
+            assertThat(s.hsPatterns().size()).isGreaterThan(1);
+            assertThat(s.warnings()).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("Thai and Hangul NEAR at a wide distance also compile end-to-end (cross-script "
+                + "confidence for the char-based gap clamp)")
+        void thaiAndHangulNear_alsoCompile() {
+            assertThat(translateOk("ราคา NEAR{9} การซื้อขาย").hsPatterns()).isNotEmpty();
+            assertThat(translateOk("내부자 NEAR{9} 거래").hsPatterns()).isNotEmpty();
+        }
     }
 
     @Nested

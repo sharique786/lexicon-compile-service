@@ -162,6 +162,8 @@ final class PatternDecomposer {
         if ((script.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
             ctx.setNeedsUtf8();
         }
-        return MultiLanguagePatternBuilder.buildGap(script, distance);
+        MultiLanguagePatternBuilder.GapResult gr = MultiLanguagePatternBuilder.buildGap(script, distance);
+        ctx.addWarning(gr.warning());
+        return gr.pattern();
     }
 }

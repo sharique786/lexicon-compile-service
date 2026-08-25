@@ -149,7 +149,7 @@ final class PatternCodeGenerator {
         String rightPat = generate(near.right(), ctx);
         MultiLanguagePatternBuilder.BuildResult r =
                 MultiLanguagePatternBuilder.buildNear(leftPat, rightPat, near.distance());
-        propagateProximityFlags(r, ctx);
+        propagateProximityResult(r, ctx);
         return r.pattern();
     }
 
@@ -158,14 +158,22 @@ final class PatternCodeGenerator {
         String rightPat = generate(fb.right(), ctx);
         MultiLanguagePatternBuilder.BuildResult r =
                 MultiLanguagePatternBuilder.buildFollowedBy(leftPat, rightPat, fb.distance());
-        propagateProximityFlags(r, ctx);
+        propagateProximityResult(r, ctx);
         return r.pattern();
     }
 
-    private static void propagateProximityFlags(MultiLanguagePatternBuilder.BuildResult r, ParseContext ctx) {
+    /**
+     * Propagates a {@link MultiLanguagePatternBuilder.BuildResult}'s UTF8
+     * flag need and any warning (e.g. RTL/LTR direction mismatch, or a
+     * char-based gap clamped to {@link MultiLanguagePatternBuilder#MAX_CHAR_GAP})
+     * into the shared {@code ctx} — {@code ctx.getWarnings()} is read back by
+     * {@link TermSyntaxTranslator#translate} once the whole term is done.
+     */
+    private static void propagateProximityResult(MultiLanguagePatternBuilder.BuildResult r, ParseContext ctx) {
         if ((r.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
             ctx.setNeedsUtf8();
         }
+        ctx.addWarning(r.warning());
     }
 
     // ── AND: unbounded co-occurrence pattern construction ───────────────────────

@@ -1,5 +1,8 @@
 package com.db.macs3.ecomms.spectre.translator;
 
+import com.db.macs3.ecomms.spectre.model.ScriptType;
+import com.db.macs3.ecomms.spectre.util.ScriptDetector;
+
 /**
  * Estimates whether an {@link Ast} is likely to produce a pattern Hyperscan
  * rejects with "Pattern is too large", and rejects it EARLY — before
@@ -146,12 +149,14 @@ final class PatternComplexityAnalyzer {
             case Ast.Near near -> {
                 int base = Math.multiplyExact(estimateRaw(near.left()), estimateRaw(near.right()));
                 int directional = Math.multiplyExact(base, NEAR_DIRECTIONALITY_FACTOR);
-                yield Math.multiplyExact(directional, nestingPenalty(near.left(), near.right()));
+                int nested = Math.multiplyExact(directional, nestingPenalty(near.left(), near.right()));
+                yield Math.multiplyExact(nested, charGapPenalty(near.left(), near.right(), near.distance()));
             }
 
             case Ast.FollowedBy fb -> {
                 int base = Math.multiplyExact(estimateRaw(fb.left()), estimateRaw(fb.right()));
-                yield Math.multiplyExact(base, nestingPenalty(fb.left(), fb.right()));
+                int nested = Math.multiplyExact(base, nestingPenalty(fb.left(), fb.right()));
+                yield Math.multiplyExact(nested, charGapPenalty(fb.left(), fb.right(), fb.distance()));
             }
 
             case Ast.Word w -> containsWildcard(w.text()) ? WILDCARD_WEIGHT : PLAIN_WEIGHT;
@@ -185,5 +190,68 @@ final class PatternComplexityAnalyzer {
 
     private static boolean containsWildcard(String word) {
         return word.indexOf('*') >= 0;
+    }
+
+    /**
+     * Extra multiplicative penalty for a proximity node's OWN gap cost under
+     * a character-based script (CJK/Hangul/Thai/…) — a cost driver this
+     * class had ZERO coverage for until this was added: a simple, non-nested
+     * two-word CJK {@code NEAR{10}} scored identically to the same structure
+     * in plain Latin, even though the former compiles to an expensive bounded
+     * {@code [\s\S]{0,N}} wildcard-class repeat under UTF8+UCP and the latter
+     * to the far cheaper {@code (?:\s+\S+){0,10}\s+} word-token gap — see
+     * {@link MultiLanguagePatternBuilder#MAX_CHAR_GAP} for the real-Hyperscan
+     * calibration data behind that cost difference.
+     *
+     * <p>Applied at EVERY Near/FollowedBy node, nested or not — deliberately
+     * broader than only the non-nested case, since this penalizes a different,
+     * orthogonal cost driver from {@link #nestingPenalty} (structural
+     * simultaneous gap-counters) and stacks with it multiplicatively the same
+     * way {@link #NEAR_DIRECTIONALITY_FACTOR} already does.
+     *
+     * <p>Neutral (returns {@code 1}) for a word-based script — pure-Latin
+     * (and pure-Arabic/Hebrew/Devanagari) terms are completely unaffected by
+     * construction, for any operand text, since {@link ScriptType#isCharBased()}
+     * is {@code false} for those scripts regardless of distance. This is what
+     * protects this class's two real-Hyperscan calibration points (both pure
+     * Latin/German text — see {@code TermSyntaxTranslatorTest
+     * .nestingDepthNotBranchWidth_correctRelativeOrdering}) from being
+     * perturbed by this change.
+     *
+     * @return the clamped effective gap width (at least 1) for a char-based
+     * script, or {@code 1} (neutral) for a word-based one
+     */
+    private static int charGapPenalty(Ast left, Ast right, int distance) {
+        ScriptType script = ScriptDetector.detectCombined(collectText(left), collectText(right));
+        if (!script.isCharBased()) {
+            return 1;
+        }
+        return Math.max(1, MultiLanguagePatternBuilder.effectiveGapWidth(script, distance));
+    }
+
+    /**
+     * Collects a subtree's raw, un-codegen'd lexicon text — enough for
+     * {@link ScriptDetector#detectCombined} to classify the script, without
+     * running full {@link PatternCodeGenerator} codegen (which this
+     * pre-codegen complexity check has no need for; unlike
+     * {@link PatternDecomposer#decompose}, which genuinely needs the
+     * generated PCRE fragments to bake into leaf patterns).
+     * {@link ScriptDetector}'s own classification is designed to tolerate
+     * embedded regex/wildcard syntax in raw lexicon text (it skips ASCII
+     * punctuation/metacharacters), so raw text is safe input here.
+     */
+    private static String collectText(Ast ast) {
+        return switch (ast) {
+            case Ast.Or or -> or.operands().stream().map(PatternComplexityAnalyzer::collectText)
+                    .reduce((a, b) -> a + " " + b).orElse("");
+            case Ast.And and -> and.operands().stream().map(PatternComplexityAnalyzer::collectText)
+                    .reduce((a, b) -> a + " " + b).orElse("");
+            case Ast.AndNot andNot -> collectText(andNot.required());
+            case Ast.Near near -> collectText(near.left()) + " " + collectText(near.right());
+            case Ast.FollowedBy fb -> collectText(fb.left()) + " " + collectText(fb.right());
+            case Ast.Word w -> w.text();
+            case Ast.Phrase p -> String.join(" ", p.words());
+            case Ast.QuotedPhrase q -> q.text();
+        };
     }
 }

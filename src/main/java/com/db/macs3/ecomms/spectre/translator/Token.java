@@ -11,7 +11,7 @@ package com.db.macs3.ecomms.spectre.translator;
  * is done exactly once, in {@link Tokenizer}, and everything downstream
  * — {@link ExpressionParser} — works with validated, bounds-safe tokens.
  *
- * <h2>Case sensitivity</h2>
+ * <p><b>Case sensitivity</b>
  * <p>{@link #OR}, {@link #AND}, {@link #AND_NOT}, {@link #NOT},
  * {@link #NEAR}, and {@link #FOLLOWEDBY} are recognised ONLY in exact
  * upper-case form, per the reserved-keyword requirement. {@code or}, {@code and},

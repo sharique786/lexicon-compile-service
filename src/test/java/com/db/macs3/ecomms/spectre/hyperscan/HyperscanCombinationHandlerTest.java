@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Unit tests for {@link HyperscanCombinationHandler} in isolation.
  *
- * <h2>AND NOT no longer uses native COMBINATION — see class Javadoc</h2>
+ * <p><b>AND NOT no longer uses native COMBINATION — see class Javadoc</b>
  * <p>Confirmed unreliable by Hyperscan's own documented eager, progressive
  * combination evaluation: a formula mixing a positive requirement with a
  * negation (e.g. {@code R & !E}) is not a "purely negative" combination

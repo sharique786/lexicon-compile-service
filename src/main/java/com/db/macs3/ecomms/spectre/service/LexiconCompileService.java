@@ -111,7 +111,7 @@ public class LexiconCompileService {
      *
      * <p>Public (not just used internally by {@link #compile}) so that
      * {@code LexiconCompileBundleService} can reuse this exact pipeline for
-     * {@code termType=TermType.NATURAL_LANGUAGE} terms in the {@code /compile/bundle}
+     * {@code requestType=TermType.NATURAL_LANGUAGE} terms in the {@code /compile/bundle}
      * endpoint, guaranteeing identical translate/result-building behaviour
      * between {@code /compile} and {@code /compile/bundle} with zero
      * duplicated logic.

@@ -11,14 +11,14 @@ import java.util.Set;
  * it to a {@link ScriptType} that drives NEAR/FOLLOWEDBY gap-strategy
  * selection in the pattern builder.
  *
- * <h2>Detection mechanism</h2>
+ * <p><b>Detection mechanism</b>
  * <p>Uses ICU4J {@link UScript#getScript(int)} (already a project dependency
  * via {@code com.ibm.icu:icu4j}) rather than Java's built-in
  * {@link Character.UnicodeScript#of(int)}.  ICU4J covers more Unicode scripts,
  * handles supplementary-plane code points correctly, and is already used in
  * the codebase ({@code Normalizer2} in {@code TermSyntaxTranslator}).
  *
- * <h2>Priority resolution (most restrictive wins)</h2>
+ * <p><b>Priority resolution (most restrictive wins)</b>
  * <ol>
  *   <li><b>Pure single-script</b> — checked first so that "내부자" → HANGUL
  *       and "内幕" → CJK, not MIXED_CJK.</li>
@@ -30,12 +30,12 @@ import java.util.Set;
  *   <li><b>Pure Latin / Indic / fallback</b> → LATIN / DEVANAGARI / MIXED.</li>
  * </ol>
  *
- * <h2>ASCII and regex metacharacters</h2>
+ * <p><b>ASCII and regex metacharacters</b>
  * <p>Code points ≤ U+007F are skipped entirely so that regex fragments
  * such as {@code \\s+} or {@code \\x{4E00}} embedded in pattern strings
  * do not affect script classification.
  *
- * <h2>Why not Apache Tika?</h2>
+ * <p><b>Why not Apache Tika?</b>
  * <p>Tika's {@code LanguageDetector} identifies the <em>language</em>
  * (e.g. "zh", "ja", "ar") using statistical n-gram models.  It is unreliable
  * for short strings (fewer than ~20 characters) and cannot distinguish scripts
@@ -159,7 +159,7 @@ public final class ScriptDetector {
      * Walks every Unicode code point, maps each to a {@link Category}, and
      * returns the set of distinct categories found.
      *
-     * <h3>ASCII handling — root cause of the "Latin + Korean → HANGUL" bug</h3>
+     * <p><b>ASCII handling — root cause of the "Latin + Korean → HANGUL" bug</b>
      * <p>ASCII code points (≤ U+007F) fall into two groups:
      * <ul>
      *   <li><b>ASCII letters (a–z, A–Z)</b> — genuine Latin-script content.
@@ -219,76 +219,69 @@ public final class ScriptDetector {
     private static Category toCategory(int cp) {
         int script = UScript.getScript(cp);
 
-        // CJK logographic
-        if (script == UScript.HAN || script == UScript.BOPOMOFO) {
-            return Category.CJK;
-        }
+        return switch (script) {
+            // CJK logographic
+            case UScript.HAN, UScript.BOPOMOFO -> Category.CJK;
 
-        // Japanese syllabaries
-        if (script == UScript.HIRAGANA || script == UScript.KATAKANA) {
-            return Category.KANA;
-        }
+            // Japanese syllabaries
+            case UScript.HIRAGANA, UScript.KATAKANA -> Category.KANA;
 
-        // Korean
-        if (script == UScript.HANGUL) {
-            return Category.HANGUL;
-        }
+            // Korean
+            case UScript.HANGUL -> Category.HANGUL;
 
-        // Arabic script (Farsi/Urdu/Pashto also use Arabic script)
-        if (script == UScript.ARABIC) {
-            return Category.ARABIC;
-        }
+            // Arabic script (Farsi/Urdu/Pashto also use Arabic script)
+            case UScript.ARABIC -> Category.ARABIC;
 
-        // Hebrew
-        if (script == UScript.HEBREW) {
-            return Category.HEBREW;
-        }
+            // Hebrew
+            case UScript.HEBREW -> Category.HEBREW;
 
-        // Other RTL scripts
-        if (script == UScript.THAANA || script == UScript.NKO
-                || script == UScript.SAMARITAN || script == UScript.MANDAIC) {
-            return Category.OTHER_RTL;
-        }
+            // Other RTL scripts
+            case UScript.THAANA, UScript.NKO, UScript.SAMARITAN, UScript.MANDAIC -> Category.OTHER_RTL;
 
-        // Space-free Southeast Asian (Thai, Lao, Myanmar have NO word spaces)
-        if (script == UScript.THAI || script == UScript.LAO || script == UScript.MYANMAR) {
-            return Category.THAI;
-        }
+            // Space-free Southeast Asian (Thai, Lao, Myanmar have NO word spaces)
+            case UScript.THAI, UScript.LAO, UScript.MYANMAR -> Category.THAI;
 
-        // Space-delimited Indic scripts (words ARE separated by whitespace)
-        // Tibetan: uses tsheg between syllables but spaces between words → INDIC
-        if (script == UScript.DEVANAGARI || script == UScript.BENGALI
-                || script == UScript.GURMUKHI || script == UScript.GUJARATI
-                || script == UScript.ORIYA || script == UScript.TAMIL
-                || script == UScript.TELUGU || script == UScript.KANNADA
-                || script == UScript.MALAYALAM || script == UScript.SINHALA
-                || script == UScript.TIBETAN) {
-            return Category.INDIC;
-        }
+            // Space-delimited Indic scripts (words ARE separated by whitespace)
+            // Tibetan: uses tsheg between syllables but spaces between words → INDIC
+            case UScript.DEVANAGARI, UScript.BENGALI, UScript.GURMUKHI, UScript.GUJARATI,
+                 UScript.ORIYA, UScript.TAMIL, UScript.TELUGU, UScript.KANNADA,
+                 UScript.MALAYALAM, UScript.SINHALA, UScript.TIBETAN -> Category.INDIC;
 
-        // Latin-family and closely related European scripts
-        if (script == UScript.LATIN || script == UScript.GREEK
-                || script == UScript.CYRILLIC || script == UScript.ARMENIAN
-                || script == UScript.GEORGIAN) {
-            return Category.LATIN;
-        }
+            // Latin-family and closely related European scripts
+            case UScript.LATIN, UScript.GREEK, UScript.CYRILLIC, UScript.ARMENIAN, UScript.GEORGIAN -> Category.LATIN;
 
-        return null; // emoji, symbols, private-use, historic scripts → ignore
+            // emoji, symbols, private-use, historic scripts → ignore
+            default -> null;
+        };
     }
 
     // ── Private: resolution ────────────────────────────────────────────────
 
     /**
+     * The eight "primary" script families {@link #resolveType} discriminates
+     * between — coarser than {@link Category} only in that {@link Category#ARABIC}
+     * and {@link Category#OTHER_RTL} both collapse to {@code ARABIC} here (a
+     * text containing ONLY a rarer RTL script like Thaana is still reported
+     * as the {@link ScriptType#ARABIC} gap strategy — there is no separate
+     * "other RTL" {@link ScriptType}).
+     */
+    private enum PrimaryScript {
+        CJK, KANA, HANGUL, THAI, ARABIC, HEBREW, INDIC, LATIN
+    }
+
+    /**
      * Maps the accumulated category set to the most appropriate
      * {@link ScriptType} for gap-strategy selection.
      *
-     * <h3>KEY INVARIANT — pure cases are checked BEFORE mixed cases</h3>
+     * <p><b>KEY INVARIANT — pure cases are checked BEFORE mixed cases</b>
      * <p>Previously the code returned {@code MIXED_CJK} for ALL inputs that
      * contained any space-free script (CJK/Kana/Hangul/Thai), making the
      * per-script cases permanently unreachable.  The fix is to test for
-     * a <em>single</em> script family before testing for mixtures.
+     * a <em>single</em> script family before testing for mixtures — here,
+     * "single script family" is exactly "the {@link #toPrimaryScripts}
+     * signal set has exactly one member".
      *
-     * <h3>Why INDIC does not count as space-free</h3>
+     * <p><b>Why INDIC does not count as space-free</b>
      * <p>Devanagari, Tamil, Bengali, etc. use whitespace between words.
      * They are handled like Latin for gap-strategy purposes (word-based gap)
      * and must not trigger the char-based MIXED_CJK path.
@@ -298,26 +291,10 @@ public final class ScriptDetector {
             return ScriptType.LATIN;
         }
 
-        final boolean hasCjk = found.contains(Category.CJK);
-        final boolean hasKana = found.contains(Category.KANA);
-        final boolean hasHangul = found.contains(Category.HANGUL);
-        final boolean hasThai = found.contains(Category.THAI);
-        final boolean hasIndic = found.contains(Category.INDIC);
-        final boolean hasArabic = found.contains(Category.ARABIC)
-                || found.contains(Category.OTHER_RTL);
-        final boolean hasHebrew = found.contains(Category.HEBREW);
-        final boolean hasLatin = found.contains(Category.LATIN);
+        Set<PrimaryScript> signals = toPrimaryScripts(found);
 
-        final boolean hasRtl = hasArabic || hasHebrew;
-        // INDIC is NOT included here — Indic scripts use spaces between words
-        final boolean hasSpaceFree = hasCjk || hasKana || hasHangul || hasThai;
-
-        // ── Pure single-script cases (MUST come before mixed checks) ──────────
-        //
-        // Each condition requires one script family AND the absence of all others.
-        // "Pure" means no contamination from a second script family.
-        //
-        // Examples:
+        // Examples of a size-1 signal set ("pure" — no contamination from a
+        // second script family):
         //   "内幕"         → {CJK}     → CJK
         //   "インサイダー" → {KANA}    → KANA
         //   "내부자"       → {HANGUL}  → HANGUL
@@ -326,65 +303,79 @@ public final class ScriptDetector {
         //   "מידע"         → {HEBREW}  → HEBREW
         //   "मूल्य"        → {INDIC}   → DEVANAGARI
         //   "insider"      → {}        → LATIN (via isEmpty guard above)
+        return signals.size() == 1
+                ? pureScriptTypeFor(signals.iterator().next())
+                : resolveMixedType(signals);
+    }
 
-        if (hasCjk && !hasKana && !hasHangul && !hasThai
-                && !hasRtl && !hasLatin && !hasIndic) {
-            return ScriptType.CJK;
+    /**
+     * Reduces every {@link Category} found in the text to its coarser
+     * {@link PrimaryScript} signal — see {@link PrimaryScript} Javadoc for
+     * why {@code ARABIC}/{@code OTHER_RTL} collapse to one signal.
+     */
+    private static Set<PrimaryScript> toPrimaryScripts(Set<Category> found) {
+        Set<PrimaryScript> signals = EnumSet.noneOf(PrimaryScript.class);
+        for (Category category : found) {
+            signals.add(switch (category) {
+                case CJK -> PrimaryScript.CJK;
+                case KANA -> PrimaryScript.KANA;
+                case HANGUL -> PrimaryScript.HANGUL;
+                case THAI -> PrimaryScript.THAI;
+                case ARABIC, OTHER_RTL -> PrimaryScript.ARABIC;
+                case HEBREW -> PrimaryScript.HEBREW;
+                case INDIC -> PrimaryScript.INDIC;
+                case LATIN -> PrimaryScript.LATIN;
+            });
         }
+        return signals;
+    }
 
-        if (hasKana && !hasCjk && !hasHangul && !hasThai
-                && !hasRtl && !hasLatin && !hasIndic) {
-            return ScriptType.KANA;
-        }
+    /**
+     * The {@link ScriptType} for a text whose {@link #toPrimaryScripts}
+     * signal set has exactly one member — a "pure" single-script text.
+     * Returns {@link ScriptType#DEVANAGARI} for {@link PrimaryScript#INDIC}
+     * as the representative word-based Indic type (there is no separate
+     * per-Indic-script {@link ScriptType}).
+     */
+    private static ScriptType pureScriptTypeFor(PrimaryScript signal) {
+        return switch (signal) {
+            case CJK -> ScriptType.CJK;
+            case KANA -> ScriptType.KANA;
+            case HANGUL -> ScriptType.HANGUL;
+            case THAI -> ScriptType.THAI;
+            case ARABIC -> ScriptType.ARABIC;
+            case HEBREW -> ScriptType.HEBREW;
+            case INDIC -> ScriptType.DEVANAGARI;
+            case LATIN -> ScriptType.LATIN;
+        };
+    }
 
-        if (hasHangul && !hasCjk && !hasKana && !hasThai
-                && !hasRtl && !hasLatin && !hasIndic) {
-            return ScriptType.HANGUL;
-        }
-
-        if (hasThai && !hasCjk && !hasKana && !hasHangul
-                && !hasRtl && !hasLatin && !hasIndic) {
-            return ScriptType.THAI;
-        }
-
-        if (hasArabic && !hasHebrew && !hasSpaceFree && !hasLatin && !hasIndic) {
-            return ScriptType.ARABIC;
-        }
-
-        if (hasHebrew && !hasArabic && !hasSpaceFree && !hasLatin && !hasIndic) {
-            return ScriptType.HEBREW;
-        }
-
-        // Pure Indic: Hindi, Tamil, Bengali, etc. with no other scripts.
-        // Returns DEVANAGARI as the representative word-based Indic type.
-        if (hasIndic && !hasSpaceFree && !hasRtl && !hasLatin) {
-            return ScriptType.DEVANAGARI;
-        }
-
-        if (hasLatin && !hasSpaceFree && !hasRtl && !hasIndic) {
-            return ScriptType.LATIN;
-        }
-
-        // ── Mixed-script cases ────────────────────────────────────────────────
-        //
-        // When a space-free script is present alongside anything else, char-based
-        // gap is mandatory (the space-free side cannot rely on whitespace).
+    /**
+     * The {@link ScriptType} for a text whose {@link #toPrimaryScripts}
+     * signal set has two or more members — a genuinely mixed-script text.
+     *
+     * <p>When a space-free script (CJK/Kana/Hangul/Thai) is present alongside
+     * anything else, char-based gap is mandatory (the space-free side cannot
+     * rely on whitespace). Otherwise, RTL mixed with a space-delimited script
+     * (Latin/Indic) still gets a word-based gap, just with UTF8+UCP required.
+     * Every remaining mixed combination (multiple RTL scripts, or Latin+Indic)
+     * falls back to the conservative word-based {@link ScriptType#MIXED}.
+     */
+    private static ScriptType resolveMixedType(Set<PrimaryScript> signals) {
+        boolean hasSpaceFree = signals.contains(PrimaryScript.CJK)
+                || signals.contains(PrimaryScript.KANA)
+                || signals.contains(PrimaryScript.HANGUL)
+                || signals.contains(PrimaryScript.THAI);
         if (hasSpaceFree) {
             return ScriptType.MIXED_CJK;
         }
 
-        // RTL + space-delimited (Latin/Indic): both sides use spaces → word-based
-        // gap still applies, but UTF8+UCP flags are required.
-        if (hasRtl && (hasLatin || hasIndic)) {
+        boolean hasRtl = signals.contains(PrimaryScript.ARABIC) || signals.contains(PrimaryScript.HEBREW);
+        boolean hasSpaceDelimited = signals.contains(PrimaryScript.LATIN) || signals.contains(PrimaryScript.INDIC);
+        if (hasRtl && hasSpaceDelimited) {
             return ScriptType.MIXED_RTL;
         }
 
-        // Multiple RTL scripts (e.g. Arabic + Hebrew, Arabic + Thaana)
-        if (hasRtl) {
-            return ScriptType.MIXED;
-        }
-
-        // Latin + Indic (both space-delimited) → conservative word-based
         return ScriptType.MIXED;
     }
 

@@ -22,7 +22,7 @@ import java.util.List;
 /**
  * Parses a lexicon CSV upload and delegates to {@link LexiconCompileService}.
  *
- * <h2>Expected CSV format (2-column)</h2>
+ * <p><b>Expected CSV format (2-column)</b>
  * <pre>
  * Term ID, Term Description
  * lexicon_research_1::1, (manipulate*) NEAR{5} ((price) OR (spread))
@@ -33,11 +33,11 @@ import java.util.List;
  * column are still parsed without error — the extra value is simply ignored.
  *
  * <p>CSV rows are always operator-language syntax — this service builds a
- * {@link TypedCompileRequest} with {@code termType = NATURAL_LANGUAGE}
+ * {@link TypedCompileRequest} with {@code requestType = NATURAL_LANGUAGE}
  * (the single request type shared with {@code /compile} and
  * {@code /compile/bundle} — see {@link TypedCompileRequest} class Javadoc).
  *
- * <h2>Features</h2>
+ * <p><b>Features</b>
  * <ul>
  *   <li>Optional header row — detected by "term id" in first column</li>
  *   <li>RFC 4180 double-quote escaping: {@code ""} → {@code "}</li>
@@ -75,7 +75,7 @@ public class CsvCompileService {
         TypedCompileRequest request = new TypedCompileRequest();
         request.setRequestId(requestId);
         request.setLexiconRuleName(ruleName);
-        request.setTermType(TermType.NATURAL_LANGUAGE);
+        request.setRequestType(TermType.NATURAL_LANGUAGE);
         request.setTerms(terms);
         // SOM_LEFTMOST application is decided internally, per-expression, based on whether
         // it's a plain, QUIET, or COMBINATION expression -- see HyperscanCompiler.

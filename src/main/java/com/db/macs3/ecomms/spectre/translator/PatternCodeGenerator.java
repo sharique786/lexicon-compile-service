@@ -7,7 +7,7 @@ import java.util.List;
  * Walks an {@link Ast} and generates the Hyperscan PCRE pattern string(s),
  * accumulating flags into a {@link ParseContext}.
  *
- * <h2>AND: co-occurrence, any order, unbounded distance — WITHOUT lookahead</h2>
+ * <p><b>AND: co-occurrence, any order, unbounded distance — WITHOUT lookahead</b>
  * <p>Hyperscan does not support lookaround of any kind. The pattern
  * {@code (?=.*A)(?=.*B)(?=.*C).*} once documented for AND in this project's
  * README was never something Hyperscan could actually compile — every term
@@ -22,7 +22,7 @@ import java.util.List;
  * ordinary alternation and repetition — no lookaround, no backreferences —
  * so it is something Hyperscan can actually compile and match correctly.
  *
- * <h2>AND NOT: a two-pattern contract, not a single regex</h2>
+ * <p><b>AND NOT: a two-pattern contract, not a single regex</b>
  * <p>"B does not appear anywhere in this message" has no equivalent
  * construction — unlike AND's "all appear, any order", which is expressible
  * as ordinary alternation, "absent from the whole text" is exactly what
@@ -39,7 +39,7 @@ import java.util.List;
  * project README's "AND NOT: the two-pattern contract" section for exactly
  * how a caller applies this.
  *
- * <h2>Word encoding is a single pass (the fix for the wildcard bug)</h2>
+ * <p><b>Word encoding is a single pass (the fix for the wildcard bug)</b>
  * <p>The previous implementation had three separately-ordered word-encoding
  * methods; a word containing BOTH a wildcard AND a non-ASCII character (e.g.
  * German {@code verschwör*}) hit the wrong branch first and lost its
@@ -47,7 +47,7 @@ import java.util.List;
  * codepoint-by-codepoint scan that handles wildcard, literal {@code ?},
  * emoji, non-ASCII, and PCRE metacharacter escaping uniformly, in one place.
  *
- * <h2>{@code ?} is always literal; quoted phrases escape {@code *} and {@code ?} too</h2>
+ * <p><b>{@code ?} is always literal; quoted phrases escape {@code *} and {@code ?} too</b>
  * <p>A bare {@code ?} (e.g. {@code he?d}) is escaped to {@code \?} — literal
  * text, never the PCRE "optional" quantifier. {@link #encodeQuotedPhrase} is
  * deliberately stricter than {@link #encodeWord}: quotes mean "match this

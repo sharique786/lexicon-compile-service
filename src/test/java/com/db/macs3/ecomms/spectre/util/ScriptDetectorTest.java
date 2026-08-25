@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Comprehensive unit tests for {@link ScriptDetector}.
  *
- * <h2>Test organisation</h2>
+ * <p><b>Test organisation</b>
  * <ul>
  *   <li>SingleScript   — detect(String) for every supported script family</li>
  *   <li>Combined       — detectCombined(String, String) for all pair combinations</li>
@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>EdgeCases      — null, blank, ASCII-only, emoji, very short strings</li>
  * </ul>
  *
- * <h2>Previously failing tests (fixed by resolveType() rewrite)</h2>
+ * <p><b>Previously failing tests (fixed by resolveType() rewrite)</b>
  * <p>The old implementation returned MIXED_CJK for ALL CJK/Kana/Hangul/Thai
  * inputs because the {@code if (hasSpaceFree) return MIXED_CJK} block fired
  * first, making all per-script checks unreachable.  This fix corrects the

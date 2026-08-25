@@ -13,9 +13,9 @@ import java.util.List;
 /**
  * Request body for {@code POST /api/lexicon/compile/bundle}.
  *
- * <h2>Schema changes from the previous per-term version</h2>
+ * <p><b>Schema changes from the previous per-term version</b>
  * <ul>
- *   <li>{@code termType} has moved from each individual {@code TermInput} to
+ *   <li>{@code requestType} has moved from each individual {@code TermInput} to
  *       the <em>root level</em> — a single request now declares one term type
  *       for all its terms. Mixed-type requests are no longer supported; submit
  *       separate requests for Natural Language and Regex terms.</li>
@@ -29,7 +29,7 @@ import java.util.List;
  * {
  *   "request_id": "550e8400-e29b-41d4-a716-446655440000",
  *   "lexiconRuleName": "lexicon_research_1",
- *   "termType": "Natural Language",
+ *   "requestType": "Natural Language",
  *   "terms": [
  *     {
  *       "termId": "lexicon_research_1::1",
@@ -66,9 +66,9 @@ public class TypedCompileRequest {
      * Compilation strategy applied uniformly to every term in this request.
      * See {@link TermType} for the exact semantics of each value.
      */
-    @NotNull(message = "termType must be exactly 'Natural Language' or 'Regex'")
-    @JsonProperty("termType")
-    private TermType termType;
+    @NotNull(message = "requestType must be exactly 'Natural Language' or 'Regex'")
+    @JsonProperty("requestType")
+    private TermType requestType;
 
     @NotEmpty(message = "terms list must not be empty")
     @Valid
@@ -79,13 +79,13 @@ public class TypedCompileRequest {
 
     /**
      * One lexicon term. Contains only the term's identifier and its description.
-     * {@code termType} and {@code riskDriverName} are no longer carried
+     * {@code requestType} and {@code riskDriverName} are no longer carried
      * per-term (see root-level fields above).
      *
      * @param termId          unique identifier, echoed back in the result
      * @param termDescription operator-language expression ({@link TermType#NATURAL_LANGUAGE})
      *                        or raw PCRE pattern ({@link TermType#REGEX}) —
-     *                        determined by the root {@code termType}
+     *                        determined by the root {@code requestType}
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record TermInput(
@@ -104,12 +104,12 @@ public class TypedCompileRequest {
     // ── Derived helpers ────────────────────────────────────────────────────────
 
     /**
-     * @return {@code true} when {@link #termType} is {@link TermType#REGEX},
+     * @return {@code true} when {@link #requestType} is {@link TermType#REGEX},
      * meaning every term's description is a raw PCRE pattern
      * requiring no operator-language translation.
      */
     public boolean isRegexType() {
-        return termType == TermType.REGEX;
+        return requestType == TermType.REGEX;
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
@@ -130,12 +130,12 @@ public class TypedCompileRequest {
         this.lexiconRuleName = v;
     }
 
-    public TermType getTermType() {
-        return termType;
+    public TermType getRequestType() {
+        return requestType;
     }
 
-    public void setTermType(TermType v) {
-        this.termType = v;
+    public void setRequestType(TermType v) {
+        this.requestType = v;
     }
 
     public List<TermInput> getTerms() {

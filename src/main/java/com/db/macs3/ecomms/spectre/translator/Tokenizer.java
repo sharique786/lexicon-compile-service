@@ -16,7 +16,7 @@ import static com.db.macs3.ecomms.spectre.translator.LexiconOperatorKeyword.OR;
  * downstream component ({@link ExpressionParser}) works only with the
  * resulting token list, never with raw string indices.
  *
- * <h2>Validation performed here (lexical level)</h2>
+ * <p><b>Validation performed here (lexical level)</b>
  * <ul>
  *   <li>Reserved keywords ({@code OR}, {@code AND}, {@code NOT}, {@code NEAR},
  *       {@code FOLLOWEDBY}) are recognised ONLY in exact case; any other

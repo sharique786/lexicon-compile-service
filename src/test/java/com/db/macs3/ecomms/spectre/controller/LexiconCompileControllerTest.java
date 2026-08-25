@@ -83,7 +83,7 @@ class LexiconCompileControllerTest {
         var req = new TypedCompileRequest();
         req.setRequestId(java.util.UUID.randomUUID().toString());
         req.setLexiconRuleName(ruleName);
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         var terms = new ArrayList<TypedCompileRequest.TermInput>();
         for (int i = 0; i < descriptions.length; i++) {
             terms.add(new TypedCompileRequest.TermInput(
@@ -227,7 +227,7 @@ class LexiconCompileControllerTest {
         var req = new TypedCompileRequest();
         req.setRequestId(java.util.UUID.randomUUID().toString());
         req.setLexiconRuleName("large_test");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         var terms = new ArrayList<TypedCompileRequest.TermInput>();
         for (int i = 0; i < 50; i++) {
             terms.add(new TypedCompileRequest.TermInput(

@@ -6,9 +6,9 @@ import com.fasterxml.jackson.annotation.JsonValue;
 /**
  * How a lexicon term's {@code termDescription} should be compiled.
  *
- * <h2>Naming history</h2>
+ * <p><b>Naming history</b>
  * <p>This replaces the earlier {@code "Standard"} / {@code "NLT"} string-based
- * {@code termType} values:
+ * {@code requestType} values:
  * <ul>
  *   <li>{@code "Standard"} → {@link #NATURAL_LANGUAGE} — the term uses the
  *       operator language (OR / AND / NEAR{n} / FOLLOWEDBY{n} / wildcards /
@@ -44,7 +44,7 @@ public enum TermType {
     }
 
     /**
-     * The exact string used in JSON request/response bodies, e.g. {@code "termType": "Natural Language"}.
+     * The exact string used in JSON request/response bodies, e.g. {@code "requestType": "Natural Language"}.
      */
     @JsonValue
     public String jsonValue() {
@@ -52,7 +52,7 @@ public enum TermType {
     }
 
     /**
-     * Resolves a JSON {@code termType} string to a {@link TermType}, exact
+     * Resolves a JSON {@code requestType} string to a {@link TermType}, exact
      * match only (case-sensitive, matching {@link #jsonValue()} precisely).
      *
      * @param value the raw JSON string, e.g. {@code "Natural Language"} or {@code "Regex"}
@@ -67,6 +67,6 @@ public enum TermType {
             }
         }
         throw new IllegalArgumentException(
-                "termType must be exactly 'Natural Language' or 'Regex', got: '" + value + "'");
+                "requestType must be exactly 'Natural Language' or 'Regex', got: '" + value + "'");
     }
 }

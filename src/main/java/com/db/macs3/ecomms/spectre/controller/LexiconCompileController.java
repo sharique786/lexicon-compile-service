@@ -35,21 +35,21 @@ import java.util.zip.ZipOutputStream;
 /**
  * REST controller for the Lexicon Compile Service.
  *
- * <h2>Endpoints</h2>
+ * <p><b>Endpoints</b>
  * <dl>
  *   <dt>POST /api/lexicon/compile</dt>
  *   <dd>JSON body (plain or GZIP-compressed) → compile results</dd>
  *   <dt>POST /api/lexicon/compile/csv</dt>
  *   <dd>Multipart CSV file → compile results</dd>
  *   <dt>POST /api/lexicon/compile/bundle</dt>
- *   <dd>JSON body with per-term {@code termType} (Natural Language/Regex) → zip file
+ *   <dd>JSON body with per-term {@code requestType} (Natural Language/Regex) → zip file
  *       containing the JSON results (same shape as {@code /compile}) and a
  *       single combined Hyperscan database file</dd>
  *   <dt>GET /api/lexicon/health</dt>
  *   <dd>Engine status and supported features</dd>
  * </dl>
  *
- * <h2>Compression</h2>
+ * <p><b>Compression</b>
  * <p>Request decompression: {@code GzipRequestFilter}.
  * Response compression: Tomcat {@code server.compression.*}.
  * HTTP 200 is returned even when individual terms fail compilation.
@@ -82,7 +82,7 @@ public class LexiconCompileController {
      *
      * <p>{@link TypedCompileRequest} is the single request type shared with
      * {@code /compile/bundle} (see that class's Javadoc) — {@code request_id}
-     * is now required for every {@code /compile} call too, and {@code termType}
+     * is now required for every {@code /compile} call too, and {@code requestType}
      * lets a caller submit Regex-type terms here as well, not just
      * Natural Language.
      *
@@ -162,7 +162,7 @@ public class LexiconCompileController {
     // ── POST /api/lexicon/compile/bundle ──────────────────────────────────────
 
     /**
-     * Compiles lexicon terms with per-term {@code termType} ("Natural Language" or
+     * Compiles lexicon terms with per-term {@code requestType} ("Natural Language" or
      * "Regex") and returns a zip file containing the JSON compile results
      * (identical shape to {@code /compile}'s response) and a single combined
      * Hyperscan database file built from every term that reached PASS.

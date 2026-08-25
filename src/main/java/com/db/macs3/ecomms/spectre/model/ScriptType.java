@@ -5,7 +5,7 @@ package com.db.macs3.ecomms.spectre.model;
  * carrying the properties the pattern builder needs to choose the
  * correct NEAR / FOLLOWEDBY gap strategy.
  *
- * <h2>Gap strategy selection</h2>
+ * <p><b>Gap strategy selection</b>
  * <ul>
  *   <li><b>Word-based</b> — scripts that use whitespace between words
  *       (Latin, Arabic, Hebrew, Cyrillic, …).
@@ -16,7 +16,7 @@ package com.db.macs3.ecomms.spectre.model;
  *       This also handles the with-space case, making it safe for Korean.</li>
  * </ul>
  *
- * <h2>RTL (Arabic / Hebrew)</h2>
+ * <p><b>RTL (Arabic / Hebrew)</b>
  * <p>Arabic and Hebrew are stored in Unicode <em>logical order</em> — the
  * order characters are typed and read, independent of visual rendering.
  * The regex engine operates on stored (logical) order, so

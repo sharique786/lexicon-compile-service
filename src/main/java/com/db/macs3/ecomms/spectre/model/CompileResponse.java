@@ -10,19 +10,19 @@ import java.util.List;
 /**
  * Top-level response returned by every compile endpoint.
  *
- * <h2>Field visibility rules</h2>
+ * <p><b>Field visibility rules</b>
  * <p>Several fields are conditionally serialised to keep the JSON clean:
  * <ul>
  *   <li>{@code request_id} — present only when explicitly set (bundle / CSV endpoints)</li>
- *   <li>{@code termType} — present only when set (bundle endpoint only)</li>
+ *   <li>{@code requestType} — present only when set (bundle endpoint only)</li>
  *   <li>{@code hyperscanVersion} — present only when non-null (absent from bundle response)</li>
  *   <li>{@code processingTimeMs} — present only when non-zero (absent from bundle response)</li>
  * </ul>
  *
- * <h2>Factory methods</h2>
+ * <p><b>Factory methods</b>
  * <ul>
  *   <li>{@link #of} — original {@code /compile} and {@code /compile/csv} responses</li>
- *   <li>{@link #ofBundle} — {@code /compile/bundle} response (includes requestId + termType)</li>
+ *   <li>{@link #ofBundle} — {@code /compile/bundle} response (includes requestId + requestType)</li>
  *   <li>{@link #withRequestId} — copies this response with a requestId added
  *       (used by the CSV endpoint to attach the generated UUID)</li>
  * </ul>
@@ -44,13 +44,13 @@ public record CompileResponse(
         /*
          * Term compilation strategy for this request.
          * Present only for the {@code /compile/bundle} endpoint where
-         * {@code termType} is declared at the request root level.
+         * {@code requestType} is declared at the request root level.
          * {@code null} (and absent from JSON) for {@code /compile} and
          * {@code /compile/csv}.
          */
-        @JsonProperty("termType")
+        @JsonProperty("requestType")
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        String termType,
+        String requestType,
 
         @JsonProperty("totalTerms")
         int totalTerms,
@@ -99,7 +99,7 @@ public record CompileResponse(
 
     /**
      * Builds a response for the original {@code /compile} and
-     * {@code /compile/csv} endpoints. {@code termType} is omitted (null →
+     * {@code /compile/csv} endpoints. {@code requestType} is omitted (null →
      * not serialised) — {@code requestId} is now always present, since
      * {@code TypedCompileRequest} (the single request type for every
      * endpoint) always carries one.
@@ -114,7 +114,7 @@ public record CompileResponse(
         return new CompileResponse(
                 requestId,
                 ruleName,
-                null,              // termType   — absent from /compile response
+                null,              // requestType — absent from /compile response
                 results.size(),
                 passCount, failedCount,
                 failedCount > 0,
@@ -133,13 +133,13 @@ public record CompileResponse(
      * ({@code null} and {@code 0} respectively → suppressed by
      * {@code NON_NULL} / {@code NON_DEFAULT} annotations).
      *
-     * @param requestId the caller-supplied {@code request_id}, echoed back
-     * @param termType  the root-level {@code termType} from the request
-     * @param ruleName  the lexicon rule name from the request
-     * @param results   per-term compilation outcomes
+     * @param requestId   the caller-supplied {@code request_id}, echoed back
+     * @param requestType the root-level {@code requestType} from the request
+     * @param ruleName    the lexicon rule name from the request
+     * @param results     per-term compilation outcomes
      */
     public static CompileResponse ofBundle(String requestId,
-                                           TermType termType,
+                                           TermType requestType,
                                            String ruleName,
                                            List<TermCompilationResult> results) {
         int passCount = (int) results.stream().filter(TermCompilationResult::isPass).count();
@@ -147,7 +147,7 @@ public record CompileResponse(
         return new CompileResponse(
                 requestId,
                 ruleName,
-                termType.jsonValue(),
+                requestType.jsonValue(),
                 results.size(),
                 passCount, failedCount,
                 failedCount > 0,
@@ -174,7 +174,7 @@ public record CompileResponse(
         return new CompileResponse(
                 requestId,
                 this.lexiconRuleName,
-                this.termType,
+                this.requestType,
                 this.totalTerms,
                 this.passCount,
                 this.failedCount,

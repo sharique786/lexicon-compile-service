@@ -8,7 +8,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Builds NEAR and FOLLOWEDBY Hyperscan PCRE patterns with full multi-language support.
  *
- * <h2>Problem with the previous implementation</h2>
+ * <p><b>Problem with the previous implementation</b>
  * <p>The old builder always used a word-token gap:
  * <pre>{@code (?:\s+\S+){0,n}\s+}</pre>
  * This requires whitespace between terms.  It works for space-delimited
@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory;
  * (Chinese / Japanese), Thai, and informal Korean where no spaces appear
  * between characters.
  *
- * <h2>Strategy per script family</h2>
+ * <p><b>Strategy per script family</b>
  * <table border="1">
  *   <tr><th>Script</th><th>Gap type</th><th>Pattern</th></tr>
  *   <tr><td>Latin (English, etc.)</td><td>Word-based</td>
@@ -35,11 +35,11 @@ import org.slf4j.LoggerFactory;
  *       <td>{@code (?:\\s+\\S+){0,n}\\s+} with UTF8+UCP</td></tr>
  * </table>
  *
- * <h2>NEAR — always bidirectional</h2>
+ * <p><b>NEAR — always bidirectional</b>
  * <p>NEAR{n} means A is within n word/char gaps of B, in either order:
  * <pre>{@code (?:A<gap>B|B<gap>A)}</pre>
  *
- * <h2>FOLLOWEDBY — directional with RTL awareness</h2>
+ * <p><b>FOLLOWEDBY — directional with RTL awareness</b>
  * <p>FOLLOWEDBY{n} means A appears before B in logical (stored) order:
  * <pre>{@code A<gap>B}</pre>
  * For purely RTL text (Arabic or Hebrew), the regex engine processes bytes
@@ -47,7 +47,7 @@ import org.slf4j.LoggerFactory;
  * When operands mix RTL and LTR scripts, a warning is logged because the
  * "before" relationship may not match the user's visual expectation.
  *
- * <h2>Integration with existing translator</h2>
+ * <p><b>Integration with existing translator</b>
  * <p>Replace calls in {@code LexiconTermTranslator} (or equivalent) with:
  * <pre>{@code
  * // OLD — hard-coded word-only gap:
@@ -131,7 +131,7 @@ public final class MultiLanguagePatternBuilder {
      * <p>FOLLOWEDBY{n} matches when {@code termA} appears before {@code termB}
      * in logical (stored) order, with at most n word gaps between them.
      *
-     * <h3>RTL note</h3>
+     * <p><b>RTL note</b>
      * <p>For <em>purely</em> Arabic or Hebrew terms, logical order equals
      * reading order — no special handling is needed.
      * For <em>mixed</em> RTL + LTR terms, a warning is included in the

@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the HTTP layer itself, which is covered separately by the controller
  * slice tests.
  *
- * <h2>Fixture files</h2>
+ * <p><b>Fixture files</b>
  * <ul>
  *   <li>{@code fixtures/lexicon-terms.csv} — 14 terms covering every
  *       requirement in this project's bug-fix history (bracket nesting,
@@ -47,9 +47,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       correctly rather than aborting the whole batch.</li>
  *   <li>{@code fixtures/lexicon-terms-natural-language.json} — a
  *       {@code /compile/bundle}-shaped request with
- *       {@code termType: "Natural Language"}.</li>
+ *       {@code requestType: "Natural Language"}.</li>
  *   <li>{@code fixtures/lexicon-terms-regex.json} — the same shape with
- *       {@code termType: "Regex"}, including one deliberately-invalid
+ *       {@code requestType: "Regex"}, including one deliberately-invalid
  *       pattern.</li>
  * </ul>
  */
@@ -138,15 +138,15 @@ class LexiconTermFixtureIntegrationTest {
     // ── JSON fixture: Natural Language ──────────────────────────────────────────
 
     @Test
-    @DisplayName("Natural Language JSON fixture: every term processed, correct termType echoed, partial failure handled")
+    @DisplayName("Natural Language JSON fixture: every term processed, correct requestType echoed, partial failure handled")
     void jsonFixtureNaturalLanguage_allTermsProcessed() throws IOException {
         TypedCompileRequest request = readJsonFixture("lexicon-terms-natural-language.json");
-        assertThat(request.getTermType()).isEqualTo(TermType.NATURAL_LANGUAGE);
+        assertThat(request.getRequestType()).isEqualTo(TermType.NATURAL_LANGUAGE);
 
         var bundle = bundleService.buildBundle(request);
         CompileResponse response = bundle.jsonResponse();
 
-        assertThat(response.termType()).isEqualTo("Natural Language");
+        assertThat(response.requestType()).isEqualTo("Natural Language");
         assertThat(response.results()).hasSize(7);
         // 6 valid terms + 1 deliberately meaningless ("#@$#%$")
         assertThat(response.passCount()).isEqualTo(6);
@@ -166,16 +166,16 @@ class LexiconTermFixtureIntegrationTest {
     // ── JSON fixture: Regex ─────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("Regex JSON fixture: patterns compiled verbatim (no translation), correct termType echoed")
+    @DisplayName("Regex JSON fixture: patterns compiled verbatim (no translation), correct requestType echoed")
     void jsonFixtureRegex_allTermsProcessed() throws IOException {
         TypedCompileRequest request = readJsonFixture("lexicon-terms-regex.json");
-        assertThat(request.getTermType()).isEqualTo(TermType.REGEX);
+        assertThat(request.getRequestType()).isEqualTo(TermType.REGEX);
         assertThat(request.isRegexType()).isTrue();
 
         var bundle = bundleService.buildBundle(request);
         CompileResponse response = bundle.jsonResponse();
 
-        assertThat(response.termType()).isEqualTo("Regex");
+        assertThat(response.requestType()).isEqualTo("Regex");
         assertThat(response.results()).hasSize(4);
         // 3 valid regex patterns + 1 deliberately unclosed group
         assertThat(response.passCount()).isEqualTo(3);

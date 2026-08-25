@@ -28,7 +28,7 @@ import java.util.regex.Pattern;
  * {@code /compile}/{@code /compile/csv} (see {@link LexiconCompileService})
  * — there is no separate request shape for this endpoint any more.
  *
- * <p>Each request carries one root-level {@code termType}:
+ * <p>Each request carries one root-level {@code requestType}:
  * <ul>
  *   <li>{@code NATURAL_LANGUAGE} — translated via the existing
  *       {@code TermSyntaxTranslator} pipeline, by delegating straight to
@@ -54,7 +54,7 @@ import java.util.regex.Pattern;
  * term gets {@code requiredExpressionIds}/{@code excludedExpressionIds}
  * instead — see {@link TermCompilationResult} class Javadoc.
  *
- * <h2>Hyperscan expression id scheme</h2>
+ * <p><b>Hyperscan expression id scheme</b>
  * <p>Every {@code termId} in this platform follows the convention
  * {@code <lexicon_rule_name>::<term_number>} (e.g. {@code lexicon_research_1::1}).
  * Every {@code termId} in a bundle request MUST end with {@code ::<n>} for a
@@ -103,7 +103,7 @@ public class LexiconCompileBundleService {
     public CompileBundleResult buildBundle(TypedCompileRequest request) {
         long startTimeMs = System.currentTimeMillis();
         log.info("Compiling bundle: {} {} term(s) for rule '{}' (request_id={})",
-                request.getTerms().size(), request.getTermType(),
+                request.getTerms().size(), request.getRequestType(),
                 request.getLexiconRuleName(), request.getRequestId());
 
         // Every termId's term number is needed as its expression id — parsed
@@ -151,7 +151,7 @@ public class LexiconCompileBundleService {
 
         CompileResponse jsonResponse = CompileResponse.ofBundle(
                 request.getRequestId(),
-                request.getTermType(),
+                request.getRequestType(),
                 request.getLexiconRuleName(),
                 termResults);
 

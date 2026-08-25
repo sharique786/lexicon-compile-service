@@ -6,7 +6,7 @@ import java.util.List;
 /**
  * Recursive-descent parser: {@code List<Token>} → {@link Ast}.
  *
- * <h2>Grammar (highest precedence last, i.e. tightest-binding first)</h2>
+ * <p><b>Grammar (highest precedence last, i.e. tightest-binding first)</b>
  * <pre>
  * orExpr        := andNotExpr ( OR andNotExpr )*
  * andNotExpr    := andExpr ( AND_NOT andExpr )*
@@ -27,7 +27,7 @@ import java.util.List;
  * exactly one non-branching pass through {@code atom} → {@code orExpr} →
  * ... → {@code atom} before the actual {@code (me) OR (cking)} content is reached.
  *
- * <h2>Unwrapped multi-word phrases are accepted, not rejected</h2>
+ * <p><b>Unwrapped multi-word phrases are accepted, not rejected</b>
  * <p>{@code wordOrPhrase} greedily consumes every consecutive {@code WORD}
  * token with no operator between them into one {@link Ast.Phrase} (or a
  * single {@link Ast.Word} if there is only one). This means a lexicon term
@@ -39,7 +39,7 @@ import java.util.List;
  * operator, a parenthesis, end of input), operators like {@code OR} still
  * correctly separate one phrase from the next.
  *
- * <h2>Chained NEAR/FOLLOWEDBY: warned, not rejected</h2>
+ * <p><b>Chained NEAR/FOLLOWEDBY: warned, not rejected</b>
  * <p>{@code A FOLLOWEDBY{5} B FOLLOWEDBY{6} C} chains two proximity operators
  * at the same level with no explicit parentheses. This is now ACCEPTED —
  * parsed as if the author had written {@code (A FOLLOWEDBY{5} B) FOLLOWEDBY{6} C}

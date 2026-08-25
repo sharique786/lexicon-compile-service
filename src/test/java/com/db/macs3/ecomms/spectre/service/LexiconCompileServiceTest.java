@@ -50,7 +50,7 @@ class LexiconCompileServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId(UUID.randomUUID().toString());
         req.setLexiconRuleName(ruleName);
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         List<TypedCompileRequest.TermInput> terms = new ArrayList<>();
         for (int i = 0; i < descriptions.length; i++) {
             terms.add(new TypedCompileRequest.TermInput(ruleName + "::" + (i + 1), descriptions[i]));
@@ -118,7 +118,7 @@ class LexiconCompileServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId("test-request-id-42");
         req.setLexiconRuleName("echo_test");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(new TypedCompileRequest.TermInput("echo_test::42", "price OR spread")));
 
         var resp = service.compile(req);

@@ -13,7 +13,7 @@ import java.util.List;
  * Translates lexicon term descriptions (operator language) into
  * Hyperscan-compatible PCRE patterns.
  *
- * <h2>Pipeline</h2>
+ * <p><b>Pipeline</b>
  * <pre>
  * raw text → preprocess → Tokenizer → List&lt;Token&gt; → ExpressionParser → Ast (+ warnings)
  *          → per side (required; excluded, if AND NOT):
@@ -26,7 +26,7 @@ import java.util.List;
  *
  * <p>Each stage is a separate, independently-testable class.
  *
- * <h2>Decomposition triggers on EITHER signal — heuristic OR real Hyperscan rejection</h2>
+ * <p><b>Decomposition triggers on EITHER signal — heuristic OR real Hyperscan rejection</b>
  * <p>{@link PatternComplexityAnalyzer} is a heuristic (see its class Javadoc)
  * calibrated on two known real outcomes — it can under-estimate a structure
  * it has not seen before. This class therefore does not treat "under budget"
@@ -52,7 +52,7 @@ import java.util.List;
  * directly where it is compiled; decomposition fundamentally cannot apply to
  * it either, since it has no parsed AST/proximity structure to decompose.)
  *
- * <h2>Operator precedence (grammar — see {@link ExpressionParser})</h2>
+ * <p><b>Operator precedence (grammar — see {@link ExpressionParser})</b>
  * <table>
  * <tr><td>Atom</td><td>word, "quoted phrase", emoji, non-english, wildcard, parens (highest)</td></tr>
  * <tr><td>NEAR{n} / FOLLOWEDBY{n}</td><td>proximity, bounded gap — chaining without explicit
@@ -65,14 +65,14 @@ import java.util.List;
  * <tr><td>OR</td><td>alternation (lowest)</td></tr>
  * </table>
  *
- * <h2>AND: same technique as NEAR/FOLLOWEDBY, just unbounded</h2>
+ * <p><b>AND: same technique as NEAR/FOLLOWEDBY, just unbounded</b>
  * <p>{@code price AND rigging} compiles to a single, fully correct Hyperscan
  * pattern using the same bidirectional-alternation technique NEAR uses for a
  * bounded gap, with the gap made unbounded — see {@link PatternCodeGenerator}
  * class Javadoc. No lookahead, no post-filter, no scan-time cooperation
  * needed from the caller.
  *
- * <h2>AND NOT: a two-pattern contract, not a single regex</h2>
+ * <p><b>AND NOT: a two-pattern contract, not a single regex</b>
  * <p>Hyperscan cannot express "absent from the whole message" — that is
  * exactly what negative lookaround is for, and Hyperscan supports none.
  * {@code A AND NOT B} therefore returns TWO independently Hyperscan-valid
@@ -82,7 +82,7 @@ import java.util.List;
  * {@code exclusionPattern} does not — see {@link TranslationResult} class
  * Javadoc for the exact contract.
  *
- * <h2>Pattern examples</h2>
+ * <p><b>Pattern examples</b>
  * <pre>
  * (crap OR bad) NEAR{3} (bonus OR comp)
  *   → (?:(?:crap|bad)(?:\s+\S+){0,3}\s+(?:bonus|comp)|(?:bonus|comp)(?:\s+\S+){0,3}\s+(?:crap|bad))

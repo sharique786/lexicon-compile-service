@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
  * Builds the Hyperscan {@link Expression}(s) one term needs in a
  * {@code /compile/bundle} combined database.
  *
- * <h2>AND NOT no longer uses native Hyperscan COMBINATION — confirmed broken</h2>
+ * <p><b>AND NOT no longer uses native Hyperscan COMBINATION — confirmed broken</b>
  * <p>An earlier version of this class compiled every AND NOT term as a
  * single native {@code HS_FLAG_COMBINATION} formula, e.g.
  * {@code (R&!E)} or, for a decomposed excluded side,
@@ -57,8 +57,8 @@ import java.util.stream.Collectors;
  * {@link TermCompilationResult#requiresExclusionCheck()}, not by whether
  * either side was decomposed.
  *
- * <h2>The fix: no combination for AND NOT — every pattern reports individually,
- * evaluated by the caller after the whole scan completes</h2>
+ * <p><b>The fix: no combination for AND NOT — every pattern reports individually,
+ * evaluated by the caller after the whole scan completes</b>
  * <p>For an AND NOT term, every pattern in both
  * {@link TermCompilationResult#translatedPattern()} (required) and
  * {@link TermCompilationResult#exclusionPattern()} (excluded) compiles as
@@ -74,7 +74,7 @@ import java.util.stream.Collectors;
  * condition. See {@link #addExpressions} return value and
  * {@code LexiconCompileBundleService} for where this evaluation happens.
  *
- * <h2>The id scheme, revised</h2>
+ * <p><b>The id scheme, revised</b>
  * <p>For a term that does NOT require an exclusion check (simple or purely
  * decomposed), the reportable expression id is still ALWAYS the term's own
  * term number, exactly as before — see {@link ExpressionAssignment#hyperscanExpressionId()}.
@@ -91,7 +91,7 @@ import java.util.stream.Collectors;
  * condition natively for a mixed positive/negative formula, so the
  * responsibility must move to the caller regardless of id-naming choices.
  *
- * <h2>Flag constraint: COMBINATION only pairs with QUIET/SINGLEMATCH</h2>
+ * <p><b>Flag constraint: COMBINATION only pairs with QUIET/SINGLEMATCH</b>
  * <p>Still relevant for the (now narrower) case where COMBINATION is used
  * at all — a Hyperscan expression flagged {@code COMBINATION} may only
  * additionally carry {@code QUIET} and/or {@code SINGLEMATCH}, never

@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * Compilation outcome for a single lexicon term.
  *
- * <h2>Null field semantics</h2>
+ * <p><b>Null field semantics</b>
  * <ul>
  *   <li>{@code translatedPattern} — null/absent only when translation failed before any
  *       pattern could be produced (see {@code translationError}); for a PASS term, always
@@ -40,7 +40,7 @@ import java.util.List;
  * At most one of {@code errorLog} / {@code translationError} is non-null.
  * Both are null when {@code compilationStatus} is {@code PASS}.
  *
- * <h2>{@code translatedPattern} and {@code exclusionPattern} are always lists</h2>
+ * <p><b>{@code translatedPattern} and {@code exclusionPattern} are always lists</b>
  * <p>Every lexicon term — however structurally complex, and whether or not
  * it uses {@code AND NOT} — is represented uniformly: {@code translatedPattern}
  * holds the required side's independently Hyperscan-valid pattern(s), one
@@ -66,7 +66,7 @@ import java.util.List;
  * this trade-off applies to either side, so no caller can silently treat a
  * decomposed match as a genuine proximity match.
  *
- * <h2>AND NOT has two different correct implementations, for two different callers</h2>
+ * <p><b>AND NOT has two different correct implementations, for two different callers</b>
  * <p>{@code translatedPattern} and {@code exclusionPattern} are independently
  * Hyperscan-valid pattern lists (Hyperscan cannot express "absent from the
  * whole message" in a single pattern — no negative lookaround support).
@@ -99,7 +99,7 @@ import java.util.List;
  *       {@code HyperscanCombinationHandler} and {@code LexiconCompileBundleService}.</li>
  * </ul>
  *
- * <h2>{@code hyperscanExpressionId}: the term's own term number, when it applies</h2>
+ * <p><b>{@code hyperscanExpressionId}: the term's own term number, when it applies</b>
  * <p>On a {@code /compile/bundle} response, a non-AND-NOT PASS term's
  * reportable Hyperscan expression id — whether it needed decomposition or
  * not — is ALWAYS its own term number (parsed from its {@code termId}'s
@@ -112,7 +112,7 @@ import java.util.List;
  * assigned an id from a separate allocated range that never collides with
  * any term number — see {@code HyperscanCombinationHandler}.
  *
- * <h2>{@code patternMapping}: the logical formula, independent of whether the {@code .hdb} itself encodes it</h2>
+ * <p><b>{@code patternMapping}: the logical formula, independent of whether the {@code .hdb} itself encodes it</b>
  * <p>A boolean formula over this term's Hyperscan expression ids, using the
  * same {@code &}/{@code !} operator syntax Hyperscan's own
  * {@code HS_FLAG_COMBINATION} formulas use — e.g. {@code "(5&6&7)"} or

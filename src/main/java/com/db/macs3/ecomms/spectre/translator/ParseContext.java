@@ -5,7 +5,7 @@ package com.db.macs3.ecomms.spectre.translator;
  * one term's {@link Ast}. Accumulates flags and the (at most one) AND-NOT
  * exclusion pattern discovered along the way.
  *
- * <h2>Why there is no more {@code hasAndOp} / required-operands tracking</h2>
+ * <p><b>Why there is no more {@code hasAndOp} / required-operands tracking</b>
  * <p>The previous design treated {@code AND} the same way it treated
  * {@code AND NOT}: emit an OR pre-scan pattern, and rely on separately
  * tracked "required operand" metadata for a downstream post-filter to
@@ -17,7 +17,7 @@ package com.db.macs3.ecomms.spectre.translator;
  * operands joined by an unbounded gap — see {@link Ast.And} class Javadoc),
  * so no post-filter or operand bookkeeping is needed for it at all.
  *
- * <h2>Why {@code exclusionPattern} still exists</h2>
+ * <p><b>Why {@code exclusionPattern} still exists</b>
  * <p>{@code AND NOT} is different in kind, not just degree: "B does not
  * appear anywhere in this message" cannot be compiled into the same
  * Hyperscan expression as "A appears somewhere" without negative lookaround,
@@ -25,7 +25,7 @@ package com.db.macs3.ecomms.spectre.translator;
  * OWN independently Hyperscan-valid pattern, to be checked separately by the
  * caller — see {@link Ast.AndNot} class Javadoc for the full contract.
  *
- * <h2>Why there is no more DOTALL flag-setting</h2>
+ * <p><b>Why there is no more DOTALL flag-setting</b>
  * <p>DOTALL only changes what the {@code .} metacharacter matches. Every
  * gap this translator generates — NEAR/FOLLOWEDBY's bounded gap
  * ({@code (?:\s+\S+){0,n}\s+} or {@code [\s\S]{0,n}}) and AND's unbounded

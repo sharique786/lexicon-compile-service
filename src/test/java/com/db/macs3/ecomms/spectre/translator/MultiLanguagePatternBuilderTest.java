@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>Assert match / no-match against real-language sample messages.</li>
  * </ol>
  *
- * <h2>Java regex flag mapping</h2>
+ * <p><b>Java regex flag mapping</b>
  * <pre>
  *   HS_FLAG_CASELESS  → Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
  *   HS_FLAG_DOTALL    → Pattern.DOTALL

@@ -18,7 +18,7 @@ import java.util.List;
  * Validates Hyperscan PCRE patterns using the {@code com.gliwka.hyperscan} Java binding
  * (version 5.4.0-2.0.0).
  *
- * <h2>Library overview</h2>
+ * <p><b>Library overview</b>
  * <p>{@code com.gliwka.hyperscan} bundles the native Hyperscan .so inside the JAR:
  * <ul>
  *   <li>linux-x86_64  → Cloud Run (standard)</li>
@@ -28,7 +28,7 @@ import java.util.List;
  * The native library is extracted to {@code java.io.tmpdir} on first use.
  * No manual deployment is required.
  *
- * <h2>Validation flow</h2>
+ * <p><b>Validation flow</b>
  * <p>For each term:
  * <ol>
  *   <li>Wrap the PCRE pattern in an {@link Expression} with the appropriate flags</li>
@@ -38,7 +38,7 @@ import java.util.List;
  *   <li>Return {@link ValidationResult#pass} or {@link ValidationResult#failed}</li>
  * </ol>
  *
- * <h2>Native Hyperscan logical combinations — pure decomposition ONLY, never AND NOT</h2>
+ * <p><b>Native Hyperscan logical combinations — pure decomposition ONLY, never AND NOT</b>
  * <p>Hyperscan 5.0+ supports logical combinations of patterns natively —
  * {@code HS_FLAG_COMBINATION} lets a compiled expression be the STRING
  * {@code "(101&102)"} (operators {@code &}/{@code |}/{@code !} over other
@@ -67,11 +67,11 @@ import java.util.List;
  * would fail to compile with an unambiguous "cannot find symbol" naming the
  * exact missing flag — not a silent runtime behaviour change.
  *
- * <h2>Thread safety</h2>
+ * <p><b>Thread safety</b>
  * <p>{@link Database#compile} is thread-safe. Spring Boot 4 Tomcat uses JDK 21
  * virtual threads — many concurrent compilations are handled without OS-thread blocking.
  *
- * <h2>No fallback</h2>
+ * <p><b>No fallback</b>
  * <p>RE2J and any other fallback have been removed. If Hyperscan is unavailable
  * (unsupported platform, ABI mismatch), the {@link PostConstruct} self-test fails
  * and the Spring context does not start — Cloud Run health checks fail fast.
@@ -196,14 +196,14 @@ public class HyperscanCompiler {
      * both intentionally narrower than this one, and both intentionally have
      * NO conditional bits at all (see their own Javadoc for why).
      *
-     * <h2>Also the general validation flag set</h2>
+     * <p><b>Also the general validation flag set</b>
      * <p>{@link #validate} always uses this method (regardless of what a
      * candidate pattern will eventually be compiled as downstream) — this is
      * historically the flag set {@code PatternComplexityAnalyzer}'s
      * {@code COMPLEXITY_BUDGET} was calibrated against, so validating every
      * candidate under it keeps the "too large" pre-check accurate.
      *
-     * <h2>{@link ExpressionFlag#SOM_LEFTMOST} is always included here</h2>
+     * <p><b>{@link ExpressionFlag#SOM_LEFTMOST} is always included here</b>
      * <p>This method builds flags for a PLAIN, standalone, reportable
      * expression — never a {@code QUIET} sub-expression and never a
      * {@code COMBINATION} formula (those go through {@link #toSubExpressionFlags}
@@ -357,7 +357,7 @@ public class HyperscanCompiler {
      * Compiles a list of {@link Expression}s into a single combined Hyperscan
      * database and serialises it to a byte array using {@link Database#save}.
      *
-     * <h2>Why one combined database instead of one-per-term</h2>
+     * <p><b>Why one combined database instead of one-per-term</b>
      * <p>{@link #validate} (used by {@code /compile}) creates one ephemeral
      * single-pattern {@link Database} per term purely to check compile
      * validity, then discards it. This method is different: it produces the
@@ -367,7 +367,7 @@ public class HyperscanCompiler {
      * is what makes that fast — scanning with N separate single-pattern
      * databases would be N times slower).
      *
-     * <h2>Expression IDs</h2>
+     * <p><b>Expression IDs</b>
      * <p>Each {@link Expression} passed in must already carry a unique
      * {@code id} (set via the 3-arg {@code Expression(pattern, flags, id)}
      * constructor). {@code com.gliwka.hyperscan.wrapper.Database} requires
@@ -378,7 +378,7 @@ public class HyperscanCompiler {
      * so a downstream consumer can always map a Hyperscan match id back to
      * the term that produced it.
      *
-     * <h2>What {@code save()} actually writes</h2>
+     * <p><b>What {@code save()} actually writes</b>
      * <p>{@link Database#save(java.io.OutputStream)} writes BOTH the
      * expression metadata (id, pattern, flags for every expression) AND the
      * platform-specific serialised native database into the same stream, in
@@ -387,7 +387,7 @@ public class HyperscanCompiler {
      * reconstructs an equivalent database with no separate metadata file
      * needed. This is what becomes the single {@code .hdb} file in the zip.
      *
-     * <h2>Platform portability caveat</h2>
+     * <p><b>Platform portability caveat</b>
      * <p>The serialised bytes are <b>not portable across CPU architectures</b>
      * with different instruction-set features (see Intel's Hyperscan
      * documentation on {@code hs_serialize_database}). The database must be

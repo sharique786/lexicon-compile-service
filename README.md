@@ -336,7 +336,7 @@ terms (e.g. English + Korean + emoji in one term).
 
 ## Regex-type terms
 
-A `/compile/bundle` request's `termType` (`NATURAL_LANGUAGE` or `REGEX`) is
+A `/compile/bundle` request's `requestType` (`NATURAL_LANGUAGE` or `REGEX`) is
 request-level, not per-term. A `REGEX` term's `termDescription` is compiled
 **verbatim** — no operator-language translation runs at all. `NEAR{5}` in a
 Regex-type term is not translated; Hyperscan treats `{5}` as a literal

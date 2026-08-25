@@ -13,7 +13,7 @@ import java.util.List;
  * }
  * </pre>
  *
- * <h2>{@code hsPatterns} is always a list — this is how decomposition is represented</h2>
+ * <p><b>{@code hsPatterns} is always a list — this is how decomposition is represented</b>
  * <p>A term whose required side is simple enough for Hyperscan to compile as
  * one pattern has {@code hsPatterns} with exactly one entry. A term too
  * structurally complex for that — see {@code PatternComplexityAnalyzer} and
@@ -46,7 +46,7 @@ import java.util.List;
  * either side, so no caller can silently treat a decomposed match as a
  * genuine proximity match without realizing precision was reduced.
  *
- * <h2>AND NOT: a two-side contract, not a single regex</h2>
+ * <p><b>AND NOT: a two-side contract, not a single regex</b>
  * <p>Hyperscan cannot express "absent from the whole message" — that is
  * exactly what negative lookaround is for, and Hyperscan supports none.
  * {@code A AND NOT B} therefore returns two independently Hyperscan-valid

@@ -16,7 +16,7 @@ import java.util.List;
  * how the combination expression itself gets built once real Hyperscan
  * expression ids are assigned.
  *
- * <h2>What "leaf" means here</h2>
+ * <p><b>What "leaf" means here</b>
  * <p>Given a NEAR/FOLLOWEDBY tree, a leaf is a maximal subtree that is NOT
  * itself a NEAR/FOLLOWEDBY node — i.e. an {@link Ast.Or}, {@link Ast.And},
  * {@link Ast.Word}, {@link Ast.Phrase}, or {@link Ast.QuotedPhrase} found by
@@ -25,7 +25,7 @@ import java.util.List;
  * A, B, and C — the two FOLLOWEDBY nodes themselves contribute no leaf of
  * their own; only what they connect.
  *
- * <h2>The gap is preserved on the leaf that follows it — confirmed bug fix</h2>
+ * <p><b>The gap is preserved on the leaf that follows it — confirmed bug fix</b>
  * <p>An earlier revision of this class ({@code collectLeaves}) discarded
  * every NEAR/FOLLOWEDBY node's gap entirely — {@code distance} was thrown
  * away along with the node itself, and each leaf was code-generated in
@@ -48,7 +48,7 @@ import java.util.List;
  * operand pair). For {@code (A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C}, decompose
  * now returns exactly: {@code [A, <gap4(A,B)>B, <gap4(AB,C)>C]}.
  *
- * <h2>This is still NOT the original proximity constraint — read carefully</h2>
+ * <p><b>This is still NOT the original proximity constraint — read carefully</b>
  * <p>The prefix is a LITERAL gap fragment baked into one leaf's own pattern
  * text, not a cross-expression constraint — Hyperscan has no mechanism to
  * make one independently-scanned expression's match position depend on
@@ -66,7 +66,7 @@ import java.util.List;
  * entry whenever decomposition applies, precisely because the true
  * order/distance relationship BETWEEN leaves remains lost.
  *
- * <h2>NEAR is bidirectional; the prefix approximates one direction anyway</h2>
+ * <p><b>NEAR is bidirectional; the prefix approximates one direction anyway</b>
  * <p>{@link Ast.Near} allows either operand to appear first; a single
  * decomposed leaf cannot faithfully carry "preceded by up to n OR followed
  * by up to n". {@link #decompose} applies the same left-to-right,

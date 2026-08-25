@@ -18,14 +18,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * End-to-end integration tests verifying that translated patterns correctly match
  * (and correctly do NOT match) realistic multi-language communication messages.
  *
- * <h2>Pipeline per test</h2>
+ * <p><b>Pipeline per test</b>
  * <ol>
  *   <li>{@link TermSyntaxTranslator#translate} — term description → Hyperscan PCRE + flags</li>
  *   <li>{@link HyperscanCompiler#validate}    — verify the pattern compiles with Hyperscan</li>
  *   <li>Java {@link Pattern#compile}          — match against the message text</li>
  * </ol>
  *
- * <h2>Why Java regex for matching?</h2>
+ * <p><b>Why Java regex for matching?</b>
  * <p>{@code com.gliwka.hyperscan 5.4.0-2.0.0} {@code Scanner.scan()} throws
  * {@code HS_ERR_INVALID} ("Is scratch allocated?") in non-Spring unit test
  * environments. The root cause is native scratch management in the JNI layer
@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * gives equivalent semantics. Hyperscan compilation is still verified in step 2,
  * so the test still exercises the Hyperscan code path.
  *
- * <h2>Message types tested</h2>
+ * <p><b>Message types tested</b>
  * <ul>
  *   <li>Outlook emails (English, German)</li>
  *   <li>Symphony chat (Korean)</li>

@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <p>No Spring context — uses real {@code TermSyntaxTranslator} and
  * {@code HyperscanCompiler} directly, exactly like {@link LexiconCompileServiceTest}.
  *
- * <h2>The current id scheme: a term's reportable expression is ALWAYS its own term number</h2>
+ * <p><b>The current id scheme: a term's reportable expression is ALWAYS its own term number</b>
  * <p>Every PASS term's {@code hyperscanExpressionId} — whether it compiles as
  * a single plain pattern or needs a QUIET/COMBINATION structure (AND NOT
  * and/or decomposition) — is always its own term number. Every auxiliary
@@ -64,11 +64,11 @@ class LexiconCompileBundleServiceTest {
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private TypedCompileRequest request(String ruleName, TermType termType, TermSpec... specs) {
+    private TypedCompileRequest request(String ruleName, TermType requestType, TermSpec... specs) {
         var req = new TypedCompileRequest();
         req.setRequestId(UUID.randomUUID().toString());
         req.setLexiconRuleName(ruleName);
-        req.setTermType(termType);
+        req.setRequestType(requestType);
         List<TypedCompileRequest.TermInput> terms = new ArrayList<>();
         for (int i = 0; i < specs.length; i++) {
             terms.add(new TypedCompileRequest.TermInput(
@@ -149,7 +149,7 @@ class LexiconCompileBundleServiceTest {
 
     @Test
     @Order(1)
-    @DisplayName("Spec example: Natural Language request → PASS, combined DB built, request_id/termType echoed")
+    @DisplayName("Spec example: Natural Language request → PASS, combined DB built, request_id/requestType echoed")
     void specExampleNaturalLanguage() {
         var req = naturalLanguage("lexicon_research_1",
                 "(manipulate) NEAR{5} ((price) OR (spread) OR (stock))");
@@ -163,12 +163,12 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hyperscanDatabaseBytes()).isNotEmpty();
         assertThat(bundle.databaseNote()).isNull();
         assertThat(bundle.jsonResponse().requestId()).isEqualTo(sentRequestId);
-        assertThat(bundle.jsonResponse().termType()).isEqualTo("Natural Language");
+        assertThat(bundle.jsonResponse().requestType()).isEqualTo("Natural Language");
     }
 
     @Test
     @Order(2)
-    @DisplayName("Spec example: Regex request → PASS, combined DB built, request_id/termType echoed")
+    @DisplayName("Spec example: Regex request → PASS, combined DB built, request_id/requestType echoed")
     void specExampleRegex() {
         var req = regex("lexicon_research_1", "(?:price|spread|stock)");
         String sentRequestId = req.getRequestId();
@@ -179,14 +179,14 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.jsonResponse().failedCount()).isEqualTo(0);
         assertThat(bundle.hasDatabase()).isTrue();
         assertThat(bundle.jsonResponse().requestId()).isEqualTo(sentRequestId);
-        assertThat(bundle.jsonResponse().termType()).isEqualTo("Regex");
+        assertThat(bundle.jsonResponse().requestType()).isEqualTo("Regex");
     }
 
     // ── JSON shape ──────────────────────────────────────────────────────────
 
     @Test
     @Order(10)
-    @DisplayName("JSON response: request_id and termType present; hyperscanVersion absent (bundle-specific shape)")
+    @DisplayName("JSON response: request_id and requestType present; hyperscanVersion absent (bundle-specific shape)")
     void jsonShapeMatchesCompile() {
         var req = naturalLanguage("shape_test", "price OR spread");
         var bundle = bundleService.buildBundle(req);
@@ -195,7 +195,7 @@ class LexiconCompileBundleServiceTest {
         assertThat(json.lexiconRuleName()).isEqualTo("shape_test");
         assertThat(json.engineMode()).isEqualTo("HYPERSCAN_NATIVE");
         assertThat(json.requestId()).isEqualTo(req.getRequestId());
-        assertThat(json.termType()).isEqualTo("Natural Language");
+        assertThat(json.requestType()).isEqualTo("Natural Language");
         assertThat(json.hyperscanVersion()).isNull();
         assertThat(json.results()).hasSize(1);
         assertThat(json.results().getFirst().termId()).isEqualTo("shape_test::1");
@@ -292,7 +292,7 @@ class LexiconCompileBundleServiceTest {
         var bundle = bundleService.buildBundle(req);
 
         assertThat(bundle.jsonResponse().passCount()).isEqualTo(3);
-        assertThat(bundle.jsonResponse().termType()).isEqualTo("Regex");
+        assertThat(bundle.jsonResponse().requestType()).isEqualTo("Regex");
         assertThat(bundle.hasDatabase()).isTrue();
     }
 
@@ -307,7 +307,7 @@ class LexiconCompileBundleServiceTest {
         var bundle = bundleService.buildBundle(req);
 
         assertThat(bundle.jsonResponse().passCount()).isEqualTo(3);
-        assertThat(bundle.jsonResponse().termType()).isEqualTo("Natural Language");
+        assertThat(bundle.jsonResponse().requestType()).isEqualTo("Natural Language");
         assertThat(bundle.hasDatabase()).isTrue();
     }
 
@@ -542,7 +542,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId("regression-test");
         req.setLexiconRuleName("regression_test");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(new TypedCompileRequest.TermInput("t::1", NESTED_TOO_COMPLEX_TERM)));
 
         var bundle = bundleService.buildBundle(req);
@@ -575,7 +575,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId("worked-example-1");
         req.setLexiconRuleName("worked_example_1");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(new TypedCompileRequest.TermInput("lexicon_term::4", term)));
 
         var bundle = bundleService.buildBundle(req);
@@ -602,7 +602,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId("regression-andnot-test");
         req.setLexiconRuleName("regression_andnot_test");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(new TypedCompileRequest.TermInput(
                 "t::1", "((don't forward) AND NOT (compliance OR legal))")));
 
@@ -641,7 +641,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId("worked-example-2");
         req.setLexiconRuleName("worked_example_2");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         // A dummy term at ::7 pushes the id offset to 8, so THIS term's required/excluded leaves land
         // on exactly the ids the bug report used (8, 9, 10, 11), for a byte-for-byte comparison.
         req.setTerms(List.of(
@@ -669,7 +669,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId("regression-order-test");
         req.setLexiconRuleName("regression_order_test");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(new TypedCompileRequest.TermInput(
                 "t::1", "insider AND NOT disclosed")));
 
@@ -883,7 +883,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId(UUID.randomUUID().toString());
         req.setLexiconRuleName("bad_id_rule");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(new TypedCompileRequest.TermInput("not_a_valid_term_id", "price OR spread")));
 
         assertThatThrownBy(() -> bundleService.buildBundle(req))
@@ -899,7 +899,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId(UUID.randomUUID().toString());
         req.setLexiconRuleName("dup_id_rule");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(
                 new TypedCompileRequest.TermInput("dup_id_rule::1", "price OR spread"),
                 new TypedCompileRequest.TermInput("dup_id_rule::1", "insider OR tip"))); // same number "1"
@@ -916,7 +916,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId(UUID.randomUUID().toString());
         req.setLexiconRuleName("bad_suffix_rule");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(new TypedCompileRequest.TermInput("bad_suffix_rule::abc", "price OR spread")));
 
         assertThatThrownBy(() -> bundleService.buildBundle(req))
@@ -932,7 +932,7 @@ class LexiconCompileBundleServiceTest {
         var req = new TypedCompileRequest();
         req.setRequestId(UUID.randomUUID().toString());
         req.setLexiconRuleName("sparse_rule");
-        req.setTermType(TermType.NATURAL_LANGUAGE);
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(
                 new TypedCompileRequest.TermInput("sparse_rule::5", "price OR spread"),
                 new TypedCompileRequest.TermInput("sparse_rule::100", "insider AND NOT disclosed")));

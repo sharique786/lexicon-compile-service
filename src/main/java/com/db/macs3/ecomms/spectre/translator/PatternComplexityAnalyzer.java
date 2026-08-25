@@ -6,7 +6,7 @@ package com.db.macs3.ecomms.spectre.translator;
  * {@link PatternCodeGenerator} even runs — with a specific, actionable error
  * instead of letting Hyperscan fail opaquely at compile time.
  *
- * <h2>Why string length isn't the right signal</h2>
+ * <p><b>Why string length isn't the right signal</b>
  * <p>The reported failure case compiles to a 190-character pattern — nowhere
  * near any raw length limit. Hyperscan's "Pattern is too large" is a
  * documented consequence of compiled AUTOMATON STATE COUNT, not string
@@ -14,7 +14,7 @@ package com.db.macs3.ecomms.spectre.translator;
  * on a simple pattern compiling fine, while a 73-repeat bounded quantifier
  * on a pattern with additional structure fails.
  *
- * <h2>Revision history: nesting depth, not branch width, is the primary driver</h2>
+ * <p><b>Revision history: nesting depth, not branch width, is the primary driver</b>
  * <p>The first version of this analyzer scored pure OR-branch width and
  * wildcard presence, multiplying operand scores together at each NEAR/FOLLOWEDBY.
  * Real Hyperscan testing falsified that model directly: a term with a single
@@ -43,7 +43,7 @@ package com.db.macs3.ecomms.spectre.translator;
  * a plain OR/word/phrase, never another proximity node) gets no such penalty,
  * matching the empirical result that width alone did not cause failure.
  *
- * <h2>This is still a heuristic, not a guarantee</h2>
+ * <p><b>This is still a heuristic, not a guarantee</b>
  * <p>It is now calibrated against two known real Hyperscan outcomes (one
  * PASS at raw complexity 480, one real FAILURE at raw complexity 294 that
  * becomes 1470 once the nesting penalty is applied — see
@@ -53,7 +53,7 @@ package com.db.macs3.ecomms.spectre.translator;
  * single named constant specifically so it can be re-tuned as more real
  * Hyperscan compilation results become available.
  *
- * <h2>Over-budget no longer means rejection — it means decomposition</h2>
+ * <p><b>Over-budget no longer means rejection — it means decomposition</b>
  * <p>An earlier revision of this class threw {@link TranslationException}
  * directly when {@link #COMPLEXITY_BUDGET} was exceeded. This class no
  * longer decides what happens on an over-budget result — it only measures

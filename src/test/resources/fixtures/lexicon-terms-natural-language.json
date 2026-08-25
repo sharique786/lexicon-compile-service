@@ -1,7 +1,7 @@
 {
   "request_id": "it-test-natural-language-0001",
   "lexiconRuleName": "lexicon_it_test_nl",
-  "termType": "Natural Language",
+  "requestType": "Natural Language",
   "terms": [
     { "termId": "nl::1", "termDescription": "(crap OR bad) NEAR{3} (bonus OR comp)" },
     { "termId": "nl::2", "termDescription": "bomb this place OR blow this place up" },

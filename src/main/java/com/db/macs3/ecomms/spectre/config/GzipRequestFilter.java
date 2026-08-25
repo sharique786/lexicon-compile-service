@@ -30,7 +30,7 @@ import java.util.zip.GZIPInputStream;
  * <p>Uses {@code jakarta.servlet.*} (Jakarta EE 10 / Spring Boot 4).
  * {@code Order(1)} — runs before Spring's DispatcherServlet.
  *
- * <h2>Compression flow</h2>
+ * <p><b>Compression flow</b>
  * <dl>
  *   <dt>REQUEST (this filter)</dt>
  *   <dd>Client: {@code Content-Encoding: gzip} → filter wraps InputStream in

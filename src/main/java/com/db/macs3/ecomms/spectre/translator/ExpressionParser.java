@@ -89,6 +89,11 @@ final class ExpressionParser {
         ExpressionParser parser = new ExpressionParser(tokens, originalTerm);
         Ast result = parser.parseOr();
         if (parser.currentTokenIndex != tokens.size()) {
+            if (parser.peekIs(Token.Not.class)) {
+                // A bare NOT sitting AFTER a fully-parsed expression, where an operator
+                // (OR/AND/AND NOT/NEAR/FOLLOWEDBY) was expected — see standaloneNotOperatorError().
+                throw parser.standaloneNotOperatorError();
+            }
             throw parser.unexpectedTokenError("after '" + parser.describe(result) + "'");
         }
         return new ParseResult(result, parser.warnings);
@@ -206,21 +211,40 @@ final class ExpressionParser {
      * There is no independent {@code NOT} operator — {@code NOT} is only
      * ever valid immediately after {@code AND}, forming a single
      * {@link Token.AndNot} token at the LEXICAL level (see {@link Tokenizer}).
-     * A bare {@link Token.Not} reaching here means the term used {@code NOT}
-     * (or, previously, {@code !}) on its own — that is rejected with a
-     * specific error rather than silently interpreted as a prefix negation,
-     * since Hyperscan cannot express negation as a standalone operator
-     * anyway (see {@link Ast.AndNot} class Javadoc for what {@code AND NOT}
-     * actually compiles to and why it is different from a hypothetical
-     * standalone {@code NOT}).
+     *
+     * <p>A bare {@link Token.Not} reaching a point in the grammar where an
+     * OPERATOR was expected (continuing an {@code OR}/{@code AND}/
+     * {@code AND NOT}/{@code NEAR}/{@code FOLLOWEDBY} chain, or closing a
+     * parenthesised group, or ending the whole term) means the author wrote
+     * something shaped like {@code "A NOT B"} — {@code NOT} sitting between
+     * two ALREADY-PARSED expressions, mimicking a standalone "but not"
+     * operator this grammar (and Hyperscan, which has no negative lookaround)
+     * does not support. That specific shape is rejected here with an
+     * actionable error — see the two call sites: {@link #expectClosingParen()}
+     * and {@link #parse}'s end-of-input check.
+     *
+     * <p>A bare {@link Token.Not} reaching {@link #parseAtom()} instead — i.e.
+     * at the START of a fresh atom, where a word could otherwise begin one
+     * (the very first token of the term, or immediately after {@code (},
+     * {@code OR}, {@code AND}, {@code AND NOT}, {@code NEAR{n}}, or
+     * {@code FOLLOWEDBY{n}}) — is NOT an operator-position case at all:
+     * there is no left-hand expression for it to apply to, so it cannot be
+     * mimicking {@code AND NOT}. That case is treated as ordinary literal
+     * text instead, folded into whatever word/phrase run follows — see
+     * {@link #parseWordOrPhrase()}. This is what lets
+     * {@code (NOT LAUNCHING)} or {@code (NOT TO LAUNCH THE PRODUCT)} compile
+     * as the literal phrases "NOT LAUNCHING"/"NOT TO LAUNCH THE PRODUCT",
+     * while {@code (disintermediate*) NOT ((LAUNCHING) OR (...))} — NOT
+     * between two complete expressions — is still rejected.
      */
-    private void rejectStandaloneNot() {
-        if (peekIs(Token.Not.class)) {
-            throw new TranslationException(
-                    "Standalone NOT is not supported in term: '" + originalTerm + "'."
-                            + " NOT must always be paired with AND, written as 'X AND NOT Y'."
-                            + " To match the literal word \"NOT\" instead, wrap it in quotes.");
-        }
+    private TranslationException standaloneNotOperatorError() {
+        return new TranslationException(
+                "Standalone NOT is not supported as an operator in term: '" + originalTerm + "'."
+                        + " NOT must always be paired with AND, written as 'X AND NOT Y' — a bare NOT"
+                        + " sitting between two separate expressions (rather than as a word inside one"
+                        + " of them) has no defined meaning here."
+                        + " To use \"NOT\" as literal text between two expressions, combine it with an"
+                        + " explicit operator (e.g. 'X OR NOT Y') or wrap it into one side's own phrase.");
     }
 
     private Ast parseAtom() {
@@ -235,24 +259,37 @@ final class ExpressionParser {
             advance();
             return new Ast.QuotedPhrase(text);
         }
-        if (currentToken instanceof Token.Word) {
+        if (currentToken instanceof Token.Word || currentToken instanceof Token.Not) {
+            // NOT starting a fresh atom is literal text, not an operator — see
+            // standaloneNotOperatorError() Javadoc for the full reasoning.
             return parseWordOrPhrase();
         }
-        rejectStandaloneNot(); // gives a specific error for Token.Not rather than the generic one below
         throw unexpectedTokenError("expected a term, parenthesis, or quoted phrase");
     }
 
     /**
      * Greedily collects one or more consecutive bare {@link Token.Word}
-     * tokens (no operator between them) into a single atom — a
-     * {@link Ast.Word} if there is just one, or an {@link Ast.Phrase} if
-     * there are several. This is what lets a lexicon term author write
-     * {@code bomb this place} without wrapping parentheses — see class Javadoc.
+     * tokens — and, starting or continuing the same run, the reserved
+     * keyword {@link Token.Not} treated as its own literal text
+     * ({@code "NOT"}) rather than an operator (see
+     * {@link #standaloneNotOperatorError()} for why this position is
+     * different from NOT appearing between two already-parsed expressions)
+     * — into a single atom: a {@link Ast.Word} if there is just one, or an
+     * {@link Ast.Phrase} if there are several. This is what lets a lexicon
+     * term author write {@code bomb this place} — or {@code NOT LAUNCHING}
+     * — without wrapping parentheses — see class Javadoc.
      */
     private Ast parseWordOrPhrase() {
         List<String> collectedWords = new ArrayList<>();
-        while (currentTokenIndex < tokens.size() && tokens.get(currentTokenIndex) instanceof Token.Word(String text)) {
-            collectedWords.add(text);
+        while (currentTokenIndex < tokens.size()) {
+            Token token = tokens.get(currentTokenIndex);
+            if (token instanceof Token.Word(String text)) {
+                collectedWords.add(text);
+            } else if (token instanceof Token.Not) {
+                collectedWords.add(LexiconOperatorKeyword.NOT);
+            } else {
+                break;
+            }
             currentTokenIndex++;
         }
         return collectedWords.size() == 1 ? new Ast.Word(collectedWords.getFirst()) : new Ast.Phrase(collectedWords);
@@ -293,6 +330,11 @@ final class ExpressionParser {
 
     private void expectClosingParen() {
         if (currentTokenIndex >= tokens.size() || !(tokens.get(currentTokenIndex) instanceof Token.RParen)) {
+            if (peekIs(Token.Not.class)) {
+                // A bare NOT sitting between the group just parsed and its closing ')' —
+                // e.g. "(A NOT B)" — see standaloneNotOperatorError() Javadoc.
+                throw standaloneNotOperatorError();
+            }
             throw new TranslationException(
                     "Expected closing ')' in term: '" + originalTerm + "'.");
         }

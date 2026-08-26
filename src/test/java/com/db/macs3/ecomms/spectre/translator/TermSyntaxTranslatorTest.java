@@ -323,15 +323,56 @@ class TermSyntaxTranslatorTest {
     // ══════════════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("No independent NOT operator — only valid as part of AND NOT")
+    @DisplayName("No independent NOT OPERATOR — but NOT as a literal word is allowed")
     class NoIndependentNot {
 
         @Test
-        @DisplayName("Standalone 'NOT X' is rejected with a specific, actionable error")
-        void standaloneNotRejected() {
-            String msg = translateError("NOT confidential");
+        @DisplayName("REPORTED: NOT as the first word of a phrase is literal text, not an operator")
+        void notStartingAPhraseIsLiteral() {
+            var s = translateOk("(NOT LAUNCHING)");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("NOT LAUNCHING");
+        }
+
+        @Test
+        @DisplayName("REPORTED: the exact bug-report term — NOT starting each OR-branch's phrase compiles, "
+                + "'NOT' used as literal text in every branch that starts with it")
+        void reportedOrGroupWithLeadingNotWords() {
+            var s = translateOk("((disintermediate*) OR (NOT LAUNCHING) OR (NOT TO LAUNCH THE PRODUCT))");
+            assertThat(s.hsPatterns().getFirst())
+                    .isEqualTo("(?:disintermediate\\S*|NOT LAUNCHING|NOT TO LAUNCH THE PRODUCT)");
+        }
+
+        @Test
+        @DisplayName("REPORTED: NOT between two already-parsed (parenthesised) expressions is still "
+                + "rejected as an unsupported standalone operator")
+        void notBetweenTwoParenthesisedExpressionsRejected() {
+            String msg = translateError(
+                    "((disintermediate*) NOT ((LAUNCHING) OR (TO LAUNCH THE PRODUCT)))");
             assertThat(msg).contains("Standalone NOT is not supported");
             assertThat(msg).contains("AND NOT");
+        }
+
+        @Test
+        @DisplayName("NOT immediately after a closed parenthesised group is rejected even when the "
+                + "right-hand side has no parentheses of its own")
+        void notAfterClosedGroupRejectedEvenWithoutRightParens() {
+            String msg = translateError("(disintermediate*) NOT LAUNCHING");
+            assertThat(msg).contains("Standalone NOT is not supported");
+        }
+
+        @Test
+        @DisplayName("A bare leading NOT at the very start of a whole term is literal text too — "
+                + "there is no left-hand expression for it to negate")
+        void leadingNotAtTermStartIsLiteral() {
+            var s = translateOk("NOT confidential");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("NOT confidential");
+        }
+
+        @Test
+        @DisplayName("NOT is literal after OR too, when nothing else looks like an operator position")
+        void notAfterOrIsLiteral() {
+            var s = translateOk("A OR NOT B");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:A|NOT B)");
         }
 
         @Test

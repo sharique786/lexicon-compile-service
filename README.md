@@ -67,7 +67,7 @@ other translator class is a focused, independently-testable stage it calls.
 | Stage | Class | Responsibility |
 |---|---|---|
 | Lexing | `Tokenizer` | Raw text → token stream; rejects malformed `NEAR{n}`/`FOLLOWEDBY{n}`, unbalanced parens/quotes, meaningless input |
-| Parsing | `ExpressionParser` | Tokens → `Ast`; enforces grammar (operator precedence, AND operand ceiling, no standalone `NOT`) |
+| Parsing | `ExpressionParser` | Tokens → `Ast`; enforces grammar (operator precedence, AND operand ceiling, `NOT` only as `AND NOT` — never as a standalone operator, though it's fine as an ordinary literal word) |
 | Complexity estimate | `PatternComplexityAnalyzer` | Pre-Hyperscan heuristic score deciding whether to attempt decomposition |
 | Decomposition | `PatternDecomposer` | Splits an over-budget NEAR/FOLLOWEDBY tree into independent leaves |
 | Code generation | `PatternCodeGenerator` | `Ast` → PCRE string(s), delegating proximity gaps to `MultiLanguagePatternBuilder` |
@@ -541,10 +541,34 @@ shape under [API reference](#api-reference).
 
 | Rule | Behavior |
 |---|---|
-| Standalone `NOT` (not paired with `AND`) | Rejected — must be written `X AND NOT Y`; wrap in quotes to match the literal word "NOT" |
+| `NOT` between two already-parsed expressions (an apparent standalone "but not" operator, e.g. `(a) NOT (b)`, `(a) NOT b`) | Rejected — must be written `X AND NOT Y` |
+| `NOT` starting a fresh atom (the very first token of the term, or immediately after `(`, `OR`, `AND`, `AND NOT`, `NEAR{n}`, or `FOLLOWEDBY{n}`) | **Accepted** — treated as ordinary literal text, folded into whatever word/phrase run follows (e.g. `(NOT LAUNCHING)` → the literal phrase "NOT LAUNCHING") — see below |
 | AND operand ceiling | More than 5 operands at one `AND`/`AND NOT`-required level rejected |
 | Chained `NEAR`/`FOLLOWEDBY` without explicit parentheses (`A FOLLOWEDBY{5} B FOLLOWEDBY{6} C`) | **Accepted**, not rejected — parsed as left-associative nesting, with a warning recorded (kept for backward compatibility with existing lexicon terms) |
 | Malformed/unbalanced structure that doesn't match the grammar | Rejected with a generic "could not parse term" error naming the position |
+
+**`NOT` as a word vs. `NOT` as an operator** — `NOT` is reserved only in
+the sense that `AND NOT` is the sole way to write an exclusion; a bare
+`NOT` is rejected only when it sits where the grammar expects an operator
+— i.e. immediately after a *complete, already-parsed* expression (closing
+a parenthesised group, or continuing an `OR`/`AND`/`NEAR`/`FOLLOWEDBY`
+chain) — because that shape (`X NOT Y`) reads as an attempted "but not"
+operator this grammar (and Hyperscan, which has no negative lookaround)
+does not support standalone. `NOT` appearing anywhere else — starting a
+fresh atom, where there is no left-hand expression for it to negate — is
+just literal text:
+
+```
+((disintermediate*) OR (NOT LAUNCHING) OR (NOT TO LAUNCH THE PRODUCT))
+  → PASS: (?:disintermediate\S*|NOT LAUNCHING|NOT TO LAUNCH THE PRODUCT)
+    ("NOT" is literal in both OR-branches — it starts each phrase)
+
+((disintermediate*) NOT ((LAUNCHING) OR (TO LAUNCH THE PRODUCT)))
+  → FAILED (translationError): "Standalone NOT is not supported as an
+    operator ... NOT must always be paired with AND, written as
+    'X AND NOT Y' ..."
+    ("NOT" sits between two complete, already-closed expressions)
+```
 
 ### 4. Semantic / Hyperscan-stage validation (`TermSyntaxTranslator`)
 

@@ -58,10 +58,11 @@ public sealed interface Token {
 
     /**
      * The literal keyword {@code NEAR} immediately followed by {@code {n}} with
-     * no intervening whitespace, where {@code n} is a single digit 1-9.
-     * Validated by {@link Tokenizer} at lex time — malformed forms
-     * ({@code NEAR{0}}, {@code NEAR{-1}}, {@code NEAR{10}}, {@code NEAR {1}}, etc.)
-     * are rejected before the parser ever sees them.
+     * no intervening whitespace, where {@code n} is a whole number from 1 to
+     * {@link Tokenizer#MAX_PROXIMITY_DISTANCE}. Validated by {@link Tokenizer}
+     * at lex time — malformed forms ({@code NEAR{0}}, {@code NEAR{-1}},
+     * {@code NEAR{51}}, {@code NEAR {1}}, etc.) are rejected before the
+     * parser ever sees them.
      */
     record Near(int distance) implements Token {
     }

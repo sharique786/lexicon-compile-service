@@ -22,8 +22,9 @@ import static com.db.macs3.ecomms.spectre.translator.LexiconOperatorKeyword.OR;
  *       {@code FOLLOWEDBY}) are recognised ONLY in exact case; any other
  *       case is ordinary literal text.</li>
  *   <li>{@code NEAR}/{@code FOLLOWEDBY} must be immediately followed by
- *       {@code {n}} with no whitespace, where {@code n} is a single digit 1-9
- *       (no zero, no negative, no letters, no multi-digit, no comma-separated values).</li>
+ *       {@code {n}} with no whitespace, where {@code n} is a whole number from
+ *       1 to 50 (no zero, no negative, no letters, no leading zeros, no
+ *       comma-separated values).</li>
  *   <li>Parentheses must be balanced.</li>
  *   <li>Quoted phrases must be closed.</li>
  *   <li>The term must contain at least one real letter-or-digit character
@@ -284,9 +285,23 @@ final class Tokenizer {
     }
 
     /**
+     * Upper bound on {@code n} inside {@code NEAR{n}}/{@code FOLLOWEDBY{n}} —
+     * see {@link #validateProximityDistance}. Also the practical ceiling this
+     * project's char-based gap machinery is exercised against: even at this
+     * maximum, {@link MultiLanguagePatternBuilder#charBasedGap(
+     * com.db.macs3.ecomms.spectre.model.ScriptType, int, java.util.function.IntFunction)}
+     * still adaptively narrows the generated {@code [\s\S]{0,N}} gap against
+     * real Hyperscan for a term whose actual operand structure needs it —
+     * this limit bounds how large a distance an author can REQUEST, not how
+     * large a gap ends up being compiled.
+     */
+    static final int MAX_PROXIMITY_DISTANCE = 50;
+
+    /**
      * Validates the {@code n} inside {@code NEAR{n}}/{@code FOLLOWEDBY{n}}:
-     * must be exactly one digit, 1-9 (no zero, no negative sign, no letters,
-     * no multi-digit values, no comma-separated values).
+     * must be a whole number from 1 to {@link #MAX_PROXIMITY_DISTANCE} (no
+     * zero, no negative sign, no letters, no leading zeros, no
+     * comma-separated values).
      */
     private void validateProximityDistance(String keyword, String distanceText) {
         if (distanceText.isEmpty()) {
@@ -300,22 +315,34 @@ final class Tokenizer {
                             + " Only a single value is allowed (no comma-separated range). Expected "
                             + keyword + "{n}, e.g. " + keyword + "{3}.");
         }
-        boolean isValidSingleDigit = distanceText.length() == 1
-                && distanceText.charAt(0) >= '1' && distanceText.charAt(0) <= '9';
-        if (!isValidSingleDigit) {
+
+        boolean allDigits = distanceText.chars().allMatch(Character::isDigit);
+        boolean hasLeadingZero = distanceText.length() > 1 && distanceText.charAt(0) == '0';
+        // Reject anything long enough to risk overflow before ever calling
+        // Integer.valueOf — MAX_PROXIMITY_DISTANCE (50) is always 2 digits,
+        // so nothing longer than 2 digits can possibly be in range.
+        Integer distanceValue = (allDigits && !hasLeadingZero && distanceText.length() <= 2)
+                ? Integer.valueOf(distanceText)
+                : null;
+        boolean isValid = distanceValue != null
+                && distanceValue >= 1 && distanceValue <= MAX_PROXIMITY_DISTANCE;
+
+        if (!isValid) {
             String reason;
-            if (distanceText.chars().allMatch(Character::isDigit)) {
-                reason = distanceText.equals("0") ? "zero is not allowed"
-                        : distanceText.length() > 1 ? "only a single digit (1-9) is allowed, not a multi-digit value"
-                        : "value out of range";
-            } else if (distanceText.startsWith("-")) {
-                reason = "negative values are not allowed";
+            if (!allDigits) {
+                reason = distanceText.startsWith("-") ? "negative values are not allowed"
+                        : "the distance must be numeric, not '" + distanceText + "'";
+            } else if (hasLeadingZero) {
+                reason = "leading zeros are not allowed";
+            } else if (distanceText.equals("0")) {
+                reason = "zero is not allowed";
             } else {
-                reason = "the distance must be numeric, not '" + distanceText + "'";
+                reason = "only values from 1 to " + MAX_PROXIMITY_DISTANCE + " are allowed, not " + distanceText;
             }
             throw new TranslationException(
                     keyword + "{" + distanceText + "} is invalid in term: '" + sourceText + "' — " + reason + "."
-                            + " Expected " + keyword + "{n} where n is a single digit from 1 to 9.");
+                            + " Expected " + keyword + "{n} where n is a whole number from 1 to "
+                            + MAX_PROXIMITY_DISTANCE + ".");
         }
     }
 }

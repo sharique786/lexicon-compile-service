@@ -475,7 +475,7 @@ class TermSyntaxTranslatorTest {
     }
 
     @Nested
-    @DisplayName("Validation — NEAR/FOLLOWEDBY distance must be a single digit 1-9")
+    @DisplayName("Validation — NEAR/FOLLOWEDBY distance must be a whole number 1-50")
     class ProximityDistanceValidation {
 
         @ParameterizedTest(name = "[{index}] {0}{1} is rejected")
@@ -483,12 +483,16 @@ class TermSyntaxTranslatorTest {
                 "NEAR, '{0}'",
                 "NEAR, '{-1}'",
                 "NEAR, '{abcd}'",
-                "NEAR, '{10}'",
+                "NEAR, '{51}'",
+                "NEAR, '{100}'",
+                "NEAR, '{05}'",
                 "NEAR, '{0,6}'",
                 "FOLLOWEDBY, '{0}'",
                 "FOLLOWEDBY, '{-1}'",
                 "FOLLOWEDBY, '{abcd}'",
-                "FOLLOWEDBY, '{10}'",
+                "FOLLOWEDBY, '{51}'",
+                "FOLLOWEDBY, '{100}'",
+                "FOLLOWEDBY, '{05}'",
                 "FOLLOWEDBY, '{0,6}'",
         })
         void invalidDistanceRejected(String keyword, String brace) {
@@ -497,10 +501,11 @@ class TermSyntaxTranslatorTest {
         }
 
         @ParameterizedTest(name = "[{index}] distance {0} is accepted")
-        @ValueSource(ints = {1, 2, 3, 4, 5, 6, 7, 8, 9})
-        void validSingleDigitDistancesAccepted(int n) {
-            assertThat(translator.translate("(a) NEAR{" + n + "} (b)").isSuccess()).isTrue();
-            assertThat(translator.translate("(a) FOLLOWEDBY{" + n + "} (b)").isSuccess()).isTrue();
+        @ValueSource(ints = {1, 2, 3, 9, 10, 25, 49, 50})
+        void validDistancesAccepted(int n) {
+            assertThat(translator.translate("(a) NEAR{" + n + "} (b)").isSuccess()).as("NEAR{%d}", n).isTrue();
+            assertThat(translator.translate("(a) FOLLOWEDBY{" + n + "} (b)").isSuccess())
+                    .as("FOLLOWEDBY{%d}", n).isTrue();
         }
 
         @Test
@@ -785,15 +790,28 @@ class TermSyntaxTranslatorTest {
         }
 
         @Test
-        @DisplayName("REPORTED BUG: 内幕 NEAR{9} 交易 (\"insider trading\") now compiles end-to-end via "
-                + "real Hyperscan — previously failed even after the decomposition fallback, since both "
-                + "paths reused the same unclamped char-based gap width. (NEAR{9}, not the reported "
-                + "NEAR{10}: the grammar caps NEAR/FOLLOWEDBY distances at a single digit 1-9 — see "
-                + "Tokenizer.validateDistance — but 9 already exceeds the safe cap for CJK, 4*9=36 > 30, "
-                + "so it reproduces and proves the same fix.)")
+        @DisplayName("REPORTED BUG: 内幕 NEAR{10} 交易 (\"insider trading\") now compiles end-to-end via "
+                + "real Hyperscan, using the literal distance from the bug report — previously failed even "
+                + "after the decomposition fallback, since both paths reused the same unclamped char-based "
+                + "gap width; separately, the grammar itself used to cap NEAR/FOLLOWEDBY at a single digit "
+                + "(1-9), which would have rejected {10} outright before this term ever reached gap-width "
+                + "logic — Tokenizer.validateProximityDistance now allows 1-50.")
         void reportedCjkNearBug_nowCompiles() {
-            var s = translateOk("内幕 NEAR{9} 交易");
+            var s = translateOk("内幕 NEAR{10} 交易");
             assertThat(s.hsPatterns()).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("REPORTED BUG (exact form): OR-group NEAR/FOLLOWEDBY{10} OR-group, as literally "
+                + "reported, now compiles end-to-end — the wider grammar cap (1-50) lets {10} through, and "
+                + "the adaptive char-gap reduction (see MultiLanguagePatternBuilder.charBasedGap) keeps the "
+                + "generated pattern within what real Hyperscan will actually compile")
+        void reportedOrGroupProximityBug_nowCompiles() {
+            var near = translateOk("((内幕) OR (正常) OR (的) OR (商业)) NEAR{10} ((活动) OR (记录))");
+            assertThat(near.hsPatterns()).isNotEmpty();
+
+            var followedBy = translateOk("((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR (记录))");
+            assertThat(followedBy.hsPatterns()).isNotEmpty();
         }
 
         @Test

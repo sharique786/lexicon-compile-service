@@ -130,8 +130,9 @@ final class PatternDecomposer {
         List<String> leftLeaves = decompose(left, ctx);
         List<String> rightLeaves = new ArrayList<>(decompose(right, ctx));
 
-        String gap = gapBetween(left, right, distance, ctx);
-        rightLeaves.set(0, gap + rightLeaves.get(0));
+        String firstRightLeaf = rightLeaves.get(0);
+        String gap = gapBetween(left, right, distance, ctx, firstRightLeaf);
+        rightLeaves.set(0, gap + firstRightLeaf);
 
         List<String> combined = new ArrayList<>(leftLeaves.size() + rightLeaves.size());
         combined.addAll(leftLeaves);
@@ -154,15 +155,34 @@ final class PatternDecomposer {
      * mirrors exactly what the non-decomposed code path itself passes to
      * {@link ScriptDetector#detectCombined}, and is cheap (string building
      * only, no Hyperscan calls).
+     *
+     * <p>This also supplies {@link MultiLanguagePatternBuilder#buildGap} a
+     * trial-pattern builder for the REAL decomposed-leaf shape —
+     * {@code gap + rightLeafText}, the exact fragment that ends up as this
+     * leaf's own independently-compiled Hyperscan expression — so a gap
+     * width that is safe in the generic calibration but not for this
+     * specific leaf (e.g. a leaf itself containing a wide OR group) gets
+     * adaptively narrowed the same way the non-decomposed NEAR/FOLLOWEDBY
+     * path already does. The gap-fragment format the trial builder emits
+     * must match {@code script}'s own choice ({@code [\s\S]{0,n}} for a
+     * character-based script, {@code (?:\s+\S+){0,n}\s+} for a word-based
+     * one) — see {@link MultiLanguagePatternBuilder#charBasedGap(ScriptType, int, java.util.function.IntFunction)}
+     * and {@link MultiLanguagePatternBuilder#wordBasedGap(int, java.util.function.IntFunction)}.
+     *
+     * @param rightLeafText the already-generated pattern of the first right-hand
+     *                      leaf this gap will be prefixed onto (see {@link #decomposeProximity})
      */
-    private static String gapBetween(Ast left, Ast right, int distance, ParseContext ctx) {
+    private static String gapBetween(Ast left, Ast right, int distance, ParseContext ctx, String rightLeafText) {
         String leftText = PatternCodeGenerator.generate(left, ctx);
         String rightText = PatternCodeGenerator.generate(right, ctx);
         ScriptType script = ScriptDetector.detectCombined(leftText, rightText);
         if ((script.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
             ctx.setNeedsUtf8();
         }
-        MultiLanguagePatternBuilder.GapResult gr = MultiLanguagePatternBuilder.buildGap(script, distance);
+        java.util.function.IntFunction<String> trial = script.isCharBased()
+                ? n -> "[\\s\\S]{0,%d}".formatted(n) + rightLeafText
+                : n -> "(?:\\s+\\S+){0,%d}\\s+".formatted(n) + rightLeafText;
+        MultiLanguagePatternBuilder.GapResult gr = MultiLanguagePatternBuilder.buildGap(script, distance, trial);
         ctx.addWarning(gr.warning());
         return gr.pattern();
     }

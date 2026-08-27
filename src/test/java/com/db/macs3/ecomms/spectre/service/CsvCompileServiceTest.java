@@ -131,7 +131,7 @@ class CsvCompileServiceTest {
         var resp = service.compileFromCsv(csv(csvContent), "r1", newRequestId());
         assertThat(resp.totalTerms()).isEqualTo(1);
         // Verify the translated pattern contains the unescaped phrases
-        assertThat(resp.results().getFirst().translatedPattern().getFirst()).contains("please don't forward");
+        assertThat(resp.results().getFirst().regexPattern().getFirst()).contains("please don't forward");
     }
 
     @Test

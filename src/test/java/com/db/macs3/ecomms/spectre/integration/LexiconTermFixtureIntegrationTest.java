@@ -183,8 +183,8 @@ class LexiconTermFixtureIntegrationTest {
 
         // Verbatim compilation — no operator-language translation should have occurred.
         var literalRegex = findResult(response, "regex::1");
-        assertThat(literalRegex.translatedPattern()).hasSize(1);
-        assertThat(literalRegex.translatedPattern().getFirst()).isEqualTo("(?:insider|trading)");
+        assertThat(literalRegex.regexPattern()).hasSize(1);
+        assertThat(literalRegex.regexPattern().getFirst()).isEqualTo("(?:insider|trading)");
 
         var invalidRegex = findResult(response, "regex::4");
         assertThat(invalidRegex.compilationStatus()).isEqualTo(CompilationStatus.FAILED);

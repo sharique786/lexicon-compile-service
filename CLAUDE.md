@@ -306,7 +306,7 @@ alone; `databaseError`/the HTTP status is the actual signal that a usable
 
 **Lexicon Scanner Service** consumes `/compile`/`/compile/csv` — JSON
 only, never `.hdb`. It performs its **own, independent** Hyperscan
-compilation from the `translatedPattern`/`exclusionPattern` lists it
+compilation from the `regexPattern`/`exclusionRegex` lists it
 receives, with its **own** copy of the AND-NOT-vs-decomposition decision
 logic (not shared code — a second, parallel implementation). It hit
 **the identical eager-COMBINATION bug**, independently, because it had

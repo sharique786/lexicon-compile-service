@@ -120,7 +120,7 @@ class LexiconCompileControllerTest {
 
     @Test
     @Order(2)
-    @DisplayName("POST /compile — spec example 1 → PASS with translatedPattern")
+    @DisplayName("POST /compile — spec example 1 → PASS with regexPattern")
     void specExample1Pass() throws Exception {
         var req = buildRequest("lexicon_research_1",
                 "(manipulate*) NEAR{5} ((price) OR (spread) OR (stock))");
@@ -133,7 +133,7 @@ class LexiconCompileControllerTest {
                 .andExpect(jsonPath("$.failedCount").value(0))
                 .andExpect(jsonPath("$.hasFailures").value(false))
                 .andExpect(jsonPath("$.results[0].compilationStatus").value("PASS"))
-                .andExpect(jsonPath("$.results[0].translatedPattern").isNotEmpty())
+                .andExpect(jsonPath("$.results[0].regexPattern").isNotEmpty())
                 .andExpect(jsonPath("$.results[0].termId").value("lexicon_research_1::1"))
                 .andExpect(jsonPath("$.results[0].compiledAt").isNotEmpty());
     }
@@ -409,7 +409,7 @@ class LexiconCompileControllerTest {
 
     @Test
     @Order(53)
-    @DisplayName("POST /compile — AND NOT term → requiresExclusionCheck = true, exclusionPattern present")
+    @DisplayName("POST /compile — AND NOT term → requiresExclusionCheck = true, exclusionRegex present")
     void andNotTermRequiresExclusionCheck() throws Exception {
         var req = buildRequest("and_not_rule", "insider AND NOT disclosed");
         mockMvc.perform(post("/api/lexicon/compile")
@@ -417,6 +417,6 @@ class LexiconCompileControllerTest {
                         .content(objectMapper.writeValueAsBytes(req)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.results[0].requiresExclusionCheck").value(true))
-                .andExpect(jsonPath("$.results[0].exclusionPattern").exists());
+                .andExpect(jsonPath("$.results[0].exclusionRegex").exists());
     }
 }

@@ -31,11 +31,11 @@ import java.util.List;
  * term's Hyperscan-scanned {@code hsPattern} (itself fully correct AND
  * semantics if it has multiple operands, via {@link #generateAnd}'s
  * recursion), and separately records the EXCLUDED side's own valid Hyperscan
- * pattern in {@link ParseContext#setExclusionPattern}. Both patterns are
+ * pattern in {@link ParseContext#setexclusionRegex}. Both patterns are
  * independently Hyperscan-validated at compile time (see
  * {@code HyperscanCompiler}); a correct scan-time result requires checking
  * BOTH — the term matches iff {@code hsPattern} matches AND
- * {@code exclusionPattern} does NOT match the same message. See the
+ * {@code exclusionRegex} does NOT match the same message. See the
  * project README's "AND NOT: the two-pattern contract" section for exactly
  * how a caller applies this.
  *
@@ -127,7 +127,7 @@ final class PatternCodeGenerator {
      * AND NOT → returns the REQUIRED side's pattern as {@code hsPattern},
      * and records the EXCLUDED side's pattern (every excluded operand
      * combined with OR into one pattern) via
-     * {@link ParseContext#setExclusionPattern} — see class Javadoc for why
+     * {@link ParseContext#setexclusionRegex} — see class Javadoc for why
      * these cannot be the same expression, and {@link Ast.AndNot} for the
      * full two-pattern contract.
      */
@@ -138,8 +138,8 @@ final class PatternCodeGenerator {
         for (Ast excluded : andNot.excluded()) {
             excludedPatterns.add(generate(excluded, ctx));
         }
-        String combinedExclusionPattern = "(?:" + String.join("|", excludedPatterns) + ")";
-        ctx.setExclusionPattern(combinedExclusionPattern);
+        String combinedexclusionRegex = "(?:" + String.join("|", excludedPatterns) + ")";
+        ctx.setexclusionRegex(combinedexclusionRegex);
 
         return requiredPattern;
     }

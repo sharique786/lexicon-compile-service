@@ -106,7 +106,7 @@ final class PatternDecomposer {
             // (ExpressionParser.parseOr unwraps a lone alternative directly) — it only
             // arises from TermSyntaxTranslator wrapping an AND NOT term's excluded
             // operand list in an Or even when there is exactly one operand, specifically
-            // to keep the generated exclusionPattern string's "(?:...)" wrapping identical
+            // to keep the generated exclusionRegex string's "(?:...)" wrapping identical
             // to before decomposition existed. Seeing through it here means that single
             // excluded operand's OWN proximity structure (if any) is still visible to
             // decomposition, rather than the Or wrapper being treated as one opaque leaf.

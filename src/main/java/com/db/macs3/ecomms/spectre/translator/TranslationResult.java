@@ -22,7 +22,7 @@ import java.util.List;
  * a caller (or, for {@code /compile/bundle}, {@code HyperscanCombinationHandler})
  * combines with pure boolean AND. There is no separate boolean flag for
  * "was this decomposed" — the caller simply checks {@code hsPatterns.size()}.
- * The same applies to {@link #exclusionPatterns()} for an AND NOT term's
+ * The same applies to {@link #exclusionRegexs()} for an AND NOT term's
  * excluded side.
  *
  * <p><b>This is a real precision trade-off, not a lossless rewrite, whenever
@@ -51,13 +51,13 @@ import java.util.List;
  * exactly what negative lookaround is for, and Hyperscan supports none.
  * {@code A AND NOT B} therefore returns two independently Hyperscan-valid
  * pattern lists: {@link Success#hsPatterns()} (A) and
- * {@link Success#exclusionPatterns()} (B). The term is correctly matched
+ * {@link Success#exclusionRegexs()} (B). The term is correctly matched
  * only when EVERY entry of {@code hsPatterns} is found (pure AND — trivially
  * true when there is exactly one entry) AND NO entry of
- * {@code exclusionPatterns} needing to ALL be found is fully satisfied —
+ * {@code exclusionRegexs} needing to ALL be found is fully satisfied —
  * see {@code HyperscanCombinationHandler} for the exact boolean formula this
  * becomes for {@code /compile/bundle}, including the De Morgan's-law
- * negation needed when {@code exclusionPatterns} itself has more than one
+ * negation needed when {@code exclusionRegexs} itself has more than one
  * entry.
  */
 public sealed interface TranslationResult
@@ -76,7 +76,7 @@ public sealed interface TranslationResult
      * @param hsFlags                bitmask: 1=CASELESS, 32=UTF8, 64=UCP
      * @param requiresExclusionCheck true when this term used AND NOT — the
      *                               caller MUST also check the excluded side
-     * @param exclusionPatterns      the excluded side's Hyperscan PCRE pattern(s). Null
+     * @param exclusionRegexs      the excluded side's Hyperscan PCRE pattern(s). Null
      *                               (not just empty) when {@code requiresExclusionCheck} is
      *                               false; never null or empty when it is true.
      * @param warnings               non-fatal issues worth surfacing to the caller — never null,
@@ -89,7 +89,7 @@ public sealed interface TranslationResult
             List<String> hsPatterns,
             int hsFlags,
             boolean requiresExclusionCheck,
-            List<String> exclusionPatterns,
+            List<String> exclusionRegexs,
             List<String> warnings
     ) implements TranslationResult {
 
@@ -97,13 +97,13 @@ public sealed interface TranslationResult
             if (hsPatterns == null || hsPatterns.isEmpty()) {
                 throw new IllegalArgumentException("hsPatterns must not be null or empty");
             }
-            if (requiresExclusionCheck && (exclusionPatterns == null || exclusionPatterns.isEmpty())) {
+            if (requiresExclusionCheck && (exclusionRegexs == null || exclusionRegexs.isEmpty())) {
                 throw new IllegalArgumentException(
-                        "exclusionPatterns must not be null or empty when requiresExclusionCheck is true");
+                        "exclusionRegexs must not be null or empty when requiresExclusionCheck is true");
             }
-            if (!requiresExclusionCheck && exclusionPatterns != null) {
+            if (!requiresExclusionCheck && exclusionRegexs != null) {
                 throw new IllegalArgumentException(
-                        "exclusionPatterns must be null when requiresExclusionCheck is false");
+                        "exclusionRegexs must be null when requiresExclusionCheck is false");
             }
         }
 
@@ -149,16 +149,16 @@ public sealed interface TranslationResult
     /**
      * Factory: successful translation WITH an AND-NOT exclusion, no warnings.
      */
-    static TranslationResult successWithExclusion(List<String> patterns, int flags, List<String> exclusionPatterns) {
-        return new Success(patterns, flags, true, exclusionPatterns, List.of());
+    static TranslationResult successWithExclusion(List<String> patterns, int flags, List<String> exclusionRegexs) {
+        return new Success(patterns, flags, true, exclusionRegexs, List.of());
     }
 
     /**
      * Factory: successful translation WITH an AND-NOT exclusion, carrying warnings.
      */
     static TranslationResult successWithExclusionAndWarnings(
-            List<String> patterns, int flags, List<String> exclusionPatterns, List<String> warnings) {
-        return new Success(patterns, flags, true, exclusionPatterns, List.copyOf(warnings));
+            List<String> patterns, int flags, List<String> exclusionRegexs, List<String> warnings) {
+        return new Success(patterns, flags, true, exclusionRegexs, List.copyOf(warnings));
     }
 
     /**

@@ -20,11 +20,11 @@ import java.util.List;
  * operands joined by an unbounded gap — see {@link Ast.And} class Javadoc),
  * so no post-filter or operand bookkeeping is needed for it at all.
  *
- * <p><b>Why {@code exclusionPattern} still exists</b>
+ * <p><b>Why {@code exclusionRegex} still exists</b>
  * <p>{@code AND NOT} is different in kind, not just degree: "B does not
  * appear anywhere in this message" cannot be compiled into the same
  * Hyperscan expression as "A appears somewhere" without negative lookaround,
- * which Hyperscan does not support. {@link #exclusionPattern} carries B's
+ * which Hyperscan does not support. {@link #exclusionRegex} carries B's
  * OWN independently Hyperscan-valid pattern, to be checked separately by the
  * caller — see {@link Ast.AndNot} class Javadoc for the full contract.
  *
@@ -67,7 +67,7 @@ class ParseContext {
     static final int MAX_AND_OPERANDS = 5;
 
     private boolean needsUtf8 = false;
-    private String exclusionPattern = null;
+    private String exclusionRegex = null;
     private final List<String> warnings = new ArrayList<>();
 
     /**
@@ -110,8 +110,8 @@ class ParseContext {
      * ONE exclusion pattern (via OR) before this is called; see
      * {@link PatternCodeGenerator#generateAndNot}.
      */
-    void setExclusionPattern(String pattern) {
-        this.exclusionPattern = pattern;
+    void setexclusionRegex(String pattern) {
+        this.exclusionRegex = pattern;
     }
 
     boolean isNeedsUtf8() {
@@ -121,15 +121,15 @@ class ParseContext {
     /**
      * @return the exclusion pattern, or {@code null} when this term has no AND NOT.
      */
-    String getExclusionPattern() {
-        return exclusionPattern;
+    String getexclusionRegex() {
+        return exclusionRegex;
     }
 
     /**
-     * @return true when {@link #getExclusionPattern()} is non-null and must be checked by the caller.
+     * @return true when {@link #getexclusionRegex()} is non-null and must be checked by the caller.
      */
     boolean requiresExclusionCheck() {
-        return exclusionPattern != null;
+        return exclusionRegex != null;
     }
 
     /**

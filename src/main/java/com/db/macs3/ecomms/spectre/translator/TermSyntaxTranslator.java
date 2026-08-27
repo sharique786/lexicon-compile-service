@@ -77,9 +77,9 @@ import java.util.List;
  * exactly what negative lookaround is for, and Hyperscan supports none.
  * {@code A AND NOT B} therefore returns TWO independently Hyperscan-valid
  * patterns: {@link TranslationResult.Success#hsPattern()} (A) and
- * {@link TranslationResult.Success#exclusionPattern()} (B). The term is
+ * {@link TranslationResult.Success#exclusionRegex()} (B). The term is
  * correctly matched only when {@code hsPattern} matches the message AND
- * {@code exclusionPattern} does not — see {@link TranslationResult} class
+ * {@code exclusionRegex} does not — see {@link TranslationResult} class
  * Javadoc for the exact contract.
  *
  * <p><b>Pattern examples</b>
@@ -99,9 +99,9 @@ import java.util.List;
  * ((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)
  *   → hsPattern:               (?:fix|rig)(?:\s+\S+){0,2}\s+the rate
  *     requiresExclusionCheck:  true
- *     exclusionPattern:        (?:fed rate move)
+ *     exclusionRegex:        (?:fed rate move)
  *   The caller must check BOTH: matched iff hsPattern matches AND
- *   exclusionPattern does not — see README "AND NOT: the two-pattern contract".
+ *   exclusionRegex does not — see README "AND NOT: the two-pattern contract".
  *
  * ((he?d kill) OR (she?d kill))
  *   → (?:he\?d kill|she\?d kill)     — '?' is always literal
@@ -196,7 +196,7 @@ public final class TermSyntaxTranslator {
             // The root is NOT AndNot — per rejectNestedAndNot() Javadoc, an AndNot node
             // ANYWHERE in this tree would otherwise be silently mishandled: PatternCodeGenerator
             // still has a case for it (so no exception is thrown by code generation itself), but
-            // its only effect is a side-channel ctx.setExclusionPattern() call whose result is
+            // its only effect is a side-channel ctx.setexclusionRegex() call whose result is
             // then discarded entirely, since this branch always sets requiresExclusionCheck=false.
             rejectNestedAndNot(ast, preprocessed);
 
@@ -237,7 +237,7 @@ public final class TermSyntaxTranslator {
      * path — which does NOT throw or fail. {@code PatternCodeGenerator} has
      * a real {@code case Ast.AndNot} arm ({@code generateAndNot()}), so
      * generation completes without error; but that method's only visible
-     * effect is a side-channel {@code ctx.setExclusionPattern(...)} call
+     * effect is a side-channel {@code ctx.setexclusionRegex(...)} call
      * that this path's caller never reads, since it unconditionally
      * constructs the result with {@code requiresExclusionCheck=false}. The
      * net effect, verified directly: the term above compiled to a PASS
@@ -474,7 +474,7 @@ public final class TermSyntaxTranslator {
                 + PatternComplexityAnalyzer.COMPLEXITY_BUDGET + ") was too structurally complex for Hyperscan"
                 + " to compile as one pattern, and was DECOMPOSED into " + leafPatterns.size()
                 + " independent parts (each individually Hyperscan-validated) — see"
-                + ("excluded (AND NOT)".equals(sideLabel) ? " exclusionPattern" : " translatedPattern")
+                + ("excluded (AND NOT)".equals(sideLabel) ? " exclusionRegex" : " regexPattern")
                 + " in the response. IMPORTANT — this changes the term's matching semantics: decomposition"
                 + " discards the original NEAR/FOLLOWEDBY ordering/distance constraint BETWEEN parts. The"
                 + " decomposed parts are combined with a boolean AND (natively via Hyperscan's logical"

@@ -51,10 +51,10 @@ sealed interface Ast {
      * {@link PatternCodeGenerator} therefore emits TWO independent, plain
      * Hyperscan-valid patterns: {@code required}'s pattern (the term's
      * {@code hsPattern}) and {@code excluded}'s combined pattern (the
-     * term's {@code exclusionPattern}). Both are Hyperscan-validated at
+     * term's {@code exclusionRegex}). Both are Hyperscan-validated at
      * compile time. A caller gets a correct result only by checking BOTH at
      * scan time: the term matches iff {@code hsPattern} matches AND
-     * {@code exclusionPattern} does NOT match the same message — see the
+     * {@code exclusionRegex} does NOT match the same message — see the
      * README's "AND NOT: the two-pattern contract" section.
      */
     record AndNot(Ast required, List<Ast> excluded) implements Ast {

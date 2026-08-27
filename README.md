@@ -142,8 +142,8 @@ Hyperscan supports no negative lookaround, so "A but not B" cannot be one
 pattern. `AND NOT` always produces **two** independently Hyperscan-valid
 pattern lists:
 
-- `translatedPattern` — the required side (A)
-- `exclusionPattern` — the excluded side (B), non-null only when
+- `regexPattern` — the required side (A)
+- `exclusionRegex` — the excluded side (B), non-null only when
   `requiresExclusionCheck` is `true`
 
 Chained exclusions (`A AND NOT B AND NOT C`) are combined into **one**
@@ -156,8 +156,8 @@ carefully, the behavior changed from an earlier design:**
 - **`/compile` and `/compile/csv`** — the caller (e.g. the Lexicon Scanner
   Service) compiles every pattern in both lists itself and combines the
   boolean results in application code: matched iff every entry of
-  `translatedPattern` matches, AND the excluded condition (every entry of
-  `exclusionPattern` found — same AND convention as the required side) is
+  `regexPattern` matches, AND the excluded condition (every entry of
+  `exclusionRegex` found — same AND convention as the required side) is
   **not** fully satisfied.
 - **`/compile/bundle`** — **every required and excluded pattern compiles
   as its own plain, individually-reportable Hyperscan expression** — never
@@ -329,10 +329,10 @@ Hyperscan double-check below for how a wrong guess is still caught.
 When a side is judged over budget, `PatternDecomposer` breaks it into
 independent leaf patterns instead of rejecting the term outright — a leaf
 is a maximal subtree that is *not itself* a NEAR/FOLLOWEDBY node (an `Or`,
-`And`, `Word`, `Phrase`, or `QuotedPhrase`). `translatedPattern` (or
-`exclusionPattern`, for a decomposed excluded side) then has multiple
+`And`, `Word`, `Phrase`, or `QuotedPhrase`). `regexPattern` (or
+`exclusionRegex`, for a decomposed excluded side) then has multiple
 entries instead of one — there is no separate "was this decomposed"
-boolean; a caller checks `translatedPattern.size()`.
+boolean; a caller checks `regexPattern.size()`.
 
 **This is a real precision trade-off, always flagged in `warnings`.**
 Decomposed leaves are combined with pure boolean AND ("all of these appear
@@ -438,7 +438,7 @@ the `.hdb` file is self-sufficient for these terms.
 
 An **AND NOT** term has no single reportable id — `hyperscanExpressionId`
 is `null`; `requiredExpressionIds`/`excludedExpressionIds` are populated
-instead (one id per pattern in `translatedPattern`/`exclusionPattern`
+instead (one id per pattern in `regexPattern`/`exclusionRegex`
 respectively). Every QUIET sub-expression a pure-decomposition combination
 needs is assigned an id from a separate allocated range
 (`HyperscanCombinationHandler.computeIdOffset` = highest term number in
@@ -681,7 +681,7 @@ Request:
 
 Response — one entry per term, showing a **simple PASS**, a **PASS with
 `AND NOT`**, a **PASS that needed decomposition** (note the multi-entry
-`translatedPattern` and the `warnings` entry), and a **FAILED** term
+`regexPattern` and the `warnings` entry), and a **FAILED** term
 (nested `AND NOT` — rejected):
 
 ```json
@@ -701,7 +701,7 @@ Response — one entry per term, showing a **simple PASS**, a **PASS with
       "termId": "lexicon_research_1::1",
       "termDescription": "(manipulate*) NEAR{5} ((price) OR (spread) OR (stock))",
       "compilationStatus": "PASS",
-      "translatedPattern": ["(?:manipulate\\S*(?:\\s+\\S+){0,5}\\s+(?:price|spread|stock)|(?:price|spread|stock)(?:\\s+\\S+){0,5}\\s+manipulate\\S*)"],
+      "regexPattern": ["(?:manipulate\\S*(?:\\s+\\S+){0,5}\\s+(?:price|spread|stock)|(?:price|spread|stock)(?:\\s+\\S+){0,5}\\s+manipulate\\S*)"],
       "hyperscanFlags": 1,
       "requiresExclusionCheck": false,
       "warnings": [],
@@ -711,10 +711,10 @@ Response — one entry per term, showing a **simple PASS**, a **PASS with
       "termId": "lexicon_research_1::2",
       "termDescription": "tip* AND NOT disclaimer",
       "compilationStatus": "PASS",
-      "translatedPattern": ["tip\\S*"],
+      "regexPattern": ["tip\\S*"],
       "hyperscanFlags": 1,
       "requiresExclusionCheck": true,
-      "exclusionPattern": ["(?:disclaimer)"],
+      "exclusionRegex": ["(?:disclaimer)"],
       "warnings": [],
       "compiledAt": "2026-08-26T10:15:00.420Z"
     },
@@ -722,7 +722,7 @@ Response — one entry per term, showing a **simple PASS**, a **PASS with
       "termId": "lexicon_research_1::3",
       "termDescription": "((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR (记录))",
       "compilationStatus": "PASS",
-      "translatedPattern": ["(?:内幕|正常|的|商业)[\\s\\S]{0,30}(?:活动|记录)"],
+      "regexPattern": ["(?:内幕|正常|的|商业)[\\s\\S]{0,30}(?:活动|记录)"],
       "hyperscanFlags": 97,
       "requiresExclusionCheck": false,
       "warnings": [
@@ -749,10 +749,10 @@ than translation) instead carries `errorLog` (not `translationError`) —
 the two are mutually exclusive and both are `null`/absent for `PASS`.
 
 A term decomposed into multiple leaves looks the same shape as above but
-with two or more entries in `translatedPattern`, e.g.:
+with two or more entries in `regexPattern`, e.g.:
 
 ```json
-"translatedPattern": [
+"regexPattern": [
   "(?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG)",
   "(?:\\s+\\S+){0,4}\\s+(?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN)",
   "(?:\\s+\\S+){0,4}\\s+(?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT)"
@@ -801,7 +801,7 @@ sequentially in term order:
 {
   "termId": "lexicon_research_1::1",
   "compilationStatus": "PASS",
-  "translatedPattern": ["manipulate\\S*"],
+  "regexPattern": ["manipulate\\S*"],
   "hyperscanFlags": 1,
   "requiresExclusionCheck": false,
   "hyperscanExpressionId": 1
@@ -812,10 +812,10 @@ sequentially in term order:
 {
   "termId": "lexicon_research_1::2",
   "compilationStatus": "PASS",
-  "translatedPattern": ["tip\\S*"],
+  "regexPattern": ["tip\\S*"],
   "hyperscanFlags": 1,
   "requiresExclusionCheck": true,
-  "exclusionPattern": ["(?:disclaimer)"],
+  "exclusionRegex": ["(?:disclaimer)"],
   "requiredExpressionIds": [4],
   "excludedExpressionIds": [5],
   "patternMapping": "(4&!5)"
@@ -826,7 +826,7 @@ sequentially in term order:
 {
   "termId": "lexicon_research_1::3",
   "compilationStatus": "PASS",
-  "translatedPattern": ["A", "(?:\\s+\\S+){0,4}\\s+B", "(?:\\s+\\S+){0,4}\\s+C"],
+  "regexPattern": ["A", "(?:\\s+\\S+){0,4}\\s+B", "(?:\\s+\\S+){0,4}\\s+C"],
   "hyperscanFlags": 1,
   "requiresExclusionCheck": false,
   "hyperscanExpressionId": 3,
@@ -928,7 +928,7 @@ services in this platform.
   the reduction floors at a zero-width gap and, if still rejected,
   surfaces Hyperscan's real error rather than pretending to have fixed it.
 - **Scanner Service and Scan Engine consuming the current
-  `translatedPattern`/`exclusionPattern`/id-scheme shape is this
+  `regexPattern`/`exclusionRegex`/id-scheme shape is this
   project's own concern only** — both are separate Maven projects with
   their own, independent implementations of the AND-NOT-vs-decomposition
   decision; a change here has no compile-time link to either and requires

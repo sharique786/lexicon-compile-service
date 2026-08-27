@@ -45,12 +45,12 @@ class HyperscanCombinationHandlerTest {
         handler = new HyperscanCombinationHandler(compiler);
     }
 
-    private TermCompilationResult passResult(List<String> translatedPattern, boolean requiresExclusionCheck,
-                                             List<String> exclusionPattern) {
+    private TermCompilationResult passResult(List<String> regexPattern, boolean requiresExclusionCheck,
+                                             List<String> exclusionRegex) {
         return new TermCompilationResult(
                 "t::1", "desc", CompilationStatus.PASS,
-                translatedPattern, null, null,
-                1, requiresExclusionCheck, exclusionPattern, List.of(),
+                regexPattern, null, null,
+                1, requiresExclusionCheck, exclusionRegex, List.of(),
                 null, null, null, null, Instant.now());
     }
 

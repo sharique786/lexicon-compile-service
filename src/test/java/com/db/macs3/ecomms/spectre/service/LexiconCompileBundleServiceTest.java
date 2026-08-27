@@ -212,9 +212,9 @@ class LexiconCompileBundleServiceTest {
 
         var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
-        assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.translatedPattern().getFirst()).contains("manipulate").contains("price");
-        assertThat(result.translatedPattern().getFirst()).contains("\\s+\\S+");
+        assertThat(result.regexPattern()).hasSize(1);
+        assertThat(result.regexPattern().getFirst()).contains("manipulate").contains("price");
+        assertThat(result.regexPattern().getFirst()).contains("\\s+\\S+");
     }
 
     @Test
@@ -239,8 +239,8 @@ class LexiconCompileBundleServiceTest {
 
         var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
-        assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.translatedPattern().getFirst()).isEqualTo("(?:price|spread|stock)");
+        assertThat(result.regexPattern()).hasSize(1);
+        assertThat(result.regexPattern().getFirst()).isEqualTo("(?:price|spread|stock)");
     }
 
     @Test
@@ -277,8 +277,8 @@ class LexiconCompileBundleServiceTest {
         var bundle = bundleService.buildBundle(req);
 
         var result = bundle.jsonResponse().results().getFirst();
-        assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.translatedPattern().getFirst()).isEqualTo("price NEAR.{5} stock");
+        assertThat(result.regexPattern()).hasSize(1);
+        assertThat(result.regexPattern().getFirst()).isEqualTo("price NEAR.{5} stock");
     }
 
     // ── All-Regex and all-Natural-Language scenarios ────────────────────────────────────
@@ -451,10 +451,10 @@ class LexiconCompileBundleServiceTest {
 
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
         assertThat(result.requiresExclusionCheck()).isTrue();
-        assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.translatedPattern().getFirst()).isEqualTo("don't forward");
-        assertThat(result.exclusionPattern()).hasSize(1);
-        assertThat(result.exclusionPattern().getFirst()).contains("compliance").contains("legal");
+        assertThat(result.regexPattern()).hasSize(1);
+        assertThat(result.regexPattern().getFirst()).isEqualTo("don't forward");
+        assertThat(result.exclusionRegex()).hasSize(1);
+        assertThat(result.exclusionRegex().getFirst()).contains("compliance").contains("legal");
 
         // AND NOT terms report via requiredExpressionIds/excludedExpressionIds now, not a
         // single hyperscanExpressionId -- there is no native combination expression at all.
@@ -533,7 +533,7 @@ class LexiconCompileBundleServiceTest {
     @Order(75)
     @DisplayName("Chained AND NOT (A AND NOT B AND NOT C) still combines into ONE excluded side " +
             "(B OR C) at the translation stage — no native combination id any more, but the " +
-            "excluded operands are still correctly unified into exclusionPattern")
+            "excluded operands are still correctly unified into exclusionRegex")
     void chainedAndNot_stillOneCombinationId() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("(a) AND NOT (b) AND NOT (c)"));
@@ -545,7 +545,7 @@ class LexiconCompileBundleServiceTest {
         assertThat(result.requiredExpressionIds()).hasSize(1);
         // The chained "AND NOT b AND NOT c" was combined into ONE excluded-side pattern
         // (b OR c) at the translation stage, before ever reaching expression-id assignment.
-        assertThat(result.exclusionPattern()).hasSize(1);
+        assertThat(result.exclusionRegex()).hasSize(1);
         assertThat(result.excludedExpressionIds()).hasSize(1);
         assertThat(bundle.hasDatabase()).isTrue();
     }
@@ -594,7 +594,7 @@ class LexiconCompileBundleServiceTest {
         var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
-        assertThat(result.translatedPattern()).hasSize(3); // decomposed into 3 leaves, as in the report
+        assertThat(result.regexPattern()).hasSize(3); // decomposed into 3 leaves, as in the report
         assertThat(bundle.hasDatabase()).isTrue();
         // patternMapping mirrors the exact native COMBINATION formula written into the .hdb for this
         // term — term number 1, so the offset for auxiliary leaf ids is 2 (2, 3, 4 for the 3 leaves).
@@ -627,7 +627,7 @@ class LexiconCompileBundleServiceTest {
         var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
-        assertThat(result.translatedPattern()).containsExactly(
+        assertThat(result.regexPattern()).containsExactly(
                 "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide)",
                 "(?:\\s+\\S+){0,4}\\s+(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
                 "(?:\\s+\\S+){0,4}\\s+(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
@@ -698,8 +698,8 @@ class LexiconCompileBundleServiceTest {
 
         assertThat(result.isPass()).isTrue();
         assertThat(result.requiresExclusionCheck()).isTrue();
-        assertThat(result.translatedPattern()).hasSize(1); // required side: "insider" alone
-        assertThat(result.exclusionPattern()).hasSize(3);  // excluded side: decomposed into 3 leaves
+        assertThat(result.regexPattern()).hasSize(1); // required side: "insider" alone
+        assertThat(result.exclusionRegex()).hasSize(3);  // excluded side: decomposed into 3 leaves
         assertThat(result.requiredExpressionIds()).containsExactly(8);
         assertThat(result.excludedExpressionIds()).containsExactly(9, 10, 11);
         assertThat(result.patternMapping()).isEqualTo("(8&!(9&10&11))");
@@ -757,7 +757,7 @@ class LexiconCompileBundleServiceTest {
         var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
-        assertThat(result.translatedPattern()).hasSize(3); // decomposed into 3 leaves
+        assertThat(result.regexPattern()).hasSize(3); // decomposed into 3 leaves
         assertThat(bundle.hasDatabase()).isTrue();
         assertThat(result.hyperscanExpressionId()).isEqualTo(1); // still the term's own number
     }
@@ -775,8 +775,8 @@ class LexiconCompileBundleServiceTest {
         var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
-        assertThat(result.translatedPattern()).hasSize(1);   // required side simple
-        assertThat(result.exclusionPattern()).hasSize(3);     // excluded side decomposed
+        assertThat(result.regexPattern()).hasSize(1);   // required side simple
+        assertThat(result.exclusionRegex()).hasSize(3);     // excluded side decomposed
         assertThat(bundle.hasDatabase()).isTrue();
 
         // AND NOT terms no longer get a single hyperscanExpressionId -- no native combination.
@@ -816,8 +816,8 @@ class LexiconCompileBundleServiceTest {
         var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
-        assertThat(result.translatedPattern()).hasSize(3);
-        assertThat(result.exclusionPattern()).hasSize(1);
+        assertThat(result.regexPattern()).hasSize(3);
+        assertThat(result.exclusionRegex()).hasSize(1);
         assertThat(result.requiredExpressionIds()).hasSize(3);
         assertThat(result.excludedExpressionIds()).hasSize(1);
         assertThat(bundle.hasDatabase()).isTrue();
@@ -835,8 +835,8 @@ class LexiconCompileBundleServiceTest {
         var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
-        assertThat(result.translatedPattern()).hasSize(3);
-        assertThat(result.exclusionPattern()).hasSize(3);
+        assertThat(result.regexPattern()).hasSize(3);
+        assertThat(result.exclusionRegex()).hasSize(3);
         assertThat(result.requiredExpressionIds()).hasSize(3);
         assertThat(result.excludedExpressionIds()).hasSize(3);
         assertThat(bundle.hasDatabase()).isTrue();
@@ -844,7 +844,7 @@ class LexiconCompileBundleServiceTest {
 
     @Test
     @Order(94)
-    @DisplayName("A simple AND NOT term's exclusionPattern is unaffected by the decomposition feature — " +
+    @DisplayName("A simple AND NOT term's exclusionRegex is unaffected by the decomposition feature — " +
             "still a single-entry list with the pre-decomposition pattern text")
     void simpleAndNot_unaffectedByDecompositionFeature() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
@@ -852,9 +852,9 @@ class LexiconCompileBundleServiceTest {
         var bundle = bundleService.buildBundle(req);
         var result = bundle.jsonResponse().results().getFirst();
 
-        assertThat(result.translatedPattern()).hasSize(1);
-        assertThat(result.exclusionPattern()).hasSize(1);
-        assertThat(result.exclusionPattern().getFirst()).isEqualTo("(?:(?:compliance|legal))");
+        assertThat(result.regexPattern()).hasSize(1);
+        assertThat(result.exclusionRegex()).hasSize(1);
+        assertThat(result.exclusionRegex().getFirst()).isEqualTo("(?:(?:compliance|legal))");
     }
 
     // ── HyperscanCombinationHandler-specific: the COMBINATION/QUIET flag constraint ──

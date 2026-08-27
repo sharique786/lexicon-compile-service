@@ -245,12 +245,12 @@ class TermSyntaxTranslatorTest {
 
             assertThat(s.requiresExclusionCheck()).isTrue();
             assertThat(NO_LOOKAROUND_CHECK.matcher(s.hsPatterns().getFirst()).find()).isFalse();
-            assertThat(NO_LOOKAROUND_CHECK.matcher(s.exclusionPatterns().getFirst()).find()).isFalse();
+            assertThat(NO_LOOKAROUND_CHECK.matcher(s.exclusionRegexs().getFirst()).find()).isFalse();
 
             // Apply the two-pattern contract exactly as a caller must: matched iff
-            // hsPattern matches AND exclusionPattern does NOT match the same message.
-            boolean message1Matches = matches(s.hsPatterns().getFirst(), message1) && !matches(s.exclusionPatterns().getFirst(), message1);
-            boolean message2Matches = matches(s.hsPatterns().getFirst(), message2) && !matches(s.exclusionPatterns().getFirst(), message2);
+            // hsPattern matches AND exclusionRegex does NOT match the same message.
+            boolean message1Matches = matches(s.hsPatterns().getFirst(), message1) && !matches(s.exclusionRegexs().getFirst(), message1);
+            boolean message2Matches = matches(s.hsPatterns().getFirst(), message2) && !matches(s.exclusionRegexs().getFirst(), message2);
             assertThat(message1Matches).isFalse();
             assertThat(message2Matches).isFalse();
         }
@@ -260,7 +260,7 @@ class TermSyntaxTranslatorTest {
         void plainAnd_selfContained() {
             var s = translateOk("((want to) AND (fix))");
             assertThat(s.requiresExclusionCheck()).isFalse();
-            assertThat(s.exclusionPatterns()).isNull();
+            assertThat(s.exclusionRegexs()).isNull();
             assertThat(s.hsPatterns().getFirst()).contains("want to").contains("fix");
         }
 
@@ -280,7 +280,7 @@ class TermSyntaxTranslatorTest {
             assertThat(s.hsPatterns().getFirst()).contains("fix|rig").contains("the rate");
             assertThat(s.hsPatterns().getFirst()).doesNotContain("fed rate move");
             assertThat(NO_LOOKAROUND_CHECK.matcher(s.hsPatterns().getFirst()).find()).isFalse();
-            assertThat(s.exclusionPatterns().getFirst()).contains("fed rate move");
+            assertThat(s.exclusionRegexs().getFirst()).contains("fed rate move");
         }
 
         @Test
@@ -288,21 +288,21 @@ class TermSyntaxTranslatorTest {
         void andNotWithoutSpaceBeforeParen() {
             var s = translateOk("(hello) AND NOT(world)");
             assertThat(s.requiresExclusionCheck()).isTrue();
-            assertThat(s.exclusionPatterns().getFirst()).isEqualTo("(?:world)");
+            assertThat(s.exclusionRegexs().getFirst()).isEqualTo("(?:world)");
         }
 
         @Test
         @DisplayName("Explicitly-nested FOLLOWEDBY inside an AND-NOT exclusion (different grammar levels) still resolves")
         void nestedFollowedByInsideAndNotExclusion() {
             var s = translateOk("(hello) AND NOT(((a OR b) FOLLOWEDBY{1} (c OR d)) FOLLOWEDBY{1} (e OR f))");
-            assertThat(s.exclusionPatterns().getFirst()).contains("(?:a|b)").contains("(?:c|d)").contains("(?:e|f)");
+            assertThat(s.exclusionRegexs().getFirst()).contains("(?:a|b)").contains("(?:c|d)").contains("(?:e|f)");
         }
 
         @Test
         @DisplayName("Nested NEAR inside an AND-NOT exclusion (one alternative of an OR-of-phrases) resolves correctly")
         void nestedNearInsideAndNotExclusion() {
             var s = translateOk("(hello) AND NOT((plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR))");
-            assertThat(s.exclusionPatterns().getFirst()).contains("EURIBOR FIXING").contains("TENOR");
+            assertThat(s.exclusionRegexs().getFirst()).contains("EURIBOR FIXING").contains("TENOR");
         }
 
         @Test
@@ -310,11 +310,11 @@ class TermSyntaxTranslatorTest {
         void chainedAndNot() {
             var s = translateOk("(a) AND NOT (b) AND NOT (c)");
             assertThat(s.requiresExclusionCheck()).isTrue();
-            assertThat(s.exclusionPatterns().getFirst()).contains("b").contains("c");
+            assertThat(s.exclusionRegexs().getFirst()).contains("b").contains("c");
             // Either b or c present alone should trigger the exclusion.
-            assertThat(matches(s.exclusionPatterns().getFirst(), "just b here")).isTrue();
-            assertThat(matches(s.exclusionPatterns().getFirst(), "just c here")).isTrue();
-            assertThat(matches(s.exclusionPatterns().getFirst(), "neither here")).isFalse();
+            assertThat(matches(s.exclusionRegexs().getFirst(), "just b here")).isTrue();
+            assertThat(matches(s.exclusionRegexs().getFirst(), "just c here")).isTrue();
+            assertThat(matches(s.exclusionRegexs().getFirst(), "neither here")).isFalse();
         }
     }
 
@@ -666,7 +666,7 @@ class TermSyntaxTranslatorTest {
                             + "AND NOT(((für dich OR für Sie OR fuer dich OR fuer Sie) "
                             + "FOLLOWEDBY{1} (als OR zum OR zur)) FOLLOWEDBY{1} (Hintergrund OR Info OR Update OR Illustration))");
             assertThat(s.requiresExclusionCheck()).isTrue();
-            assertThat(s.exclusionPatterns().getFirst()).isNotBlank();
+            assertThat(s.exclusionRegexs().getFirst()).isNotBlank();
         }
 
         @Test
@@ -770,7 +770,7 @@ class TermSyntaxTranslatorTest {
                     + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
             var s = translateOk(nestedTerm);
             assertThat(s.hsPatterns()).hasSize(1);        // required side untouched, still simple
-            assertThat(s.exclusionPatterns()).hasSize(3); // excluded side decomposed into 3 leaves
+            assertThat(s.exclusionRegexs()).hasSize(3); // excluded side decomposed into 3 leaves
             boolean hasExcludedWarning = s.warnings().stream()
                     .anyMatch(w -> w.contains("excluded (AND NOT)") && w.contains("estimated complexity"));
             assertThat(hasExcludedWarning).isTrue();

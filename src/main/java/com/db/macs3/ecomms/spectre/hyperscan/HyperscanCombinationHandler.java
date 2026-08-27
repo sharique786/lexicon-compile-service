@@ -60,8 +60,8 @@ import java.util.stream.Collectors;
  * <p><b>The fix: no combination for AND NOT — every pattern reports individually,
  * evaluated by the caller after the whole scan completes</b>
  * <p>For an AND NOT term, every pattern in both
- * {@link TermCompilationResult#translatedPattern()} (required) and
- * {@link TermCompilationResult#exclusionPattern()} (excluded) compiles as
+ * {@link TermCompilationResult#regexPattern()} (required) and
+ * {@link TermCompilationResult#exclusionRegex()} (excluded) compiles as
  * its own plain, independently reportable expression — never
  * {@code QUIET}, never {@code COMBINATION}. A single {@code Scanner.scan()}
  * call is still synchronous and returns the complete list of every match
@@ -150,10 +150,10 @@ public class HyperscanCombinationHandler {
      *                              number. Null for an AND NOT term.
      * @param requiredExpressionIds populated ONLY for an AND NOT term — the id(s)
      *                              of the required side's plain expression(s), one
-     *                              per entry of {@code translatedPattern}. Null otherwise.
+     *                              per entry of {@code regexPattern}. Null otherwise.
      * @param excludedExpressionIds populated ONLY for an AND NOT term — the id(s)
      *                              of the excluded side's plain expression(s), one
-     *                              per entry of {@code exclusionPattern}. Null otherwise.
+     *                              per entry of {@code exclusionRegex}. Null otherwise.
      * @param patternMapping        the logical formula over this term's expression id(s)
      *                              — see {@code TermCompilationResult} class Javadoc
      *                              "patternMapping". Null for a simple, single-pattern,
@@ -203,13 +203,13 @@ public class HyperscanCombinationHandler {
      */
     public ExpressionAssignment addExpressions(TermCompilationResult termResult, int termNumber,
                                                HyperscanIdAllocator idAllocator, List<Expression> expressionsOut) {
-        List<String> requiredPatterns = termResult.translatedPattern();
+        List<String> requiredPatterns = termResult.regexPattern();
 
         if (termResult.requiresExclusionCheck()) {
             // AND NOT — no combination, regardless of decomposition on either side.
             // Every pattern (both sides) is its own plain, individually-reportable expression.
             List<Integer> requiredIds = addPlainSide(requiredPatterns, termResult.hyperscanFlags(), idAllocator, expressionsOut);
-            List<Integer> excludedIds = addPlainSide(termResult.exclusionPattern(), termResult.hyperscanFlags(), idAllocator, expressionsOut);
+            List<Integer> excludedIds = addPlainSide(termResult.exclusionRegex(), termResult.hyperscanFlags(), idAllocator, expressionsOut);
             String patternMapping = buildAndNotFormula(requiredIds, excludedIds);
             return new ExpressionAssignment(null, requiredIds, excludedIds, patternMapping);
         }

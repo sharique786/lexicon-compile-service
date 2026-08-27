@@ -30,7 +30,7 @@ All three return the exact same JSON shape described below.
       "termDescription": "(manipulate) NEAR{5} ((price) OR (spread) OR (stock))",
       "riskDriverName": "Market Abuse",
       "compilationStatus": "PASS",
-      "translatedPattern": "(?:manipulate(?:\\s+\\S+){0,5}\\s+(?:price|spread|stock)|(?:price|spread|stock)(?:\\s+\\S+){0,5}\\s+manipulate)",
+      "regexPattern": "(?:manipulate(?:\\s+\\S+){0,5}\\s+(?:price|spread|stock)|(?:price|spread|stock)(?:\\s+\\S+){0,5}\\s+manipulate)",
       "errorLog": null,
       "translationError": null,
       "hyperscanFlags": 3,
@@ -42,7 +42,7 @@ All three return the exact same JSON shape described below.
       "termDescription": "NEAR{5} (price)",
       "riskDriverName": "Market Abuse",
       "compilationStatus": "FAILED",
-      "translatedPattern": null,
+      "regexPattern": null,
       "errorLog": null,
       "translationError": "NEAR{5} is missing a left and/or right operand in term: 'NEAR{5} (price)'. Expected format: 'word1 NEAR{n} word2'.",
       "hyperscanFlags": 0,
@@ -80,10 +80,10 @@ Each object in the `results` array reports the outcome for exactly one term from
 | `termDescription` | string | The original, untranslated term text exactly as submitted — the operator-language expression (e.g. `"(manipulate) NEAR{5} (price)"`) or, for an NLT term, the raw pattern the caller supplied. Echoed back for traceability; this is not the compiled pattern. |
 | `riskDriverName` | string or `null` | An optional label from the request (e.g. `"Market Abuse"`, `"Insider Trading"`) describing which compliance risk category this term belongs to. `null` if it wasn't supplied in the request. |
 | `compilationStatus` | string — `"PASS"` or `"FAILED"` | Whether this specific term compiled successfully. `"PASS"` means the term produced a valid pattern that Hyperscan accepted. `"FAILED"` means it did not, for a reason explained by `errorLog` or `translationError` below. |
-| `translatedPattern` | string or `null` | The Hyperscan-compatible PCRE pattern produced from `termDescription`. Present whenever any pattern was actually produced — both for a `"PASS"` and for a term that failed at the Hyperscan stage (the pattern that was attempted but rejected). It is `null` only when the term failed before a pattern could even be produced (see `translationError`). |
+| `regexPattern` | string or `null` | The Hyperscan-compatible PCRE pattern produced from `termDescription`. Present whenever any pattern was actually produced — both for a `"PASS"` and for a term that failed at the Hyperscan stage (the pattern that was attempted but rejected). It is `null` only when the term failed before a pattern could even be produced (see `translationError`). |
 | `errorLog` | string or `null` | The error message from Hyperscan itself, returned when a produced pattern was syntactically valid PCRE but Hyperscan's compiler still rejected it (e.g. a resource limit or an unsupported construct). `null` unless this specific failure happened at the Hyperscan compile stage. |
 | `translationError` | string or `null` | The error message from the term-description translator, returned when the term's text could not be turned into a pattern at all (e.g. malformed syntax such as a `NEAR{n}` operator missing one of its operands). `null` unless this specific failure happened at the translation stage, before Hyperscan was ever invoked. |
-| `hyperscanFlags` | integer (bitmask) | The Hyperscan compile flags applied to `translatedPattern`, encoded as a bitmask: `1` = case-insensitive matching, `2` = allow `.` to match newlines, `32` = treat the pattern as UTF-8, `64` = use Unicode character properties (needed for non-Latin scripts). Flags are combined by adding their values — for example `3` means both `1` and `2` are set. A value of `0` is a specific signal that translation never completed (no pattern was ever produced to compute flags for). |
+| `hyperscanFlags` | integer (bitmask) | The Hyperscan compile flags applied to `regexPattern`, encoded as a bitmask: `1` = case-insensitive matching, `2` = allow `.` to match newlines, `32` = treat the pattern as UTF-8, `64` = use Unicode character properties (needed for non-Latin scripts). Flags are combined by adding their values — for example `3` means both `1` and `2` are set. A value of `0` is a specific signal that translation never completed (no pattern was ever produced to compute flags for). |
 | `requiresAndPostFilter` | boolean | `true` when the term used an `AND` operator. Hyperscan alone cannot fully evaluate `AND` semantics, so `true` tells the downstream scan engine it must apply an additional check after a Hyperscan hit, confirming all of the `AND` operands actually appear in the same message before raising an alert. Always `false` for terms that failed to compile. |
 | `compiledAt` | string (ISO-8601 timestamp) | The moment this individual term finished compiling. Distinct from the top-level `compiledAt`, which marks the end of the whole batch. |
 

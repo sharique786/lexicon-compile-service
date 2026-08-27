@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>{@link TypedCompileRequest} is the single request type this service
  * (and every compile endpoint) now uses — see that class's Javadoc. Every
- * PASS term's {@code translatedPattern}/{@code exclusionPattern} are lists
+ * PASS term's {@code regexPattern}/{@code exclusionRegex} are lists
  * (one entry for a simple term, several when decomposed); there is no
  * separate "was this decomposed" boolean any more.
  */
@@ -72,8 +72,8 @@ class LexiconCompileServiceTest {
         assertThat(resp.hasFailures()).isFalse();
         assertThat(resp.engineMode()).isEqualTo("HYPERSCAN_NATIVE");
         assertThat(resp.results().getFirst().compilationStatus()).isEqualTo(CompilationStatus.PASS);
-        assertThat(resp.results().getFirst().translatedPattern()).isNotEmpty();
-        assertThat(resp.results().getFirst().translatedPattern().getFirst()).isNotBlank();
+        assertThat(resp.results().getFirst().regexPattern()).isNotEmpty();
+        assertThat(resp.results().getFirst().regexPattern().getFirst()).isNotBlank();
         assertThat(resp.results().getFirst().compiledAt()).isNotNull();
     }
 
@@ -86,7 +86,7 @@ class LexiconCompileServiceTest {
         assertThat(resp.passCount()).isEqualTo(1);
         var result = resp.results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
-        assertThat(result.translatedPattern().getFirst()).contains("\\S*"); // wildcard translated
+        assertThat(result.regexPattern().getFirst()).contains("\\S*"); // wildcard translated
     }
 
     @Test
@@ -177,13 +177,13 @@ class LexiconCompileServiceTest {
 
     @Test
     @Order(14)
-    @DisplayName("A PASS term's translatedPattern is never null or empty — always at least one entry")
-    void translatedPatternNeverEmptyOnPass() {
+    @DisplayName("A PASS term's regexPattern is never null or empty — always at least one entry")
+    void regexPatternNeverEmptyOnPass() {
         var resp = compile("nonempty_test", "price OR spread");
         var result = resp.results().getFirst();
         assertThat(result.isPass()).isTrue();
-        assertThat(result.translatedPattern()).isNotNull();
-        assertThat(result.translatedPattern()).isNotEmpty();
+        assertThat(result.regexPattern()).isNotNull();
+        assertThat(result.regexPattern()).isNotEmpty();
     }
 
     // ── Multi-language compilation ────────────────────────────────────────────
@@ -272,8 +272,8 @@ class LexiconCompileServiceTest {
     void followedByCompiles() {
         var resp = compile("fb_rule", "don't FOLLOWEDBY{3} compliance");
         assertThat(resp.passCount()).isEqualTo(1);
-        assertThat(resp.results().getFirst().translatedPattern().getFirst()).contains("don't");
-        assertThat(resp.results().getFirst().translatedPattern().getFirst()).contains("{0,3}");
+        assertThat(resp.results().getFirst().regexPattern().getFirst()).contains("don't");
+        assertThat(resp.results().getFirst().regexPattern().getFirst()).contains("{0,3}");
     }
 
     // ── AND: corrected co-occurrence semantics ──────────────────────────────────
@@ -286,9 +286,9 @@ class LexiconCompileServiceTest {
         assertThat(resp.passCount()).isEqualTo(1);
         assertThat(resp.failedCount()).isEqualTo(0);
         assertThat(resp.results().getFirst().requiresExclusionCheck()).isFalse();
-        assertThat(resp.results().getFirst().exclusionPattern()).isNull();
+        assertThat(resp.results().getFirst().exclusionRegex()).isNull();
         // All three operands appear somewhere in the pattern (every ordering permutation).
-        assertThat(resp.results().getFirst().translatedPattern().getFirst())
+        assertThat(resp.results().getFirst().regexPattern().getFirst())
                 .contains("insider").contains("announcement").contains("price");
     }
 
@@ -296,15 +296,15 @@ class LexiconCompileServiceTest {
 
     @Test
     @Order(41)
-    @DisplayName("AND NOT: requiresExclusionCheck true, exclusionPattern has exactly one entry for a simple exclusion")
+    @DisplayName("AND NOT: requiresExclusionCheck true, exclusionRegex has exactly one entry for a simple exclusion")
     void andNotProducesExclusionList() {
         var resp = compile("and_not_rule", "insider AND NOT (compliance OR legal)");
         assertThat(resp.passCount()).isEqualTo(1);
         var result = resp.results().getFirst();
         assertThat(result.requiresExclusionCheck()).isTrue();
-        assertThat(result.exclusionPattern()).isNotNull();
-        assertThat(result.exclusionPattern()).hasSize(1);
-        assertThat(result.translatedPattern()).hasSize(1);
+        assertThat(result.exclusionRegex()).isNotNull();
+        assertThat(result.exclusionRegex()).hasSize(1);
+        assertThat(result.regexPattern()).hasSize(1);
     }
 
     // ── Performance ───────────────────────────────────────────────────────────

@@ -500,7 +500,7 @@ class LexiconCompileBundleServiceTest {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("insider OR trading"),          // term number 1, plain
                 term("price AND rigging"),            // term number 2, plain (self-contained AND)
-                term("confidential AND NOT public")); // term number 3, AND NOT
+                term("confidential AND NOT (public)")); // term number 3, AND NOT
 
         var bundle = bundleService.buildBundle(req);
         var results = bundle.jsonResponse().results();
@@ -679,9 +679,9 @@ class LexiconCompileBundleServiceTest {
             "excluded side — required id=8 (single), excluded ids 9/10/11 (decomposed) — patternMapping " +
             "is exactly \"(8&!(9&10&11))\", the AND-NOT formula the .hdb itself never encodes")
     void patternMapping_andNot_matchesReportedWorkedExample() {
-        String term = "(insider AND NOT (wordA word B OR wordC* wordD OR wordE* wordF OR wordG) "
+        String term = "(insider AND NOT ((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) "
                 + "FOLLOWEDBY{2} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN) "
-                + "FOLLOWEDBY{2} (wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
+                + "FOLLOWEDBY{2} (wordO* OR wordP* wordQ OR wordR* wordS OR wordT)))";
 
         var req = new TypedCompileRequest();
         req.setRequestId("worked-example-2");
@@ -716,7 +716,7 @@ class LexiconCompileBundleServiceTest {
         req.setLexiconRuleName("regression_order_test");
         req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(new TypedCompileRequest.TermInput(
-                "t::1", "insider AND NOT disclosed")));
+                "t::1", "insider AND NOT (disclosed)")));
 
         var bundle = bundleService.buildBundle(req);
         var result = bundle.jsonResponse().results().getFirst();
@@ -811,7 +811,7 @@ class LexiconCompileBundleServiceTest {
             "(non-decomposed) excluded pattern each get their own individually-reportable id")
     void decomposedRequiredSide_withSimpleExcluded() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
-                term("(" + NESTED_TOO_COMPLEX_TERM + ") AND NOT excluded"));
+                term("(" + NESTED_TOO_COMPLEX_TERM + ") AND NOT (excluded)"));
         var bundle = bundleService.buildBundle(req);
         var result = bundle.jsonResponse().results().getFirst();
 
@@ -901,7 +901,7 @@ class LexiconCompileBundleServiceTest {
     @DisplayName("An AND NOT term's expressions are NEVER QUIET and NEVER COMBINATION — every " +
             "required/excluded pattern is its own plain, individually-reportable expression")
     void andNotTerm_neverUsesQuietOrCombination() throws IOException {
-        var req = request("test-rule", TermType.NATURAL_LANGUAGE, term("insider AND NOT compliance"));
+        var req = request("test-rule", TermType.NATURAL_LANGUAGE, term("insider AND NOT (compliance)"));
         LexiconCompileBundleService.CompileBundleResult compileBundleResult = bundleService.buildBundle(req);
         Database database = Database.load(new ByteArrayInputStream(compileBundleResult.hyperscanDatabaseBytes()));
         var result = compileBundleResult.jsonResponse().results().getFirst();
@@ -980,7 +980,7 @@ class LexiconCompileBundleServiceTest {
         req.setRequestType(TermType.NATURAL_LANGUAGE);
         req.setTerms(List.of(
                 new TypedCompileRequest.TermInput("sparse_rule::5", "price OR spread"),
-                new TypedCompileRequest.TermInput("sparse_rule::100", "insider AND NOT disclosed")));
+                new TypedCompileRequest.TermInput("sparse_rule::100", "insider AND NOT (disclosed)")));
 
         var bundle = bundleService.buildBundle(req);
         var results = bundle.jsonResponse().results();

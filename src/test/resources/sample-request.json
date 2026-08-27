@@ -28,7 +28,7 @@
     },
     {
       "termId": "lexicon_research_1::6",
-      "termDescription": "tip* AND NOT disclaimer",
+      "termDescription": "tip* AND NOT (disclaimer)",
       "riskDriverName": "Tip-Off"
     },
     {

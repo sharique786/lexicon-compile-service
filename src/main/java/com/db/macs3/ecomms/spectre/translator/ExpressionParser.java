@@ -9,13 +9,39 @@ import java.util.List;
  * <p><b>Grammar (highest precedence last, i.e. tightest-binding first)</b>
  * <pre>
  * orExpr        := andNotExpr ( OR andNotExpr )*
- * andNotExpr    := andExpr ( AND_NOT andExpr )*
- * andExpr       := proximityExpr ( AND proximityExpr )*
- * proximityExpr := notExpr ( (NEAR | FOLLOWEDBY) notExpr )*      [left-associative]
- * notExpr       := NOT? atom
- * atom          := '(' orExpr ')' | QUOTED_PHRASE | wordOrPhrase
+ * andNotExpr    := andExpr ( AND_NOT requiredGroup )*             [glued "AND NOT (...)" spelling]
+ * andExpr       := proximityExpr ( AND proximityExpr )*           [folds any NOT-group operand into AndNot]
+ * proximityExpr := atom ( (NEAR | FOLLOWEDBY) atom )*              [left-associative]
+ * atom          := '(' orExpr ')' | notGroup | QUOTED_PHRASE | wordOrPhrase
+ * notGroup      := NOT requiredGroup                              [only valid as an andExpr operand — see below]
+ * requiredGroup := '(' orExpr ')'
  * wordOrPhrase  := WORD+                                          [greedy]
  * </pre>
+ *
+ * <p><b>Standalone NOT — always a group, always paired with AND</b>
+ * <p>{@code NOT} is never an independent "but not" operator and never
+ * applies to a bare word/phrase or to a proximity expression directly — it
+ * is only ever valid immediately followed by a parenthesised group, and
+ * that group is only ever valid as a LATER operand of an {@code AND} that
+ * also has at least one other, non-{@code NOT} operand:
+ * <pre>
+ *   bond AND (NOT (james bond))                 -- valid: NOT-group as an AND operand
+ *   apple AND (NOT (apple NEAR{10} banana))     -- valid: NOT wraps an arbitrary sub-expression
+ *   apple AND NOT (banana)                      -- valid: the older "glued" spelling, now requiring parens too
+ *   NOT (james bond)                            -- REJECTED: no preceding required expression
+ *   apple NOT NEAR{10} banana                   -- REJECTED: NOT directly before a proximity operator
+ *   apple AND NOT NEAR{10} banana                -- REJECTED: NOT not immediately followed by '('
+ * </pre>
+ * Both spellings ({@code X AND (NOT (Y))} and {@code X AND NOT (Y)}) parse to
+ * the exact same {@link Ast.AndNot} shape — see {@link #parseAtom} (which
+ * recognises {@code NOT '('} as a {@code notGroup} atom, reachable anywhere
+ * an atom is) and {@link #parseAnd} (which folds every {@link Ast.Not}
+ * operand it collected into one {@link Ast.AndNot}, or rejects the whole
+ * level if that would leave no required operand). A {@link Ast.Not} that
+ * survives unfolded — because it was never a direct operand of an
+ * {@code AND} at all (used standalone, as an {@code OR} alternative, or as
+ * a {@code NEAR}/{@code FOLLOWEDBY} operand) — is a parse-time error, not
+ * something that reaches {@link PatternCodeGenerator}.
  *
  * <p>Because every level of this grammar recurses into {@code atom}, and
  * {@code atom}'s parenthesised form recurses straight back into
@@ -96,6 +122,10 @@ final class ExpressionParser {
             }
             throw parser.unexpectedTokenError("after '" + parser.describe(result) + "'");
         }
+        // The whole term's root is the one place a deferred Ast.Not (see foldNotOperands)
+        // can NEVER find an enclosing AND to fold into — reject it here, e.g. a bare
+        // "NOT (james bond)" with nothing else in the entire term.
+        parser.rejectBareNot(result, "standalone, as the entire term");
         return new ParseResult(result, parser.warnings);
     }
 
@@ -108,7 +138,16 @@ final class ExpressionParser {
             advance();
             alternatives.add(parseAndNot());
         }
-        return alternatives.size() == 1 ? alternatives.getFirst() : new Ast.Or(alternatives);
+        if (alternatives.size() == 1) {
+            // No actual OR combination happened — a deferred Ast.Not (see
+            // foldNotOperands) simply passes through unchanged, still eligible to be
+            // folded by an ENCLOSING AND once this bubbles further up.
+            return alternatives.getFirst();
+        }
+        for (Ast alternative : alternatives) {
+            rejectBareNot(alternative, "as an OR alternative");
+        }
+        return new Ast.Or(alternatives);
     }
 
     private Ast parseAndNot() {
@@ -116,9 +155,52 @@ final class ExpressionParser {
         List<Ast> excludedOperands = new ArrayList<>();
         while (peekIs(Token.AndNot.class)) {
             advance();
-            excludedOperands.add(parseAnd());
+            excludedOperands.add(parseRequiredGroup());
         }
-        return excludedOperands.isEmpty() ? requiredOperand : new Ast.AndNot(requiredOperand, excludedOperands);
+        if (excludedOperands.isEmpty()) {
+            // No actual "AND NOT" token found at this level — a deferred Ast.Not (see
+            // foldNotOperands) simply passes through unchanged.
+            return requiredOperand;
+        }
+        rejectBareNot(requiredOperand, "as the required side of AND NOT");
+        return new Ast.AndNot(requiredOperand, excludedOperands);
+    }
+
+    /**
+     * Rejects {@code ast} if it is a bare {@link Ast.Not} that {@link #foldNotOperands}
+     * deferred — meaning it never found an enclosing {@code AND} operand slot to
+     * fold into, and is instead about to be used somewhere {@code NOT} is not
+     * supported (standalone, an {@code OR} alternative, a {@code NEAR}/{@code FOLLOWEDBY}
+     * operand, or the required side of an {@code AND NOT}). See class Javadoc
+     * "Standalone NOT" section.
+     */
+    private void rejectBareNot(Ast ast, String context) {
+        if (ast instanceof Ast.Not) {
+            throw new TranslationException(
+                    "NOT must always be combined with a preceding required expression via AND — "
+                    + "'NOT (...)' cannot be used " + context + " in term: '" + originalTerm + "'."
+                    + " Write it as 'X AND (NOT (Y))' or 'X AND NOT (Y)', e.g. 'bond AND (NOT (james bond))'.");
+        }
+    }
+
+    /**
+     * The excluded side of the "glued" {@code AND NOT} spelling must always
+     * be an explicit parenthesised group — never a bare word/phrase and
+     * never a proximity operator sitting directly after {@code NOT} with no
+     * parentheses. This is what rejects {@code apple AND NOT NEAR{10} banana}
+     * (with a specific, actionable message) instead of falling through to
+     * {@link #parseAnd}'s more general — and, for this position, wrong —
+     * grammar. See class Javadoc "Standalone NOT" section.
+     */
+    private Ast parseRequiredGroup() {
+        if (!peekIs(Token.LParen.class)) {
+            throw new TranslationException(
+                    "NOT must always be followed immediately by a parenthesised group in term: '"
+                    + originalTerm + "'. Write the exclusion as 'X AND NOT (Y)', e.g. 'price AND NOT"
+                    + " (legitimate)' instead of 'price AND NOT legitimate', or 'price AND NOT (rigging"
+                    + " NEAR{5} change)' instead of 'price AND NOT rigging NEAR{5} change'.");
+        }
+        return parseParenGroup();
     }
 
     /**
@@ -147,7 +229,64 @@ final class ExpressionParser {
                             + " — each additional operand multiplies the size of the resulting Hyperscan pattern."
                             + " Split this term into multiple simpler lexicon terms instead.");
         }
-        return operands.size() == 1 ? operands.getFirst() : new Ast.And(operands);
+        return foldNotOperands(operands);
+    }
+
+    /**
+     * Folds every {@link Ast.Not} operand collected by one {@code AND} level
+     * into a single {@link Ast.AndNot} — the {@code NOT}-group equivalent of
+     * {@link #parseAndNot}'s own {@code AND_NOT}-token loop, so that
+     * {@code "bond AND (NOT (james bond))"} produces EXACTLY the same
+     * {@code Ast.AndNot(required=bond, excluded=[james bond])} shape as the
+     * already-supported {@code "bond AND NOT (james bond)"} spelling — see
+     * class Javadoc "Standalone NOT" section. Multiple {@code NOT}-group
+     * operands at the same level (e.g. {@code "a AND (NOT (b)) AND (NOT (c))"})
+     * combine into one {@link Ast.AndNot} with both excluded, exactly like
+     * chained {@code "a AND NOT b AND NOT c"} already does.
+     *
+     * <p><b>Deferral for a single, redundantly-wrapped NOT-group</b>
+     * <p>When {@code operands} has EXACTLY one entry and it is a bare
+     * {@link Ast.Not} (nothing else at this level to be "required"), this
+     * does NOT reject it outright — {@code "bond AND (NOT (james bond))"}
+     * puts the NOT-group inside its OWN extra pair of parentheses, so the
+     * {@code parseAnd()} call for THAT inner group sees only the one
+     * {@code Not} operand, with "bond" only visible to the OUTER {@code AND}.
+     * The {@code Not} is returned unchanged here, to be folded once it
+     * bubbles back up to that outer level (parentheses are otherwise
+     * transparent everywhere else in this grammar — see class Javadoc). If it
+     * never finds such an outer {@code AND} — used standalone, as an
+     * {@code OR} alternative, or as a {@code NEAR}/{@code FOLLOWEDBY} operand
+     * — {@link #rejectBareNot} catches it at that point instead.
+     *
+     * @throws TranslationException if MULTIPLE operands were collected and
+     * every one of them is a {@link Ast.Not} — {@code NOT} always needs a
+     * preceding, non-{@code NOT} required operand at the same level once
+     * there is more than one operand to reconcile
+     */
+    private Ast foldNotOperands(List<Ast> operands) {
+        List<Ast> required = new ArrayList<>();
+        List<Ast> excluded = new ArrayList<>();
+        for (Ast operand : operands) {
+            if (operand instanceof Ast.Not not) {
+                excluded.add(not.operand());
+            } else {
+                required.add(operand);
+            }
+        }
+        if (excluded.isEmpty()) {
+            return operands.size() == 1 ? operands.getFirst() : new Ast.And(operands);
+        }
+        if (required.isEmpty()) {
+            if (operands.size() == 1) {
+                return operands.getFirst(); // deferred — see Javadoc above
+            }
+            throw new TranslationException(
+                    "NOT must always be combined with a preceding required expression via AND — "
+                    + "'NOT (...)' cannot stand on its own in term: '" + originalTerm + "'."
+                    + " Write it as 'X AND (NOT (Y))' or 'X AND NOT (Y)', e.g. 'bond AND (NOT (james bond))'.");
+        }
+        Ast requiredAst = required.size() == 1 ? required.getFirst() : new Ast.And(required);
+        return new Ast.AndNot(requiredAst, excluded);
     }
 
     /**
@@ -178,8 +317,10 @@ final class ExpressionParser {
     }
 
     private Ast consumeProximityOperator(Ast leftOperand) {
+        rejectBareNot(leftOperand, "as a NEAR/FOLLOWEDBY operand");
         Token proximityToken = advance();
         Ast rightOperand = parseAtom();
+        rejectBareNot(rightOperand, "as a NEAR/FOLLOWEDBY operand");
         return (proximityToken instanceof Token.Near(int distance))
                 ? new Ast.Near(leftOperand, rightOperand, distance)
                 : new Ast.FollowedBy(leftOperand, rightOperand, ((Token.FollowedBy) proximityToken).distance());
@@ -240,11 +381,28 @@ final class ExpressionParser {
     private TranslationException standaloneNotOperatorError() {
         return new TranslationException(
                 "Standalone NOT is not supported as an operator in term: '" + originalTerm + "'."
-                        + " NOT must always be paired with AND, written as 'X AND NOT Y' — a bare NOT"
-                        + " sitting between two separate expressions (rather than as a word inside one"
-                        + " of them) has no defined meaning here."
+                        + " NOT is only valid immediately followed by a parenthesised group, and that"
+                        + " group is only valid as a later operand of AND — written as 'X AND NOT (Y)'"
+                        + " or 'X AND (NOT (Y))'. A bare NOT sitting between two separate expressions"
+                        + " (rather than as a word inside one of them) has no defined meaning here."
                         + " To use \"NOT\" as literal text between two expressions, combine it with an"
                         + " explicit operator (e.g. 'X OR NOT Y') or wrap it into one side's own phrase.");
+    }
+
+    /**
+     * Thrown when a bare {@link Token.Not} is directly followed by
+     * {@code NEAR}/{@code FOLLOWEDBY} — e.g. {@code "apple NOT NEAR{10} banana"}
+     * or a bare {@code "NOT NEAR{10} banana"} with nothing preceding it.
+     * {@code NOT} is never a proximity operand or a modifier on one; the only
+     * supported shape is {@code NOT} immediately followed by a parenthesised
+     * group (see {@link #parseAtom}), never by a proximity keyword.
+     */
+    private TranslationException notBeforeProximityError() {
+        return new TranslationException(
+                "NOT cannot appear directly before NEAR/FOLLOWEDBY in term: '" + originalTerm + "'."
+                        + " NOT is only supported immediately followed by a parenthesised group — written"
+                        + " as 'X AND NOT (Y)' or 'X AND (NOT (Y))' — never as a standalone modifier"
+                        + " combined directly with a proximity operator.");
     }
 
     private Ast parseAtom() {
@@ -255,16 +413,35 @@ final class ExpressionParser {
         if (currentToken instanceof Token.LParen) {
             return parseParenGroup();
         }
+        if (currentToken instanceof Token.Not && peekNextIs(Token.LParen.class)) {
+            // NOT immediately followed by '(' — the NOT-group atom; see class
+            // Javadoc "Standalone NOT" section. Folded into an Ast.AndNot by
+            // parseAnd()/foldNotOperands, or rejected there if misplaced.
+            return parseNotGroup();
+        }
         if (currentToken instanceof Token.QuotedPhrase(String text)) {
             advance();
             return new Ast.QuotedPhrase(text);
         }
         if (currentToken instanceof Token.Word || currentToken instanceof Token.Not) {
-            // NOT starting a fresh atom is literal text, not an operator — see
-            // standaloneNotOperatorError() Javadoc for the full reasoning.
+            // NOT starting a fresh atom, NOT immediately followed by '(', is literal
+            // text — see standaloneNotOperatorError() Javadoc for the full reasoning.
             return parseWordOrPhrase();
         }
         throw unexpectedTokenError("expected a term, parenthesis, or quoted phrase");
+    }
+
+    /**
+     * {@code notGroup := NOT '(' orExpr ')'} — consumes the {@code NOT}
+     * keyword and the parenthesised group that must immediately follow it,
+     * producing an {@link Ast.Not} wrapping whatever the group contains
+     * (which may itself be an arbitrary expression, e.g. a NEAR/FOLLOWEDBY —
+     * see {@code "apple AND (NOT (apple NEAR{10} banana))"} in class Javadoc).
+     */
+    private Ast parseNotGroup() {
+        advance(); // consume NOT
+        Ast operand = parseParenGroup();
+        return new Ast.Not(operand);
     }
 
     /**
@@ -286,6 +463,14 @@ final class ExpressionParser {
             if (token instanceof Token.Word(String text)) {
                 collectedWords.add(text);
             } else if (token instanceof Token.Not) {
+                // A bare NOT directly followed by NEAR/FOLLOWEDBY is never literal
+                // text — see notBeforeProximityError() Javadoc — regardless of
+                // whether anything was already collected before it (e.g. both a bare
+                // "NOT NEAR{10} banana" and "apple NOT NEAR{10} banana" are rejected
+                // here, not silently folded into a literal "apple NOT" phrase).
+                if (nextIsNearOrFollowedBy()) {
+                    throw notBeforeProximityError();
+                }
                 collectedWords.add(LexiconOperatorKeyword.NOT);
             } else {
                 break;
@@ -293,6 +478,21 @@ final class ExpressionParser {
             currentTokenIndex++;
         }
         return collectedWords.size() == 1 ? new Ast.Word(collectedWords.getFirst()) : new Ast.Phrase(collectedWords);
+    }
+
+    /**
+     * True when the token immediately after the CURRENT token (not yet
+     * consumed) is {@code NEAR}/{@code FOLLOWEDBY} — used by
+     * {@link #parseWordOrPhrase} to detect a bare {@code NOT} sitting
+     * directly before a proximity operator.
+     */
+    private boolean nextIsNearOrFollowedBy() {
+        int nextIndex = currentTokenIndex + 1;
+        if (nextIndex >= tokens.size()) {
+            return false;
+        }
+        Token next = tokens.get(nextIndex);
+        return next instanceof Token.Near || next instanceof Token.FollowedBy;
     }
 
     /**
@@ -322,6 +522,17 @@ final class ExpressionParser {
 
     private boolean peekIs(Class<? extends Token> tokenType) {
         return currentTokenIndex < tokens.size() && tokenType.isInstance(tokens.get(currentTokenIndex));
+    }
+
+    /**
+     * True when the token immediately after the CURRENT (not yet consumed)
+     * token is an instance of {@code tokenType} — used by {@link #parseAtom}
+     * to recognise {@code NOT '('} as a {@code notGroup} atom without
+     * consuming either token.
+     */
+    private boolean peekNextIs(Class<? extends Token> tokenType) {
+        int nextIndex = currentTokenIndex + 1;
+        return nextIndex < tokens.size() && tokenType.isInstance(tokens.get(nextIndex));
     }
 
     private Token advance() {

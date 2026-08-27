@@ -85,6 +85,9 @@ final class PatternCodeGenerator {
             case Ast.AndNot andNot -> generateAndNot(andNot, ctx);
             case Ast.Near near -> generateNear(near, ctx);
             case Ast.FollowedBy fb -> generateFollowedBy(fb, ctx);
+            case Ast.Not ignored -> throw new IllegalStateException(
+                    "unreachable — every Ast.Not is folded into Ast.AndNot (or rejected) by "
+                    + "ExpressionParser.parseAnd() before an Ast is ever returned; see Ast.Not Javadoc");
             case Ast.Word w -> encodeWord(w.text(), ctx);
             case Ast.Phrase p -> generatePhrase(p, ctx);
             case Ast.QuotedPhrase q -> encodeQuotedPhrase(q.text(), ctx);

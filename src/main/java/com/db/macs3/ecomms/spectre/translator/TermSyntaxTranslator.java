@@ -293,6 +293,9 @@ public final class TermSyntaxTranslator {
                 rejectNestedAndNot(fb.right(), originalTerm);
             }
             case Ast.AndNot ignored -> throw new IllegalStateException("unreachable — handled above");
+            case Ast.Not ignored -> throw new IllegalStateException(
+                    "unreachable — every Ast.Not is folded into Ast.AndNot (or rejected) by "
+                    + "ExpressionParser.parseAnd() before an Ast is ever returned; see Ast.Not Javadoc");
             case Ast.Word ignored -> { /* leaf: no children to check */ }
             case Ast.Phrase ignored -> { /* leaf: no children to check */ }
             case Ast.QuotedPhrase ignored -> { /* leaf: no children to check */ }

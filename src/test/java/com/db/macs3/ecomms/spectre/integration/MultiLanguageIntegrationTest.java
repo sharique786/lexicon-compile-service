@@ -185,7 +185,7 @@ class MultiLanguageIntegrationTest {
     void englishAndNotMatch() throws Exception {
         // AND NOT returns positive operand only; scan engine excludes NOT at runtime
         assertThat(matches(
-                "price AND NOT legitimate",
+                "price AND NOT (legitimate)",
                 "We plan to manipulate the price of the stock.")).isTrue();
     }
 

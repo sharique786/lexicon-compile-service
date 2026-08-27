@@ -411,7 +411,7 @@ class LexiconCompileControllerTest {
     @Order(53)
     @DisplayName("POST /compile — AND NOT term → requiresExclusionCheck = true, exclusionRegex present")
     void andNotTermRequiresExclusionCheck() throws Exception {
-        var req = buildRequest("and_not_rule", "insider AND NOT disclosed");
+        var req = buildRequest("and_not_rule", "insider AND NOT (disclosed)");
         mockMvc.perform(post("/api/lexicon/compile")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsBytes(req)))

@@ -241,7 +241,7 @@ class TermSyntaxTranslatorTest {
         void reportedScenario_term2_priceAndNotChange() {
             String message1 = "There's price change and market rigging is going on";
             String message2 = "There's price change";
-            var s = translateOk("price AND NOT change");
+            var s = translateOk("price AND NOT (change)");
 
             assertThat(s.requiresExclusionCheck()).isTrue();
             assertThat(NO_LOOKAROUND_CHECK.matcher(s.hsPatterns().getFirst()).find()).isFalse();
@@ -895,7 +895,7 @@ class TermSyntaxTranslatorTest {
         @Test
         @DisplayName("AND NOT nested as the LEFT operand of NEAR is rejected, not silently mishandled")
         void andNotNestedInNearLeftOperand_rejected() {
-            var result = translator.translate("(insider AND NOT compliance) NEAR{5} trading");
+            var result = translator.translate("(insider AND NOT (compliance)) NEAR{5} trading");
 
             assertThat(result.isSuccess())
                     .as("must be rejected, not silently compiled with the exclusion dropped")
@@ -908,49 +908,49 @@ class TermSyntaxTranslatorTest {
         @Test
         @DisplayName("AND NOT nested as the RIGHT operand of NEAR is also rejected")
         void andNotNestedInNearRightOperand_rejected() {
-            var result = translator.translate("trading NEAR{5} (insider AND NOT compliance)");
+            var result = translator.translate("trading NEAR{5} (insider AND NOT (compliance))");
             assertThat(result.isSuccess()).isFalse();
         }
 
         @Test
         @DisplayName("AND NOT nested inside FOLLOWEDBY is rejected")
         void andNotNestedInFollowedBy_rejected() {
-            var result = translator.translate("(insider AND NOT compliance) FOLLOWEDBY{3} trading");
+            var result = translator.translate("(insider AND NOT (compliance)) FOLLOWEDBY{3} trading");
             assertThat(result.isSuccess()).isFalse();
         }
 
         @Test
         @DisplayName("AND NOT nested inside OR is rejected")
         void andNotNestedInOr_rejected() {
-            var result = translator.translate("price OR (insider AND NOT compliance)");
+            var result = translator.translate("price OR (insider AND NOT (compliance))");
             assertThat(result.isSuccess()).isFalse();
         }
 
         @Test
         @DisplayName("AND NOT nested inside AND is rejected")
         void andNotNestedInAnd_rejected() {
-            var result = translator.translate("price AND (insider AND NOT compliance)");
+            var result = translator.translate("price AND (insider AND NOT (compliance))");
             assertThat(result.isSuccess()).isFalse();
         }
 
         @Test
         @DisplayName("A second AND NOT nested inside the EXCLUDED side of a top-level AND NOT is rejected")
         void andNotNestedInExcludedSideOfTopLevelAndNot_rejected() {
-            var result = translator.translate("insider AND NOT (compliance AND NOT legal)");
+            var result = translator.translate("insider AND NOT (compliance AND NOT (legal))");
             assertThat(result.isSuccess()).isFalse();
         }
 
         @Test
         @DisplayName("A second AND NOT nested inside the REQUIRED side of a top-level AND NOT is rejected")
         void andNotNestedInRequiredSideOfTopLevelAndNot_rejected() {
-            var result = translator.translate("(insider AND NOT compliance) AND NOT legal");
+            var result = translator.translate("(insider AND NOT (compliance)) AND NOT (legal)");
             assertThat(result.isSuccess()).isFalse();
         }
 
         @Test
         @DisplayName("AND NOT deeply nested inside multiple wrapping parens and a NEAR is still rejected")
         void andNotDeeplyNested_rejected() {
-            var result = translator.translate("((price NEAR{3} (insider AND NOT compliance)))");
+            var result = translator.translate("((price NEAR{3} (insider AND NOT (compliance))))");
             assertThat(result.isSuccess()).isFalse();
         }
 
@@ -959,7 +959,7 @@ class TermSyntaxTranslatorTest {
         @Test
         @DisplayName("Simple top-level AND NOT still compiles correctly")
         void simpleTopLevelAndNot_stillAccepted() {
-            var result = translator.translate("insider AND NOT compliance");
+            var result = translator.translate("insider AND NOT (compliance)");
             assertThat(result.isSuccess()).isTrue();
             var success = (TranslationResult.Success) result;
             assertThat(success.requiresExclusionCheck()).isTrue();
@@ -968,7 +968,7 @@ class TermSyntaxTranslatorTest {
         @Test
         @DisplayName("Chained AND NOT (multiple excluded OPERANDS of one top-level node, not nesting) still compiles")
         void chainedAndNot_stillAccepted() {
-            var result = translator.translate("insider AND NOT compliance AND NOT legal");
+            var result = translator.translate("insider AND NOT (compliance) AND NOT (legal)");
             assertThat(result.isSuccess()).isTrue();
             var success = (TranslationResult.Success) result;
             assertThat(success.requiresExclusionCheck()).isTrue();
@@ -979,7 +979,7 @@ class TermSyntaxTranslatorTest {
                 "(not the reverse), still compiles — only NEAR-containing-AndNot is rejected, " +
                 "not AndNot-containing-NEAR")
         void andNotAtTopLevelWithNearInsideRequiredSide_stillAccepted() {
-            var result = translator.translate("(insider NEAR{5} trading) AND NOT compliance");
+            var result = translator.translate("(insider NEAR{5} trading) AND NOT (compliance)");
             assertThat(result.isSuccess()).isTrue();
             var success = (TranslationResult.Success) result;
             assertThat(success.requiresExclusionCheck()).isTrue();
@@ -992,6 +992,108 @@ class TermSyntaxTranslatorTest {
             assertThat(result.isSuccess()).isTrue();
             var success = (TranslationResult.Success) result;
             assertThat(success.requiresExclusionCheck()).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("Standalone NOT — always a group, always paired with AND")
+    class StandaloneNot {
+
+        // ── The five examples from the requirement, verbatim ────────────────────
+
+        @Test
+        @DisplayName("VALID: bond AND (NOT (james bond))")
+        void bondAndNotJamesBond_valid() {
+            var s = translateOk("bond AND (NOT (james bond))");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+            assertThat(s.hsPatterns()).containsExactly("bond");
+            assertThat(s.exclusionRegexs().getFirst()).contains("james bond");
+        }
+
+        @Test
+        @DisplayName("INVALID: NOT (james bond) — no preceding required expression")
+        void bareNotAtRoot_invalid() {
+            String msg = translateError("NOT (james bond)");
+            assertThat(msg).containsIgnoringCase("NOT");
+            assertThat(msg).contains("preceding required expression");
+        }
+
+        @Test
+        @DisplayName("INVALID: apple NOT NEAR{10} banana — NOT directly before a proximity operator")
+        void notDirectlyBeforeNear_invalid() {
+            String msg = translateError("apple NOT NEAR{10} banana");
+            assertThat(msg).containsIgnoringCase("NOT");
+            assertThat(msg).containsIgnoringCase("NEAR");
+        }
+
+        @Test
+        @DisplayName("INVALID: apple AND NOT NEAR{10} banana — NOT not immediately followed by '('")
+        void andNotDirectlyBeforeNear_invalid() {
+            String msg = translateError("apple AND NOT NEAR{10} banana");
+            assertThat(msg).containsIgnoringCase("NOT");
+            assertThat(msg).contains("parenthesised group");
+        }
+
+        @Test
+        @DisplayName("VALID: apple AND (NOT (apple NEAR{10} banana)) — NOT wraps an arbitrary sub-expression")
+        void appleAndNotNearBanana_valid() {
+            var s = translateOk("apple AND (NOT (apple NEAR{10} banana))");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+            assertThat(s.hsPatterns()).containsExactly("apple");
+            assertThat(s.exclusionRegexs().getFirst()).contains("apple").contains("banana");
+        }
+
+        // ── Both spellings are equivalent ────────────────────────────────────────
+
+        @Test
+        @DisplayName("The glued 'AND NOT (...)' spelling produces the identical shape")
+        void gluedSpelling_sameShapeAsNotGroup() {
+            var viaNotGroup = translateOk("bond AND (NOT (james bond))");
+            var viaGlued = translateOk("bond AND NOT (james bond)");
+            assertThat(viaGlued.hsPatterns()).isEqualTo(viaNotGroup.hsPatterns());
+            assertThat(viaGlued.exclusionRegexs()).isEqualTo(viaNotGroup.exclusionRegexs());
+        }
+
+        @Test
+        @DisplayName("Multiple NOT-groups at the same AND level chain into one excluded side, " +
+                "same as chained 'AND NOT b AND NOT c'")
+        void multipleNotGroups_chainIntoOneExcludedSide() {
+            var s = translateOk("apple AND (NOT (banana)) AND (NOT (cherry))");
+            assertThat(s.requiresExclusionCheck()).isTrue();
+            assertThat(s.exclusionRegexs().getFirst()).contains("banana").contains("cherry");
+        }
+
+        // ── Other illegal placements ──────────────────────────────────────────────
+
+        @Test
+        @DisplayName("INVALID: NOT-group as an OR alternative")
+        void notGroupAsOrAlternative_invalid() {
+            String msg = translateError("apple OR (NOT (banana))");
+            assertThat(msg).containsIgnoringCase("NOT");
+            assertThat(msg).contains("OR alternative");
+        }
+
+        @Test
+        @DisplayName("INVALID: NOT-group as a NEAR operand")
+        void notGroupAsNearOperand_invalid() {
+            String msg = translateError("apple NEAR{5} (NOT (banana))");
+            assertThat(msg).containsIgnoringCase("NOT");
+            assertThat(msg).containsIgnoringCase("NEAR/FOLLOWEDBY operand");
+        }
+
+        @Test
+        @DisplayName("INVALID: NOT-group as the FIRST (and only) operand of AND, nothing else present")
+        void notGroupAloneInParens_invalid() {
+            String msg = translateError("(NOT (banana))");
+            assertThat(msg).containsIgnoringCase("NOT");
+            assertThat(msg).contains("preceding required expression");
+        }
+
+        @Test
+        @DisplayName("(NOT LAUNCHING) with no immediate '(' after NOT is still literal text, unaffected")
+        void notAsLiteralWordUnaffected() {
+            var s = translateOk("((disintermediate*) OR (NOT LAUNCHING) OR (NOT TO LAUNCH THE PRODUCT))");
+            assertThat(s.hsPatterns().getFirst()).contains("NOT LAUNCHING").contains("NOT TO LAUNCH THE PRODUCT");
         }
     }
 }

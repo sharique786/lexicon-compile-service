@@ -73,6 +73,24 @@ sealed interface Ast {
     }
 
     /**
+     * {@code NOT (X)} — a unary exclusion group. {@code NOT} is never an
+     * independent operator; this node exists ONLY as an intermediate shape
+     * produced by {@link ExpressionParser#parseAtom} for the two supported
+     * spellings ({@code X AND (NOT (Y))} and {@code X AND NOT (Y)}) and
+     * IMMEDIATELY folded, together with whatever other operand(s) share its
+     * enclosing {@code AND} level, into the existing {@link AndNot} node by
+     * {@link ExpressionParser#parseAnd} — see that method's Javadoc for the
+     * exact fold. A {@code Not} node therefore never appears in the final
+     * {@link Ast} handed to {@link PatternCodeGenerator}/{@link TermSyntaxTranslator}:
+     * one surviving unfolded (used standalone with nothing preceding it, as
+     * an {@link Or} alternative, or as a {@link Near}/{@link FollowedBy}
+     * operand) is rejected during parsing itself, before it could reach
+     * here — see {@link ExpressionParser#foldNotOperands}.
+     */
+    record Not(Ast operand) implements Ast {
+    }
+
+    /**
      * A single unquoted word — may contain a {@code *} wildcard and/or a literal {@code ?}.
      */
     record Word(String text) implements Ast {

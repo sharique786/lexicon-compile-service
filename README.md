@@ -67,7 +67,7 @@ other translator class is a focused, independently-testable stage it calls.
 | Stage | Class | Responsibility |
 |---|---|---|
 | Lexing | `Tokenizer` | Raw text → token stream; rejects malformed `NEAR{n}`/`FOLLOWEDBY{n}`, unbalanced parens/quotes, meaningless input |
-| Parsing | `ExpressionParser` | Tokens → `Ast`; enforces grammar (operator precedence, AND operand ceiling, `NOT` only as `AND NOT` — never as a standalone operator, though it's fine as an ordinary literal word) |
+| Parsing | `ExpressionParser` | Tokens → `Ast`; enforces grammar (operator precedence, AND operand ceiling, `NOT` only immediately followed by a parenthesised group and only as a later operand of `AND` — never standalone, though it's fine as an ordinary literal word) |
 | Complexity estimate | `PatternComplexityAnalyzer` | Pre-Hyperscan heuristic score deciding whether to attempt decomposition |
 | Decomposition | `PatternDecomposer` | Splits an over-budget NEAR/FOLLOWEDBY tree into independent leaves |
 | Code generation | `PatternCodeGenerator` | `Ast` → PCRE string(s), delegating proximity gaps to `MultiLanguagePatternBuilder` |
@@ -89,7 +89,7 @@ Every Natural Language term description passes through the pipeline above.
 |---|---|---|
 | `OR` | Any operand matches | `price OR spread` |
 | `AND` | All operands co-occur anywhere in the message, in any order, unbounded distance | `insider AND announcement AND price` |
-| `AND NOT` | Required side matches AND the excluded side(s) do not — see below | `insider AND NOT disclosed` |
+| `AND NOT` | Required side matches AND the excluded side(s) do not — see below | `insider AND NOT (disclosed)` or `insider AND (NOT (disclosed))` |
 | `NEAR{n}` | Operands within `n` words/characters of each other, **either order** | `(crap OR bad) NEAR{3} (bonus OR comp)` |
 | `FOLLOWEDBY{n}` | Left operand, then right operand, within `n` words/characters, **left-to-right order only** | `don't FOLLOWEDBY{3} compliance` |
 | `*` (suffix/prefix) | Wildcard — `chimp*` → `chimp\S*`, `*handler` → `\S*handler` | |
@@ -541,33 +541,41 @@ shape under [API reference](#api-reference).
 
 | Rule | Behavior |
 |---|---|
-| `NOT` between two already-parsed expressions (an apparent standalone "but not" operator, e.g. `(a) NOT (b)`, `(a) NOT b`) | Rejected — must be written `X AND NOT Y` |
-| `NOT` starting a fresh atom (the very first token of the term, or immediately after `(`, `OR`, `AND`, `AND NOT`, `NEAR{n}`, or `FOLLOWEDBY{n}`) | **Accepted** — treated as ordinary literal text, folded into whatever word/phrase run follows (e.g. `(NOT LAUNCHING)` → the literal phrase "NOT LAUNCHING") — see below |
+| `NOT` not immediately followed by `(` (e.g. `apple NOT NEAR{10} banana`, `apple AND NOT NEAR{10} banana`, `apple AND NOT banana`) | Rejected — `NOT` must always be followed immediately by a parenthesised group |
+| `NOT (...)` with nothing preceding it at the same level (e.g. `NOT (james bond)` alone, or as the sole/first content of a parenthesised group with no other operand) | Rejected — `NOT` always needs a preceding required expression joined by `AND` |
+| `NOT (...)` used as an `OR` alternative, or as a `NEAR`/`FOLLOWEDBY` operand | Rejected — `NOT` is only ever valid as a later operand of `AND` |
+| `NOT (...)` as a later operand of `AND` (e.g. `bond AND (NOT (james bond))`, or the equivalent glued spelling `bond AND NOT (james bond)`) | **Accepted** — both spellings produce the identical required/excluded shape |
+| `NOT` starting a fresh atom, NOT immediately followed by `(` (the very first token of the term, or immediately after `(`, `OR`, `AND`, `AND NOT`, `NEAR{n}`, or `FOLLOWEDBY{n}`) | **Accepted** — treated as ordinary literal text, folded into whatever word/phrase run follows (e.g. `(NOT LAUNCHING)` → the literal phrase "NOT LAUNCHING") — see below |
 | AND operand ceiling | More than 5 operands at one `AND`/`AND NOT`-required level rejected |
 | Chained `NEAR`/`FOLLOWEDBY` without explicit parentheses (`A FOLLOWEDBY{5} B FOLLOWEDBY{6} C`) | **Accepted**, not rejected — parsed as left-associative nesting, with a warning recorded (kept for backward compatibility with existing lexicon terms) |
 | Malformed/unbalanced structure that doesn't match the grammar | Rejected with a generic "could not parse term" error naming the position |
 
-**`NOT` as a word vs. `NOT` as an operator** — `NOT` is reserved only in
-the sense that `AND NOT` is the sole way to write an exclusion; a bare
-`NOT` is rejected only when it sits where the grammar expects an operator
-— i.e. immediately after a *complete, already-parsed* expression (closing
-a parenthesised group, or continuing an `OR`/`AND`/`NEAR`/`FOLLOWEDBY`
-chain) — because that shape (`X NOT Y`) reads as an attempted "but not"
-operator this grammar (and Hyperscan, which has no negative lookaround)
-does not support standalone. `NOT` appearing anywhere else — starting a
-fresh atom, where there is no left-hand expression for it to negate — is
-just literal text:
+**`NOT` is always a unary prefix on a parenthesised group, and that group
+is always a later operand of `AND`** — never a standalone operator, never
+directly combinable with a proximity operator, and never usable on its own:
+
+```
+✓ bond AND (NOT (james bond))                — valid: NOT-group as an AND operand
+✓ apple AND (NOT (apple NEAR{10} banana))     — valid: NOT wraps an arbitrary sub-expression
+✓ apple AND NOT (banana)                      — valid: the "glued" spelling, same shape
+✗ NOT (james bond)                            — rejected: no preceding required expression
+✗ apple NOT NEAR{10} banana                   — rejected: NOT directly before a proximity operator
+✗ apple AND NOT NEAR{10} banana               — rejected: NOT not immediately followed by '('
+```
+
+**`NOT` as a word vs. `NOT` as an operator** — `NOT` starting a fresh atom
+with nothing immediately after it that looks like an operand it could
+negate (i.e. NOT immediately followed by `(`) is just literal text, folded
+into whatever word/phrase run follows:
 
 ```
 ((disintermediate*) OR (NOT LAUNCHING) OR (NOT TO LAUNCH THE PRODUCT))
   → PASS: (?:disintermediate\S*|NOT LAUNCHING|NOT TO LAUNCH THE PRODUCT)
     ("NOT" is literal in both OR-branches — it starts each phrase)
 
-((disintermediate*) NOT ((LAUNCHING) OR (TO LAUNCH THE PRODUCT)))
-  → FAILED (translationError): "Standalone NOT is not supported as an
-    operator ... NOT must always be paired with AND, written as
-    'X AND NOT Y' ..."
-    ("NOT" sits between two complete, already-closed expressions)
+price AND NOT (rigging OR change)
+  → required: price, excluded: (?:rigging|change)
+    ("NOT" immediately followed by '(', as a later AND operand — the operator form)
 ```
 
 ### 4. Semantic / Hyperscan-stage validation (`TermSyntaxTranslator`)
@@ -672,7 +680,7 @@ Request:
   "requestType": "Natural Language",
   "terms": [
     { "termId": "lexicon_research_1::1", "termDescription": "(manipulate*) NEAR{5} ((price) OR (spread) OR (stock))" },
-    { "termId": "lexicon_research_1::2", "termDescription": "tip* AND NOT disclaimer" },
+    { "termId": "lexicon_research_1::2", "termDescription": "tip* AND NOT (disclaimer)" },
     { "termId": "lexicon_research_1::3", "termDescription": "((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR (记录))" },
     { "termId": "lexicon_research_1::4", "termDescription": "insider AND NOT (compliance NEAR{5} approved)" }
   ]
@@ -709,7 +717,7 @@ Response — one entry per term, showing a **simple PASS**, a **PASS with
     },
     {
       "termId": "lexicon_research_1::2",
-      "termDescription": "tip* AND NOT disclaimer",
+      "termDescription": "tip* AND NOT (disclaimer)",
       "compilationStatus": "PASS",
       "regexPattern": ["tip\\S*"],
       "hyperscanFlags": 1,

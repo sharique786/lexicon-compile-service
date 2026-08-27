@@ -159,6 +159,10 @@ final class PatternComplexityAnalyzer {
                 yield Math.multiplyExact(nested, charGapPenalty(fb.left(), fb.right(), fb.distance()));
             }
 
+            case Ast.Not ignored -> throw new IllegalStateException(
+                    "unreachable — every Ast.Not is folded into Ast.AndNot (or rejected) by "
+                    + "ExpressionParser.parseAnd() before an Ast is ever returned; see Ast.Not Javadoc");
+
             case Ast.Word w -> containsWildcard(w.text()) ? WILDCARD_WEIGHT : PLAIN_WEIGHT;
 
             case Ast.Phrase p -> p.words().stream().anyMatch(PatternComplexityAnalyzer::containsWildcard)
@@ -249,6 +253,9 @@ final class PatternComplexityAnalyzer {
             case Ast.AndNot andNot -> collectText(andNot.required());
             case Ast.Near near -> collectText(near.left()) + " " + collectText(near.right());
             case Ast.FollowedBy fb -> collectText(fb.left()) + " " + collectText(fb.right());
+            case Ast.Not ignored -> throw new IllegalStateException(
+                    "unreachable — every Ast.Not is folded into Ast.AndNot (or rejected) by "
+                    + "ExpressionParser.parseAnd() before an Ast is ever returned; see Ast.Not Javadoc");
             case Ast.Word w -> w.text();
             case Ast.Phrase p -> String.join(" ", p.words());
             case Ast.QuotedPhrase q -> q.text();

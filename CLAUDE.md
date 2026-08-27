@@ -51,9 +51,11 @@ exactly which fields matter and why.
 ```
 term description (raw text)
   → Tokenizer               lexical analysis
-  → ExpressionParser        builds an Ast (sealed interface, 8 node types —
-                             Or, And, AndNot, Near, FollowedBy, Word, Phrase,
-                             QuotedPhrase)
+  → ExpressionParser        builds an Ast (sealed interface, 9 node types —
+                             Or, And, AndNot, Not, Near, FollowedBy, Word,
+                             Phrase, QuotedPhrase — Not is parser-internal
+                             only, always folded into AndNot or rejected
+                             before parsing returns; see "Standalone NOT")
   → PatternComplexityAnalyzer   estimates Hyperscan compiled-state cost
                                  BEFORE Hyperscan ever sees the pattern
   → PatternDecomposer        (only if over budget) splits into independent
@@ -189,6 +191,53 @@ error, no warning, PASS status. `rejectNestedAndNot()` (in
 sides). **This is a deliberate rejection, not a missing feature** — see
 that method's Javadoc for why auto-hoisting the exclusion to the top level
 was rejected as a "fix" (it would silently change what the term means).
+
+### 4. Standalone NOT — a real unary operator now, always a group, always paired with AND
+
+`NOT` is a genuine unary prefix operator, but with two hard constraints,
+both enforced at PARSE time (`ExpressionParser`), not left to a downstream
+semantic check: it must always be immediately followed by a parenthesised
+group, and that group must always be a LATER operand of `AND` (there must
+be at least one other, non-`NOT` operand at the same `AND` level):
+
+```
+✓ bond AND (NOT (james bond))                — NOT-group as an AND operand
+✓ apple AND (NOT (apple NEAR{10} banana))    — NOT wraps an arbitrary sub-expression
+✓ apple AND NOT (banana)                      — the "glued" spelling; identical shape
+✗ NOT (james bond)                            — no preceding required expression
+✗ apple NOT NEAR{10} banana                   — NOT directly before a proximity operator
+✗ apple AND NOT NEAR{10} banana               — NOT not immediately followed by '('
+```
+
+Both spellings (`X AND (NOT (Y))` and `X AND NOT (Y)`) parse to the exact
+same `Ast.AndNot(required=X, excluded=[Y])` shape `ExpressionParser` already
+produced for the older `AND NOT` syntax — **no new AST node survives
+parsing**, and nothing downstream (`PatternCodeGenerator`,
+`HyperscanCombinationHandler`, `TermCompilationResult`, `patternMapping`,
+`rejectNestedAndNot`) needed to change. `ExpressionParser.parseAtom()`
+recognises `NOT '('` as an internal `Ast.Not` atom; `parseAnd()` immediately
+folds every `Ast.Not` operand it collects into one `Ast.AndNot` (mirroring
+the loop `parseAndNot()` already used for the glued spelling), or rejects
+the whole level if that would leave no required operand. A `NOT`-group
+wrapped in its own extra parentheses (`bond AND (NOT (james bond))`) defers
+the fold one level up rather than rejecting immediately — see
+`ExpressionParser.foldNotOperands` Javadoc for why, and
+`ExpressionParser.rejectBareNot` for the explicit checks (OR alternative,
+NEAR/FOLLOWEDBY operand, AND NOT's own required side, or the whole term's
+root) that catch a `NOT`-group that never found an enclosing `AND` to fold
+into. **This is a breaking syntax change from an earlier version**: `AND
+NOT` used to accept ANY expression after it (`price AND NOT legitimate`,
+no parens required) — it now REQUIRES the excluded side to be an explicit
+parenthesised group (`price AND NOT (legitimate)`). Existing lexicon terms
+using the old bare-word form need that one parenthesis added; the
+underlying two-pattern AND NOT semantics are completely unchanged.
+
+`NOT` starting a fresh atom that is NOT immediately followed by `(` is
+still ordinary literal text, exactly as before (e.g. `(NOT LAUNCHING)`
+still compiles as the literal phrase "NOT LAUNCHING") — this only changes
+behavior for a bare `NOT` immediately followed by `(`, which used to be
+literal text too (folded into `parseWordOrPhrase()`) and is now the
+NOT-group operator instead.
 
 ---
 
@@ -348,7 +397,7 @@ Genuinely compiled and tested — not merely reviewed — against a hand-built
 but functionally faithful stub environment (real Hyperscan `Scanner`/
 `Database` simulation with genuine `COMBINATION`/`QUIET` evaluation, real
 JSON parsing, a real parameterized-test runner for `@ParameterizedTest`/
-`@ValueSource`). 290 tests passing as of the nested-AND-NOT fix. The one
+`@ValueSource`). 439 tests passing as of the standalone-NOT fix. The one
 file needing full Spring Test infrastructure
 (`LexiconCompileControllerTest`, `MockMvc`) is out of this stub
 environment's scope — reviewed by hand, not compiled, consistent with the
@@ -438,3 +487,11 @@ verification scaffolding, not a repository fixture.
     `/compile/bundle` now returns HTTP 500 with the JSON (no zip) when this
     happens — see "The cross-service JSON contract" above and
     `LexiconCompileBundleService.CompileBundleResult#databaseBuildFailed`.
+12. **Standalone NOT support added**: `NOT` is now a real unary prefix
+    operator (`NOT` immediately followed by a parenthesised group), usable
+    as a later operand of `AND` — see "Standalone NOT" above. A breaking
+    syntax change: the excluded side of `AND NOT` must now always be an
+    explicit parenthesised group (`price AND NOT (legitimate)`), where it
+    previously accepted any bare expression (`price AND NOT legitimate`).
+    Folds into the exact same `Ast.AndNot` shape at parse time — no
+    downstream class changed.

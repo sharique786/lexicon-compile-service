@@ -237,19 +237,46 @@ class HyperscanCompilerTest {
 
     @Test
     @Order(44)
-    @DisplayName("toAndNotExpressionFlags(): AND NOT case — exactly CASELESS, unconditionally")
-    void toAndNotExpressionFlagsIsCaselessOnly() {
-        assertThat(compiler.toAndNotExpressionFlags()).isEqualTo(
+    @DisplayName("toAndNotExpressionFlags(bitmask): AND NOT case, ASCII-only bitmask — exactly CASELESS")
+    void toAndNotExpressionFlagsIsCaselessOnlyForAscii() {
+        assertThat(compiler.toAndNotExpressionFlags(HyperscanCompiler.HS_FLAG_CASELESS)).isEqualTo(
                 java.util.EnumSet.of(com.gliwka.hyperscan.wrapper.ExpressionFlag.CASELESS));
     }
 
     @Test
+    @Order(44)
+    @DisplayName("toAndNotExpressionFlags(bitmask): non-ASCII bitmask — additionally UTF8 + UCP "
+            + "(confirmed-fixed regression: an AND NOT side containing an emoji/\\x{XXXX}-encoded "
+            + "codepoint above 0xFF needs UTF8 mode to compile at all)")
+    void toAndNotExpressionFlagsAddsUtf8UcpForNonAscii() {
+        int bitmask = HyperscanCompiler.HS_FLAG_CASELESS | HyperscanCompiler.HS_FLAG_UTF8 | HyperscanCompiler.HS_FLAG_UCP;
+        assertThat(compiler.toAndNotExpressionFlags(bitmask)).isEqualTo(java.util.EnumSet.of(
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.CASELESS,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.UTF8,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.UCP));
+    }
+
+    @Test
     @Order(45)
-    @DisplayName("toSubExpressionFlags(): decomposed-leaf case — exactly CASELESS + QUIET, unconditionally")
-    void toSubExpressionFlagsIsCaselessAndQuiet() {
-        assertThat(compiler.toSubExpressionFlags()).isEqualTo(java.util.EnumSet.of(
+    @DisplayName("toSubExpressionFlags(bitmask): decomposed-leaf case, ASCII-only bitmask — exactly CASELESS + QUIET")
+    void toSubExpressionFlagsIsCaselessAndQuietForAscii() {
+        assertThat(compiler.toSubExpressionFlags(HyperscanCompiler.HS_FLAG_CASELESS)).isEqualTo(java.util.EnumSet.of(
                 com.gliwka.hyperscan.wrapper.ExpressionFlag.CASELESS,
                 com.gliwka.hyperscan.wrapper.ExpressionFlag.QUIET));
+    }
+
+    @Test
+    @Order(45)
+    @DisplayName("toSubExpressionFlags(bitmask): non-ASCII bitmask — additionally UTF8 + UCP, same "
+            + "confirmed-fixed regression as the AND NOT case (a decomposed leaf's emoji content is "
+            + "\\x{XXXX}-encoded the same way)")
+    void toSubExpressionFlagsAddsUtf8UcpForNonAscii() {
+        int bitmask = HyperscanCompiler.HS_FLAG_CASELESS | HyperscanCompiler.HS_FLAG_UTF8 | HyperscanCompiler.HS_FLAG_UCP;
+        assertThat(compiler.toSubExpressionFlags(bitmask)).isEqualTo(java.util.EnumSet.of(
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.CASELESS,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.QUIET,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.UTF8,
+                com.gliwka.hyperscan.wrapper.ExpressionFlag.UCP));
     }
 
     // ── Thread safety ─────────────────────────────────────────────────────────

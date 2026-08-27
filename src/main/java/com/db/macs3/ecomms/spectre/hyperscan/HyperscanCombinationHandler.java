@@ -183,13 +183,16 @@ public class HyperscanCombinationHandler {
      * term's own script content any more:
      * <ul>
      *   <li>AND NOT (any term, regardless of decomposition on either side) —
-     *       {@link HyperscanCompiler#toAndNotExpressionFlags} ({@code CASELESS} only)</li>
+     *       {@link HyperscanCompiler#toAndNotExpressionFlags(int)} ({@code CASELESS}
+     *       always, plus {@code UTF8}/{@code UCP} when the term's content needs them)</li>
      *   <li>Simple, single-pattern, non-AND-NOT PASS term —
      *       {@link HyperscanCompiler#toExpressionFlags} ({@code CASELESS},
      *       {@code DOTALL}, {@code SOM_LEFTMOST} always, plus {@code UTF8}/
      *       {@code UCP} when the term's content needs them)</li>
      *   <li>Pure decomposition leaf, no AND NOT —
-     *       {@link HyperscanCompiler#toSubExpressionFlags} ({@code CASELESS}, {@code QUIET})</li>
+     *       {@link HyperscanCompiler#toSubExpressionFlags(int)} ({@code CASELESS},
+     *       {@code QUIET} always, plus {@code UTF8}/{@code UCP} when the term's
+     *       content needs them)</li>
      * </ul>
      *
      * @param termResult     a PASS result
@@ -205,8 +208,8 @@ public class HyperscanCombinationHandler {
         if (termResult.requiresExclusionCheck()) {
             // AND NOT — no combination, regardless of decomposition on either side.
             // Every pattern (both sides) is its own plain, individually-reportable expression.
-            List<Integer> requiredIds = addPlainSide(requiredPatterns, idAllocator, expressionsOut);
-            List<Integer> excludedIds = addPlainSide(termResult.exclusionPattern(), idAllocator, expressionsOut);
+            List<Integer> requiredIds = addPlainSide(requiredPatterns, termResult.hyperscanFlags(), idAllocator, expressionsOut);
+            List<Integer> excludedIds = addPlainSide(termResult.exclusionPattern(), termResult.hyperscanFlags(), idAllocator, expressionsOut);
             String patternMapping = buildAndNotFormula(requiredIds, excludedIds);
             return new ExpressionAssignment(null, requiredIds, excludedIds, patternMapping);
         }
@@ -222,7 +225,7 @@ public class HyperscanCombinationHandler {
 
         // Pure decomposition, no AND NOT — native COMBINATION remains safe here (no negation
         // involved) — see class Javadoc for why this path is unaffected by the AND NOT fix.
-        List<Integer> leafIds = addQuietSide(requiredPatterns, idAllocator, expressionsOut);
+        List<Integer> leafIds = addQuietSide(requiredPatterns, termResult.hyperscanFlags(), idAllocator, expressionsOut);
         String combinationFormula = "(" + joinWithAnd(leafIds) + ")";
         expressionsOut.add(new Expression(combinationFormula, compiler.toCombinationExpressionFlags(), termNumber));
         return new ExpressionAssignment(termNumber, null, null, combinationFormula);
@@ -233,16 +236,22 @@ public class HyperscanCombinationHandler {
      * non-COMBINATION, individually reportable) expression — used only for
      * AND NOT terms now, where every required/excluded pattern must report
      * on its own so the caller can evaluate the boolean condition after the
-     * whole scan completes. Flagged via {@link HyperscanCompiler#toAndNotExpressionFlags}
-     * ({@code CASELESS} only — no SOM_LEFTMOST, even though these are plain,
-     * non-QUIET expressions for which SOM_LEFTMOST would be structurally safe).
+     * whole scan completes. Flagged via {@link HyperscanCompiler#toAndNotExpressionFlags(int)}
+     * ({@code CASELESS} always, plus {@code UTF8}/{@code UCP} when
+     * {@code hyperscanFlags} indicates non-ASCII content — see that method's
+     * Javadoc for the confirmed "Hexadecimal value is greater than \xFF"
+     * regression this fixes; still no SOM_LEFTMOST, even though these are
+     * plain, non-QUIET expressions for which SOM_LEFTMOST would be
+     * structurally safe).
+     *
+     * @param hyperscanFlags the term's own {@code TermCompilationResult.hyperscanFlags()} bitmask
      */
-    private List<Integer> addPlainSide(List<String> patterns, HyperscanIdAllocator idAllocator,
+    private List<Integer> addPlainSide(List<String> patterns, int hyperscanFlags, HyperscanIdAllocator idAllocator,
                                        List<Expression> expressionsOut) {
         List<Integer> ids = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
             int id = idAllocator.allocate();
-            expressionsOut.add(new Expression(pattern, compiler.toAndNotExpressionFlags(), id));
+            expressionsOut.add(new Expression(pattern, compiler.toAndNotExpressionFlags(hyperscanFlags), id));
             ids.add(id);
         }
         return ids;
@@ -252,16 +261,20 @@ public class HyperscanCombinationHandler {
      * Adds every pattern in {@code patterns} as its own QUIET expression,
      * returning their allocated ids. Used only for the pure-decomposition
      * (no AND NOT) COMBINATION path, which remains safe — see class Javadoc.
-     * Flagged via {@link HyperscanCompiler#toSubExpressionFlags}
-     * ({@code CASELESS} + {@code QUIET} — never SOM_LEFTMOST, confirmed
-     * incompatible with QUIET).
+     * Flagged via {@link HyperscanCompiler#toSubExpressionFlags(int)}
+     * ({@code CASELESS} + {@code QUIET} always, plus {@code UTF8}/{@code UCP}
+     * when {@code hyperscanFlags} indicates non-ASCII content — same
+     * confirmed regression as {@link #addPlainSide} — never SOM_LEFTMOST,
+     * confirmed incompatible with QUIET).
+     *
+     * @param hyperscanFlags the term's own {@code TermCompilationResult.hyperscanFlags()} bitmask
      */
-    private List<Integer> addQuietSide(List<String> patterns, HyperscanIdAllocator idAllocator,
+    private List<Integer> addQuietSide(List<String> patterns, int hyperscanFlags, HyperscanIdAllocator idAllocator,
                                        List<Expression> expressionsOut) {
         List<Integer> ids = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
             int id = idAllocator.allocate();
-            expressionsOut.add(new Expression(pattern, compiler.toSubExpressionFlags(), id));
+            expressionsOut.add(new Expression(pattern, compiler.toSubExpressionFlags(hyperscanFlags), id));
             ids.add(id);
         }
         return ids;

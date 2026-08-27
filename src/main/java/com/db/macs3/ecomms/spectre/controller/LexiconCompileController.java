@@ -167,15 +167,28 @@ public class LexiconCompileController {
      * (identical shape to {@code /compile}'s response) and a single combined
      * Hyperscan database file built from every term that reached PASS.
      *
-     * <p>Zip contents:
+     * <p>Zip contents (on a 200 response):
      * <ul>
      *   <li>{@code {ruleName}-compile-results.json} — always present</li>
      *   <li>{@code {ruleName}.hdb} — present when at least one term passed
      *       and the combined multi-pattern compile succeeded</li>
      *   <li>{@code NO_DATABASE.txt} — present instead of the {@code .hdb}
-     *       file when no database could be built (zero PASS terms, or the
-     *       combined compile itself failed); explains why</li>
+     *       file when zero terms reached PASS (already fully explained by
+     *       each term's own FAILED status in the JSON)</li>
      * </ul>
+     *
+     * <p><b>500 instead of a zip: every term PASSED but the combined build itself failed</b>
+     * <p>When every term individually resolves PASS/FAILED normally but the
+     * combined multi-pattern Hyperscan database build/serialisation then
+     * fails anyway (e.g. a flag/state-count interaction only visible once
+     * every PASS expression is compiled together — see
+     * {@code LexiconCompileBundleService.CompileBundleResult#databaseBuildFailed}),
+     * this endpoint does NOT return a 200 zip with a buried
+     * {@code NO_DATABASE.txt} note next to per-term statuses that would still
+     * read PASS. It returns HTTP 500 with {@code Content-Type: application/json}
+     * instead of a zip — body is the same JSON shape {@code /compile} returns,
+     * with the top-level {@code databaseError} field populated (see
+     * {@link CompileResponse#databaseError()}).
      *
      * <p>The {@code .hdb} file is produced by
      * {@code com.gliwka.hyperscan.wrapper.Database#save}, which writes both
@@ -201,6 +214,22 @@ public class LexiconCompileController {
                 request.getLexiconRuleName(), request.getTerms().size());
 
         LexiconCompileBundleService.CompileBundleResult bundle = bundleService.buildBundle(request);
+
+        // Every term reached PASS/FAILED normally, but the combined Hyperscan database
+        // build/serialisation itself then failed — a genuine system-level failure, not a
+        // per-term translation problem (see CompileBundleResult.databaseBuildFailed
+        // Javadoc). Returning a 200 zip here (with only a buried NO_DATABASE.txt note and
+        // every term's own compilationStatus still reading PASS) would misrepresent this as
+        // success. Surface it as an explicit HTTP error with the JSON results — carrying
+        // databaseError — as the body, instead of a zip.
+        if (bundle.databaseBuildFailed()) {
+            log.error("compile/bundle database build failed for rule '{}' despite {} PASS term(s): {}",
+                    request.getLexiconRuleName(), bundle.jsonResponse().passCount(), bundle.databaseNote());
+            byte[] errorJson = objectMapper.writeValueAsBytes(bundle.jsonResponse());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(errorJson);
+        }
 
         byte[] zipBytes;
         try {

@@ -258,7 +258,8 @@ public class LexiconCompileBundleService {
             return new CompileBundleResult(jsonResponse, null,
                     "No Hyperscan database file was produced because zero terms reached "
                             + "PASS status. See the JSON results for per-term compilationStatus and "
-                            + "errorLog/translationError details.");
+                            + "errorLog/translationError details.",
+                    false);
         }
 
         HyperscanCompiler.CombinedCompileResult combinedResult =
@@ -266,17 +267,24 @@ public class LexiconCompileBundleService {
 
         if (combinedResult.success()) {
             databaseBuiltCounter.increment();
-            return new CompileBundleResult(jsonResponse, combinedResult.databaseBytes(), null);
+            return new CompileBundleResult(jsonResponse, combinedResult.databaseBytes(), null, false);
         }
 
         databaseFailedCounter.increment();
         log.error("Combined database compile FAILED for rule '{}': {} (failedExpressionId={})",
                 jsonResponse.lexiconRuleName(), combinedResult.errorMessage(), combinedResult.failedExpressionId());
 
+        // Every term individually reached PASS/FAILED normally — this is NOT a per-term
+        // translation problem, it is the combined multi-pattern build itself failing (e.g. a
+        // flag/state-count interaction only visible once every PASS expression is compiled
+        // together). The JSON must say so explicitly via databaseError — otherwise a caller
+        // reading only per-term compilationStatus would see nothing but PASS and wrongly
+        // conclude the bundle is usable, when in fact no .hdb was produced at all.
         String explanation = "No Hyperscan database file was produced.\nReason: "
                 + combinedResult.errorMessage()
                 + describeFailedExpression(jsonResponse, combinedResult.failedExpressionId());
-        return new CompileBundleResult(jsonResponse, null, explanation);
+        CompileResponse errorResponse = jsonResponse.withDatabaseError(explanation);
+        return new CompileBundleResult(errorResponse, null, explanation, true);
     }
 
     /**
@@ -312,20 +320,31 @@ public class LexiconCompileBundleService {
     // ── Result carrier ───────────────────────────────────────────────────────
 
     /**
-     * Carries the two zip-file payloads back to the controller.
+     * Carries the compile outcome back to the controller.
      *
-     * @param jsonResponse           identical shape to {@code /compile}'s response —
-     *                               this is what gets written as the zip's JSON entry
+     * @param jsonResponse           identical shape to {@code /compile}'s response — carries
+     *                               {@code databaseError} populated when {@code databaseBuildFailed}
+     *                               is true, so a caller reading the JSON alone (not just this
+     *                               record) still sees the failure explicitly
      * @param hyperscanDatabaseBytes the combined {@code .hdb} file content, or
      *                               {@code null} when no database could be built
-     * @param databaseNote           explanation written into {@code NO_DATABASE.txt}
-     *                               when {@code hyperscanDatabaseBytes} is null;
+     * @param databaseNote           human-readable explanation for why no database was built;
      *                               null when a database was built successfully
+     * @param databaseBuildFailed    {@code true} only when at least one term reached PASS
+     *                               (so a combined build was actually attempted) and the
+     *                               combined Hyperscan compile/serialisation itself then
+     *                               failed — a genuine system-level failure, as opposed to
+     *                               the "zero PASS terms" case ({@code false} here), which is
+     *                               already fully explained by each term's own FAILED status.
+     *                               The controller uses this to decide whether the response
+     *                               is an HTTP error (bundle unusable despite PASS terms) or
+     *                               an ordinary 200 zip with a {@code NO_DATABASE.txt} note.
      */
     public record CompileBundleResult(
             CompileResponse jsonResponse,
             byte[] hyperscanDatabaseBytes,
-            String databaseNote
+            String databaseNote,
+            boolean databaseBuildFailed
     ) {
         /**
          * @return true when a combined Hyperscan database was produced.

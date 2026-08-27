@@ -55,8 +55,8 @@ import java.util.List;
  * negation (confirmed broken via Hyperscan's own documented evaluation
  * model) was replaced with every required/excluded pattern reporting as its
  * own plain expression, evaluated by the caller after the whole scan
- * completes. See {@link #toSubExpressionFlags} (decomposition leaves),
- * {@link #toAndNotExpressionFlags} (AND NOT sides), and
+ * completes. See {@link #toSubExpressionFlags(int)} (decomposition leaves),
+ * {@link #toAndNotExpressionFlags(int)} (AND NOT sides), and
  * {@link #toCombinationExpressionFlags} (the combination formula itself).
  *
  * <p><b>Dependency note:</b> {@code ExpressionFlag.COMBINATION} and
@@ -191,10 +191,12 @@ public class HyperscanCompiler {
      * Hyperscan compilation even for plain-ASCII patterns (~15x in this
      * project's own performance test). UTF8/UCP are added only when
      * {@code bitmask} indicates non-ASCII content is actually present — see
-     * {@link #toAndNotExpressionFlags} for the AND NOT case and
-     * {@link #toSubExpressionFlags} for the pure-decomposition-leaf case —
-     * both intentionally narrower than this one, and both intentionally have
-     * NO conditional bits at all (see their own Javadoc for why).
+     * {@link #toAndNotExpressionFlags(int)} for the AND NOT case and
+     * {@link #toSubExpressionFlags(int)} for the pure-decomposition-leaf
+     * case — both intentionally narrower than this one (no {@code DOTALL}/
+     * {@code SOM_LEFTMOST}), but UTF8/UCP are conditional there too, for the
+     * same reason (see their own Javadoc for the confirmed regression that
+     * fix addressed).
      *
      * <p><b>Also the general validation flag set</b>
      * <p>{@link #validate} always uses this method (regardless of what a
@@ -239,16 +241,38 @@ public class HyperscanCompiler {
      * no longer uses native COMBINATION and why every required/excluded
      * pattern compiles as its own plain, individually-reportable expression.
      *
-     * <p><b>Fixed, unconditional set — always exactly {@code CASELESS}</b>,
-     * deliberately narrower than {@link #toExpressionFlags}: no
-     * {@code DOTALL}/{@code UTF8}/{@code UCP}, and no {@code SOM_LEFTMOST} —
+     * <p><b>{@code CASELESS} always; {@code UTF8}/{@code UCP} conditional on
+     * {@code bitmask} — confirmed-fixed regression</b>: this used to be a
+     * fixed, unconditional {@code CASELESS}-only set. That broke any AND NOT
+     * term whose required/excluded side contains an emoji or other codepoint
+     * above {@code 0xFF} — {@code PatternCodeGenerator} encodes those as a
+     * literal {@code \x{XXXX}} escape, which Hyperscan/PCRE only accepts in
+     * UTF8 mode; without it, {@code compileCombinedDatabase} fails with
+     * "Hexadecimal value is greater than \xFF at index 0" — even though
+     * {@code TermSyntaxTranslator.translate} had already validated the exact
+     * same pattern text successfully, because validation went through
+     * {@link #toExpressionFlags} (UTF8-conditional) while the real
+     * {@code /compile/bundle} database build went through this method's old
+     * fixed set. Still deliberately narrower than {@link #toExpressionFlags}
+     * in every other respect: no {@code DOTALL}, and no {@code SOM_LEFTMOST} —
      * an AND NOT term's required/excluded patterns are still plain
      * (non-QUIET) expressions, so SOM_LEFTMOST would be structurally SAFE to
-     * add here (unlike the QUIET-sub-expression case), but this case is
-     * scoped to CASELESS only regardless.
+     * add here (unlike the QUIET-sub-expression case), but that flag stays
+     * out regardless.
+     *
+     * @param bitmask HS_FLAG_* bitmask for the whole term (only the UTF8/UCP
+     *                bits matter here) — pass the term's
+     *                {@code TermCompilationResult.hyperscanFlags()}
      */
-    public EnumSet<ExpressionFlag> toAndNotExpressionFlags() {
-        return EnumSet.of(ExpressionFlag.CASELESS);
+    public EnumSet<ExpressionFlag> toAndNotExpressionFlags(int bitmask) {
+        EnumSet<ExpressionFlag> flags = EnumSet.of(ExpressionFlag.CASELESS);
+        if ((bitmask & HS_FLAG_UTF8) != 0) {
+            flags.add(ExpressionFlag.UTF8);
+        }
+        if ((bitmask & HS_FLAG_UCP) != 0) {
+            flags.add(ExpressionFlag.UCP);
+        }
+        return flags;
     }
 
     /**
@@ -263,16 +287,33 @@ public class HyperscanCompiler {
      * combination expression's id (built with
      * {@link #toCombinationExpressionFlags}) being reported for the term.
      *
-     * <p><b>Fixed, unconditional set — always exactly {@code CASELESS} and
-     * {@code QUIET}</b>: no {@code DOTALL}/{@code UTF8}/{@code UCP}, and
-     * never {@code SOM_LEFTMOST} — confirmed incompatible with {@code QUIET}
-     * both by a real Hyperscan compile-time error this project hit directly
-     * ("HS_FLAG_QUIET is not supported in combination with
-     * HS_FLAG_SOM_LEFTMOST") and by Hyperscan's own documentation, which
-     * lists flags incompatible with SOM_LEFTMOST.
+     * <p><b>{@code CASELESS} and {@code QUIET} always; {@code UTF8}/
+     * {@code UCP} conditional on {@code bitmask}</b> — same confirmed-fixed
+     * regression described on {@link #toAndNotExpressionFlags}: a leaf
+     * containing an emoji or other codepoint above {@code 0xFF} needs UTF8
+     * mode to compile at all, and a decomposed term's leaves are
+     * {@code \x{XXXX}}-encoded the same way an AND NOT side is. {@code DOTALL}
+     * stays out (unaffected by this fix). Never {@code SOM_LEFTMOST} —
+     * confirmed incompatible with {@code QUIET} both by a real Hyperscan
+     * compile-time error this project hit directly ("HS_FLAG_QUIET is not
+     * supported in combination with HS_FLAG_SOM_LEFTMOST") and by Hyperscan's
+     * own documentation, which lists flags incompatible with SOM_LEFTMOST —
+     * UTF8/UCP carry no such incompatibility with QUIET, so adding them
+     * conditionally here is safe.
+     *
+     * @param bitmask HS_FLAG_* bitmask for the whole term (only the UTF8/UCP
+     *                bits matter here) — pass the term's
+     *                {@code TermCompilationResult.hyperscanFlags()}
      */
-    public EnumSet<ExpressionFlag> toSubExpressionFlags() {
-        return EnumSet.of(ExpressionFlag.CASELESS, ExpressionFlag.QUIET);
+    public EnumSet<ExpressionFlag> toSubExpressionFlags(int bitmask) {
+        EnumSet<ExpressionFlag> flags = EnumSet.of(ExpressionFlag.CASELESS, ExpressionFlag.QUIET);
+        if ((bitmask & HS_FLAG_UTF8) != 0) {
+            flags.add(ExpressionFlag.UTF8);
+        }
+        if ((bitmask & HS_FLAG_UCP) != 0) {
+            flags.add(ExpressionFlag.UCP);
+        }
+        return flags;
     }
 
     /**

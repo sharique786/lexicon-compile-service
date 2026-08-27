@@ -16,6 +16,15 @@
         <module name="lexicon-compile-service.main" />
         <module name="lexicon-compile-service.test" />
       </profile>
+      <profile name="Annotation profile for lexicon-compile-service" enabled="true">
+        <sourceOutputDir name="target/generated-sources/annotations" />
+        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <processorPath useClasspath="false">
+          <entry name="$MAVEN_REPOSITORY$/org/springframework/boot/spring-boot-configuration-processor/4.1.0/spring-boot-configuration-processor-4.1.0.jar" />
+        </processorPath>
+        <module name="lexicon-compile-service" />
+      </profile>
     </annotationProcessing>
   </component>
   <component name="JavacSettings">

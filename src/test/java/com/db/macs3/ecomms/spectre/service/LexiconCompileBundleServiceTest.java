@@ -348,6 +348,51 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hyperscanDatabaseBytes()).isNull();
         assertThat(bundle.databaseNote()).isNotBlank();
         assertThat(bundle.databaseNote()).contains("zero terms reached PASS");
+        // Zero-PASS is fully explained by each term's own FAILED status already —
+        // NOT the "all terms passed but the build itself failed" case below.
+        assertThat(bundle.databaseBuildFailed()).isFalse();
+        assertThat(bundle.jsonResponse().databaseError()).isNull();
+    }
+
+    @Test
+    @Order(52)
+    @DisplayName("Every term PASSES but the combined database build itself fails: bundle carries an "
+            + "explicit databaseBuildFailed/databaseError, distinct from a per-term translation failure")
+    void allTermsPassButCombinedBuildFails() {
+        var compiler = new HyperscanCompiler();
+        compiler.selfTest();
+        var translator = new TermSyntaxTranslator(compiler);
+        var compileService = new LexiconCompileService(translator, compiler, new SimpleMeterRegistry());
+        var handler = new HyperscanCombinationHandler(compiler);
+
+        // A hand-built stub compiler that behaves exactly like the real one for every
+        // per-term validation call (still real Hyperscan), but simulates the combined,
+        // multi-pattern database build itself failing — e.g. a flag/state-count
+        // interaction only visible once every PASS expression is compiled together,
+        // which no individual term's own validation could have caught up front.
+        var flakyDatabaseCompiler = new HyperscanCompiler() {
+            @Override
+            public CombinedCompileResult compileCombinedDatabase(List<com.gliwka.hyperscan.wrapper.Expression> expressions) {
+                return CombinedCompileResult.failure("Simulated combined compile failure", null);
+            }
+        };
+        flakyDatabaseCompiler.selfTest();
+        var flakyBundleService = new LexiconCompileBundleService(
+                compileService, flakyDatabaseCompiler, handler, new SimpleMeterRegistry());
+
+        var req = regex("all_pass_build_fails", "price", "insider");
+        var bundle = flakyBundleService.buildBundle(req);
+
+        assertThat(bundle.jsonResponse().passCount()).isEqualTo(2);
+        assertThat(bundle.jsonResponse().failedCount()).isZero();
+        assertThat(bundle.jsonResponse().results()).allMatch(
+                r -> r.compilationStatus() == CompilationStatus.PASS);
+
+        assertThat(bundle.hasDatabase()).isFalse();
+        assertThat(bundle.databaseBuildFailed()).isTrue();
+        assertThat(bundle.databaseNote()).contains("Simulated combined compile failure");
+        assertThat(bundle.jsonResponse().databaseError()).isNotBlank();
+        assertThat(bundle.jsonResponse().databaseError()).contains("Simulated combined compile failure");
     }
 
     // ── Combined database integrity (round-trip load + scan) ───────────────────

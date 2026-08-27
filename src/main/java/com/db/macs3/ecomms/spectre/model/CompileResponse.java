@@ -91,7 +91,28 @@ public record CompileResponse(
         long processingTimeMs,
 
         @JsonProperty("results")
-        List<TermCompilationResult> results
+        List<TermCompilationResult> results,
+
+        /*
+         * Set ONLY for {@code /compile/bundle}, and ONLY when every term
+         * resolved to PASS/FAILED normally but the combined multi-pattern
+         * Hyperscan database build/serialisation itself then failed (see
+         * {@code LexiconCompileBundleService#buildDatabasePortion}) — e.g. a
+         * flag-compatibility or state-count problem that only surfaces once
+         * every PASS expression is compiled together, which individual
+         * per-term validation cannot catch. {@code null} (and absent from
+         * JSON) whenever the database built successfully, or was never
+         * expected to (e.g. every term FAILED translation) — a per-term
+         * {@code compilationStatus} of FAILED already explains that case,
+         * without needing this field. When non-null, the JSON no longer
+         * represents an unqualified success even though every {@code results}
+         * entry may show {@code compilationStatus: PASS} — the caller MUST
+         * check this field, not just per-term status, before trusting that a
+         * usable {@code .hdb} was produced.
+         */
+        @JsonProperty("databaseError")
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        String databaseError
 
 ) {
 
@@ -122,7 +143,8 @@ public record CompileResponse(
                 hyperscanVersion,
                 Instant.now(),
                 processingTimeMs,
-                results);
+                results,
+                null);              // databaseError — /compile never builds a database
     }
 
     // ── Factory: /compile/bundle ──────────────────────────────────────────────
@@ -155,7 +177,8 @@ public record CompileResponse(
                 null,              // hyperscanVersion — absent from bundle response
                 Instant.now(),
                 0L,                // processingTimeMs — absent (0 → NON_DEFAULT suppressed)
-                results);
+                results,
+                null);              // databaseError — set later via withDatabaseError if the build fails
     }
 
     // ── Copy helper ───────────────────────────────────────────────────────────
@@ -183,6 +206,33 @@ public record CompileResponse(
                 this.hyperscanVersion,
                 this.compiledAt,
                 this.processingTimeMs,
-                this.results);
+                this.results,
+                this.databaseError);
+    }
+
+    /**
+     * Returns a copy of this response with {@code databaseError} set — used
+     * by {@code LexiconCompileBundleService} when every term resolved
+     * PASS/FAILED normally but the combined Hyperscan database build itself
+     * then failed, so the {@code /compile/bundle} JSON explicitly reflects
+     * that the overall bundle is NOT usable, rather than only showing
+     * per-term PASS statuses that would otherwise read as an unqualified
+     * success.
+     */
+    public CompileResponse withDatabaseError(String databaseError) {
+        return new CompileResponse(
+                this.requestId,
+                this.lexiconRuleName,
+                this.requestType,
+                this.totalTerms,
+                this.passCount,
+                this.failedCount,
+                this.hasFailures,
+                this.engineMode,
+                this.hyperscanVersion,
+                this.compiledAt,
+                this.processingTimeMs,
+                this.results,
+                databaseError);
     }
 }

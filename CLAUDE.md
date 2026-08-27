@@ -200,27 +200,49 @@ already in `HyperscanCombinationHandler.addExpressions()`:
 
 | Case | Method | Flags |
 |---|---|---|
-| AND NOT — every required/excluded pattern, regardless of decomposition on either side | `toAndNotExpressionFlags()` | `CASELESS` only |
-| Pure decomposition leaf, no AND NOT | `toSubExpressionFlags()` | `CASELESS`, `QUIET` only |
+| AND NOT — every required/excluded pattern, regardless of decomposition on either side | `toAndNotExpressionFlags(bitmask)` | `CASELESS` always; `UTF8`/`UCP` when `bitmask` indicates non-Latin content |
+| Pure decomposition leaf, no AND NOT | `toSubExpressionFlags(bitmask)` | `CASELESS`, `QUIET` always; `UTF8`/`UCP` when `bitmask` indicates non-Latin content |
 | Simple, single-pattern, non-AND-NOT, error-free, complexity-under-budget PASS term (also the flag set `HyperscanCompiler.validate()` always uses for the "too large" pre-check) | `toExpressionFlags(bitmask)` | `CASELESS`, `DOTALL`, `SOM_LEFTMOST` always; `UTF8`/`UCP` only when `bitmask` indicates non-Latin content |
 
 **AND NOT deliberately does not get `SOM_LEFTMOST`** any more, even though
 it would be structurally *safe* there (AND NOT patterns are plain, never
 QUIET, so the QUIET+SOM_LEFTMOST incompatibility above doesn't apply to
-them) — the AND NOT case is scoped to `CASELESS` only regardless. Don't
-"restore" SOM_LEFTMOST there as a safety-motivated cleanup; it was removed
-on purpose.
+them) — the AND NOT case is scoped to `CASELESS` (+ conditional UTF8/UCP)
+regardless. Don't "restore" SOM_LEFTMOST there as a safety-motivated
+cleanup; it was removed on purpose.
 
-**UTF8/UCP stay conditional in the simple-term case ONLY, on purpose — this
-was tried unconditionally first and reverted after two confirmed
-regressions**: (1) Hyperscan rejects `\b` (word boundary) when UCP is
-active ("`\b` unsupported in UCP mode"), breaking any caller-supplied
-Regex-type term using it; (2) UCP mode measurably slows Hyperscan
-compilation even for plain-ASCII patterns (~15x in this project's own
-performance test, `LexiconCompileServiceTest.performance`). Do not make
-UTF8/UCP unconditional in `toExpressionFlags()` without re-checking both of
-those. The AND NOT and pure-decomposition-leaf cases have NO conditional
-bits at all — not even for non-Latin content — by design.
+**UTF8/UCP are conditional on `bitmask` in ALL THREE cases, not just the
+simple-term one — confirmed-fixed regression, worth knowing the shape of.**
+`toAndNotExpressionFlags`/`toSubExpressionFlags` used to be fixed,
+unconditional sets (`CASELESS` only / `CASELESS`+`QUIET` only) — "no
+conditional bits at all, not even for non-Latin content, by design" was
+this file's own previous wording for that choice. It was wrong: an AND NOT
+side or a decomposed leaf containing an emoji (or any codepoint above
+`0xFF`) is `\x{XXXX}`-encoded by `PatternCodeGenerator` exactly like a
+simple term's would be, and that encoding needs Hyperscan's UTF8 mode to
+compile at all. Because `TermSyntaxTranslator.translate()`'s own validation
+step goes through `toExpressionFlags` (already UTF8-conditional) while the
+real `/compile/bundle` combined-database build went through these two
+methods' old fixed sets, an emoji-containing AND NOT or decomposed term
+could translate to a `PASS` result — validated successfully — and then
+fail combined-database compilation with `CompileErrorException: Hexadecimal
+value is greater than \xFF at index 0`. Fixed by making both methods take
+the same `bitmask` `toExpressionFlags` does and add `UTF8`/`UCP`
+conditionally, identically. This does NOT reopen the `\b`/UCP-compile-time
+regressions below — those were about `toExpressionFlags()`, which is only
+ever used for a term that skipped this whole translator (Regex-type) or
+compiled as one simple pattern; AND NOT sides and decomposition leaves are
+always translator-generated text that never contains `\b`.
+
+**UTF8/UCP unconditional in `toExpressionFlags()` specifically was tried
+and reverted after two confirmed regressions** — this constraint is scoped
+to that one method, not to whether UTF8/UCP may ever be conditional
+elsewhere: (1) Hyperscan rejects `\b` (word boundary) when UCP is active
+("`\b` unsupported in UCP mode"), breaking any caller-supplied Regex-type
+term using it; (2) UCP mode measurably slows Hyperscan compilation even for
+plain-ASCII patterns (~15x in this project's own performance test,
+`LexiconCompileServiceTest.performance`). Do not make UTF8/UCP
+unconditional in `toExpressionFlags()` without re-checking both of those.
 
 ---
 
@@ -260,6 +282,23 @@ shape, or the AND-NOT-vs-decomposition boundary, both other services need
 a corresponding check, not just this one.** There is no compile-time link
 across the three projects; a mismatch fails silently (wrong `term_id` in
 BigQuery, or an incorrect hit/no-hit decision), not loudly.
+
+**`databaseError` (top-level `CompileResponse` field, `/compile/bundle`
+only)**: set when every term individually reached PASS/FAILED normally but
+the combined multi-pattern Hyperscan database build/serialisation itself
+then failed (e.g. a flag/state-count interaction only visible once every
+PASS expression is compiled together — not catchable by any individual
+term's own validation). Null whenever the database built successfully, or
+whenever it was never expected to (e.g. zero PASS terms — already fully
+explained by each term's own `compilationStatus`). **When this is non-null,
+the response is NOT a 200 zip** — the controller returns HTTP 500 with
+`Content-Type: application/json` and this same `CompileResponse` JSON
+shape as the body (no `.hdb`, no zip) — see
+`LexiconCompileController#compileBundle` and
+`LexiconCompileBundleService.CompileBundleResult#databaseBuildFailed`. A
+consumer must not infer bundle success from per-term `compilationStatus`
+alone; `databaseError`/the HTTP status is the actual signal that a usable
+`.hdb` exists.
 
 ---
 
@@ -377,3 +416,25 @@ verification scaffolding, not a repository fixture.
    itself deliberately never encodes one. Also populated for
    pure-decomposition terms, mirroring the formula already written into the
    `.hdb`'s native `COMBINATION` expression there.
+10. **AND NOT / decomposition-leaf UTF8 fix**: an emoji (or any codepoint
+    above `0xFF`) in an AND NOT side or a decomposed leaf compiled to a
+    `PASS` result — per-term validation used `toExpressionFlags`, which is
+    UTF8-conditional — but then failed real `/compile/bundle` combined
+    database compilation with `CompileErrorException: Hexadecimal value is
+    greater than \xFF at index 0`, because `toAndNotExpressionFlags()`/
+    `toSubExpressionFlags()` were fixed, unconditional flag sets that never
+    added UTF8/UCP, "not even for non-Latin content, by design" — that
+    "design" was the bug. Fixed by giving both methods the same `bitmask`
+    parameter `toExpressionFlags` already has, adding UTF8/UCP
+    conditionally, identically — see the `ExpressionFlag` scheme section
+    above.
+11. **`/compile/bundle` database-build-failure signalling added**: previously,
+    if every term individually reached PASS/FAILED normally but the combined
+    Hyperscan database build itself then failed (e.g. exactly the case (10)
+    could produce before its fix, or any other combined-compile-only
+    failure), the endpoint still returned HTTP 200 with a zip — JSON results
+    all reading per-term PASS, a `NO_DATABASE.txt` note easy to miss next to
+    them, no `.hdb`. `CompileResponse` gained a `databaseError` field, and
+    `/compile/bundle` now returns HTTP 500 with the JSON (no zip) when this
+    happens — see "The cross-service JSON contract" above and
+    `LexiconCompileBundleService.CompileBundleResult#databaseBuildFailed`.

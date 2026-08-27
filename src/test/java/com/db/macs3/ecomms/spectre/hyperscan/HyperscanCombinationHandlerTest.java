@@ -190,7 +190,8 @@ class HyperscanCombinationHandlerTest {
         }
 
         @Test
-        @DisplayName("Every leaf carries ONLY CASELESS + QUIET — no DOTALL/UTF8/UCP/SOM_LEFTMOST")
+        @DisplayName("Every leaf carries ONLY CASELESS + QUIET when the term is ASCII-only — no " +
+                "DOTALL/UTF8/UCP/SOM_LEFTMOST")
         void leavesCarryOnlyCaselessAndQuiet() {
             var result = passResult(List.of("leafA", "leafB"), false, null);
             List<Expression> out = new ArrayList<>();
@@ -199,6 +200,25 @@ class HyperscanCombinationHandlerTest {
             List<Expression> leaves = out.stream().filter(e -> e.getId() != 3).toList();
             assertThat(leaves).allMatch((Expression e) -> e.getFlags().equals(
                     java.util.EnumSet.of(ExpressionFlag.CASELESS, ExpressionFlag.QUIET)));
+        }
+
+        @Test
+        @DisplayName("CONFIRMED-FIXED REGRESSION: a decomposed leaf whose content needs UTF8 (e.g. an " +
+                "emoji, \\x{1F600}-encoded) gets UTF8+UCP alongside CASELESS+QUIET — previously fixed at " +
+                "CASELESS+QUIET only regardless of content, which made the real combined database build " +
+                "fail with \"Hexadecimal value is greater than \\xFF\" for emoji-containing decomposed terms")
+        void emojiLeavesGetUtf8Ucp() {
+            var result = new TermCompilationResult(
+                    "t::1", "desc", CompilationStatus.PASS,
+                    List.of("\\x{1F600}", "\\x{1F601}"), null, null,
+                    97, false, null, List.of(), // CASELESS(1) | UTF8(32) | UCP(64) = 97
+                    null, null, null, null, Instant.now());
+            List<Expression> out = new ArrayList<>();
+            handler.addExpressions(result, 3, new HyperscanCombinationHandler.HyperscanIdAllocator(4), out);
+
+            List<Expression> leaves = out.stream().filter(e -> e.getId() != 3).toList();
+            assertThat(leaves).allMatch((Expression e) -> e.getFlags().equals(java.util.EnumSet.of(
+                    ExpressionFlag.CASELESS, ExpressionFlag.QUIET, ExpressionFlag.UTF8, ExpressionFlag.UCP)));
         }
 
         @Test
@@ -279,14 +299,34 @@ class HyperscanCombinationHandlerTest {
         }
 
         @Test
-        @DisplayName("AND NOT expressions carry ONLY CASELESS — no SOM_LEFTMOST/DOTALL/UTF8/UCP, " +
-                "even though SOM_LEFTMOST would be structurally safe (neither side is QUIET)")
+        @DisplayName("AND NOT expressions carry ONLY CASELESS when the term is ASCII-only — no " +
+                "SOM_LEFTMOST/DOTALL/UTF8/UCP, even though SOM_LEFTMOST would be structurally safe " +
+                "(neither side is QUIET)")
         void bothExpressionsCarryOnlyCaseless() {
             var result = passResult(List.of("required"), true, List.of("excluded"));
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
 
             assertThat(out).allMatch((Expression e) -> e.getFlags().equals(java.util.EnumSet.of(ExpressionFlag.CASELESS)));
+        }
+
+        @Test
+        @DisplayName("CONFIRMED-FIXED REGRESSION: an AND NOT term whose content needs UTF8 (e.g. an " +
+                "emoji, \\x{1F6AB}-encoded) gets UTF8+UCP on BOTH required and excluded expressions — " +
+                "previously fixed at CASELESS-only regardless of content, which made the real combined " +
+                "database build fail with \"Hexadecimal value is greater than \\xFF\" even though " +
+                "per-term translation validation had already passed the identical pattern text")
+        void emojiAndNotGetsUtf8Ucp() {
+            var result = new TermCompilationResult(
+                    "t::1", "desc", CompilationStatus.PASS,
+                    List.of("\\x{1F6AB}"), null, null,
+                    97, true, List.of("\\x{1F4B0}"), List.of(), // CASELESS(1) | UTF8(32) | UCP(64) = 97
+                    null, null, null, null, Instant.now());
+            List<Expression> out = new ArrayList<>();
+            handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
+
+            assertThat(out).allMatch((Expression e) -> e.getFlags().equals(java.util.EnumSet.of(
+                    ExpressionFlag.CASELESS, ExpressionFlag.UTF8, ExpressionFlag.UCP)));
         }
     }
 

@@ -16,7 +16,8 @@ import java.util.List;
  *   <li>{@code request_id} — present only when explicitly set (bundle / CSV endpoints)</li>
  *   <li>{@code requestType} — present only when set (bundle endpoint only)</li>
  *   <li>{@code hyperscanVersion} — present only when non-null (absent from bundle response)</li>
- *   <li>{@code processingTimeMs} — present only when non-zero (absent from bundle response)</li>
+ *   <li>{@code processingTimeMs} — present only when non-zero; populated for all three endpoints,
+ *       including {@code /compile/bundle}</li>
  * </ul>
  *
  * <p><b>Factory methods</b>
@@ -82,9 +83,14 @@ public record CompileResponse(
         Instant compiledAt,
 
         /*
-         * Wall-clock time from first term to last in milliseconds.
-         * Absent (serialised as default zero is suppressed) from the
-         * {@code /compile/bundle} response.
+         * Total compilation time for the whole request, in milliseconds —
+         * wall-clock time from the first term to the last, across all three
+         * endpoints (including {@code /compile/bundle}, which now populates
+         * this too — see {@code LexiconCompileBundleService#buildBundle}).
+         * This is the only compilation-timing signal in the response now
+         * that {@code TermCompilationResult} no longer carries a per-term
+         * {@code compiledAt} timestamp; see this class's root-level
+         * {@code compiledAt} for when the response was produced.
          */
         @JsonProperty("processingTimeMs")
         @JsonInclude(JsonInclude.Include.NON_DEFAULT)
@@ -151,19 +157,21 @@ public record CompileResponse(
 
     /**
      * Builds a response for the {@code /compile/bundle} endpoint.
-     * {@code hyperscanVersion} and {@code processingTimeMs} are omitted
-     * ({@code null} and {@code 0} respectively → suppressed by
-     * {@code NON_NULL} / {@code NON_DEFAULT} annotations).
+     * {@code hyperscanVersion} is omitted ({@code null} → suppressed by
+     * {@code NON_NULL}); {@code processingTimeMs} is populated the same way
+     * {@link #of} populates it for {@code /compile}/{@code /compile/csv}.
      *
-     * @param requestId   the caller-supplied {@code request_id}, echoed back
-     * @param requestType the root-level {@code requestType} from the request
-     * @param ruleName    the lexicon rule name from the request
-     * @param results     per-term compilation outcomes
+     * @param requestId       the caller-supplied {@code request_id}, echoed back
+     * @param requestType     the root-level {@code requestType} from the request
+     * @param ruleName        the lexicon rule name from the request
+     * @param results         per-term compilation outcomes
+     * @param processingTimeMs total wall-clock compilation time for the whole request, in milliseconds
      */
     public static CompileResponse ofBundle(String requestId,
                                            TermType requestType,
                                            String ruleName,
-                                           List<TermCompilationResult> results) {
+                                           List<TermCompilationResult> results,
+                                           long processingTimeMs) {
         int passCount = (int) results.stream().filter(TermCompilationResult::isPass).count();
         int failedCount = (int) results.stream().filter(TermCompilationResult::isFailed).count();
         return new CompileResponse(
@@ -176,7 +184,7 @@ public record CompileResponse(
                 "HYPERSCAN_NATIVE",
                 null,              // hyperscanVersion — absent from bundle response
                 Instant.now(),
-                0L,                // processingTimeMs — absent (0 → NON_DEFAULT suppressed)
+                processingTimeMs,
                 results,
                 null);              // databaseError — set later via withDatabaseError if the build fails
     }

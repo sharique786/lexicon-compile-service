@@ -261,9 +261,9 @@ final class PatternComplexityAnalyzer {
     private static String collectText(Ast ast) {
         return switch (ast) {
             case Ast.Or or -> or.operands().stream().map(PatternComplexityAnalyzer::collectText)
-                    .reduce((a, b) -> a + " " + b).orElse("");
+                    .reduce((textSoFar, nextText) -> textSoFar + " " + nextText).orElse("");
             case Ast.And and -> and.operands().stream().map(PatternComplexityAnalyzer::collectText)
-                    .reduce((a, b) -> a + " " + b).orElse("");
+                    .reduce((textSoFar, nextText) -> textSoFar + " " + nextText).orElse("");
             case Ast.AndNot andNot -> collectText(andNot.required());
             case Ast.Near near -> collectText(near.left()) + " " + collectText(near.right());
             case Ast.FollowedBy fb -> collectText(fb.left()) + " " + collectText(fb.right());

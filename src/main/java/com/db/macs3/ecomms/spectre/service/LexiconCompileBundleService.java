@@ -143,17 +143,19 @@ public class LexiconCompileBundleService {
             termResults.add(termResult);
         }
 
+        long elapsedMs = System.currentTimeMillis() - startTimeMs;
         log.info("Bundle compile done rule='{}': {}/{} PASS, {}ms",
                 request.getLexiconRuleName(),
                 termResults.stream().filter(TermCompilationResult::isPass).count(),
                 termResults.size(),
-                System.currentTimeMillis() - startTimeMs);
+                elapsedMs);
 
         CompileResponse jsonResponse = CompileResponse.ofBundle(
                 request.getRequestId(),
                 request.getRequestType(),
                 request.getLexiconRuleName(),
-                termResults);
+                termResults,
+                elapsedMs);
 
         return buildDatabasePortion(jsonResponse, passingExpressions);
     }

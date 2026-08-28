@@ -160,10 +160,10 @@ final class PatternCodeGenerator {
     private static String generateNear(Ast.Near near, ParseContext ctx) {
         String leftPat = generate(near.left(), ctx);
         String rightPat = generate(near.right(), ctx);
-        MultiLanguagePatternBuilder.BuildResult r =
+        MultiLanguagePatternBuilder.BuildResult nearBuildResult =
                 MultiLanguagePatternBuilder.buildNear(leftPat, rightPat, near.distance());
-        propagateProximityResult(r, ctx);
-        return r.pattern();
+        propagateProximityResult(nearBuildResult, ctx);
+        return nearBuildResult.pattern();
     }
 
     /**
@@ -173,10 +173,10 @@ final class PatternCodeGenerator {
     private static String generateFollowedBy(Ast.FollowedBy fb, ParseContext ctx) {
         String leftPat = generate(fb.left(), ctx);
         String rightPat = generate(fb.right(), ctx);
-        MultiLanguagePatternBuilder.BuildResult r =
+        MultiLanguagePatternBuilder.BuildResult followedByBuildResult =
                 MultiLanguagePatternBuilder.buildFollowedBy(leftPat, rightPat, fb.distance());
-        propagateProximityResult(r, ctx);
-        return r.pattern();
+        propagateProximityResult(followedByBuildResult, ctx);
+        return followedByBuildResult.pattern();
     }
 
     /**
@@ -186,11 +186,11 @@ final class PatternCodeGenerator {
      * into the shared {@code ctx} — {@code ctx.getWarnings()} is read back by
      * {@link TermSyntaxTranslator#translate} once the whole term is done.
      */
-    private static void propagateProximityResult(MultiLanguagePatternBuilder.BuildResult r, ParseContext ctx) {
-        if ((r.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
+    private static void propagateProximityResult(MultiLanguagePatternBuilder.BuildResult buildResult, ParseContext ctx) {
+        if ((buildResult.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
             ctx.setNeedsUtf8();
         }
-        ctx.addWarning(r.warning());
+        ctx.addWarning(buildResult.warning());
     }
 
     // ── AND: unbounded co-occurrence pattern construction ───────────────────────

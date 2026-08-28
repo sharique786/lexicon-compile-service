@@ -60,15 +60,15 @@ public class CompileRequest {
         return lexiconRuleName;
     }
 
-    public void setLexiconRuleName(String v) {
-        this.lexiconRuleName = v;
+    public void setLexiconRuleName(String lexiconRuleName) {
+        this.lexiconRuleName = lexiconRuleName;
     }
 
     public List<TermInput> getTerms() {
         return terms;
     }
 
-    public void setTerms(List<TermInput> v) {
-        this.terms = v;
+    public void setTerms(List<TermInput> terms) {
+        this.terms = terms;
     }
 }

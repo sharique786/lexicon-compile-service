@@ -130,10 +130,16 @@ public class LexiconCompileService {
         return switch (translation) {
             case TranslationResult.Error err -> TermCompilationResult.failedTranslation(term, err.message());
 
-            case TranslationResult.Success success -> TermCompilationResult.pass(
-                    term, success.hsPatterns(), success.hsFlags(),
-                    success.requiresExclusionCheck(), success.exclusionRegexs(),
-                    success.warnings(), success.resolvedPattern());
+            case TranslationResult.Success success -> {
+                if (!success.warnings().isEmpty()) {
+                    log.warn("termId='{}' compiled with {} warning(s), not included in the response body: {}",
+                            term.termId(), success.warnings().size(), success.warnings());
+                }
+                yield TermCompilationResult.pass(
+                        term, success.hsPatterns(), success.hsFlags(),
+                        success.requiresExclusionCheck(), success.exclusionRegexs(),
+                        success.resolvedPattern());
+            }
         };
     }
 }

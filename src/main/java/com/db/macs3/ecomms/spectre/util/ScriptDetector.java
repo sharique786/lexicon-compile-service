@@ -119,13 +119,13 @@ public final class ScriptDetector {
      * e.g. Latin + Korean → MIXED_CJK (char-based) because the Korean side
      * has no reliable whitespace word separators.
      *
-     * @param termA first operand (may be a translated PCRE fragment)
-     * @param termB second operand
+     * @param leftOperand  first operand (may be a translated PCRE fragment)
+     * @param rightOperand second operand
      * @return combined {@link ScriptType}
      */
-    public static ScriptType detectCombined(String termA, String termB) {
-        Set<Category> combined = scanCategories(termA);
-        combined.addAll(scanCategories(termB));
+    public static ScriptType detectCombined(String leftOperand, String rightOperand) {
+        Set<Category> combined = scanCategories(leftOperand);
+        combined.addAll(scanCategories(rightOperand));
         return resolveType(combined);
     }
 
@@ -135,10 +135,10 @@ public final class ScriptDetector {
      * Used by {@code MultiLanguagePatternBuilder} to emit a warning for
      * mixed-direction FOLLOWEDBY terms.
      */
-    public static boolean hasRtlComponent(String termA, String termB) {
-        Set<Category> a = scanCategories(termA);
-        Set<Category> b = scanCategories(termB);
-        return containsRtl(a) || containsRtl(b);
+    public static boolean hasRtlComponent(String leftOperand, String rightOperand) {
+        Set<Category> leftCategories = scanCategories(leftOperand);
+        Set<Category> rightCategories = scanCategories(rightOperand);
+        return containsRtl(leftCategories) || containsRtl(rightCategories);
     }
 
     /**
@@ -147,10 +147,10 @@ public final class ScriptDetector {
      * Pure Arabic+Arabic or Hebrew+Hebrew FOLLOWEDBY requires no direction
      * warning because logical order equals reading order in those scripts.
      */
-    public static boolean isPurelyRtl(String termA, String termB) {
-        Set<Category> a = scanCategories(termA);
-        Set<Category> b = scanCategories(termB);
-        return isPurelyRtlSet(a) && isPurelyRtlSet(b);
+    public static boolean isPurelyRtl(String leftOperand, String rightOperand) {
+        Set<Category> leftCategories = scanCategories(leftOperand);
+        Set<Category> rightCategories = scanCategories(rightOperand);
+        return isPurelyRtlSet(leftCategories) && isPurelyRtlSet(rightCategories);
     }
 
     // ── Private: category scanning ─────────────────────────────────────────

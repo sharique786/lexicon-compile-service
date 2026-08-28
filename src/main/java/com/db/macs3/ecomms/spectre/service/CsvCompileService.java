@@ -156,15 +156,15 @@ public class CsvCompileService {
     private InputStream stripBom(InputStream is) throws IOException {
         PushbackInputStream pis = new PushbackInputStream(is, 3);
         byte[] bom = new byte[3];
-        int n = pis.read(bom, 0, 3);
-        if (n == 3
+        int bytesRead = pis.read(bom, 0, 3);
+        if (bytesRead == 3
                 && (bom[0] & 0xFF) == 0xEF
                 && (bom[1] & 0xFF) == 0xBB
                 && (bom[2] & 0xFF) == 0xBF) {
             return pis;
         }
-        if (n > 0) {
-            pis.unread(bom, 0, n);
+        if (bytesRead > 0) {
+            pis.unread(bom, 0, bytesRead);
         }
         return pis;
     }

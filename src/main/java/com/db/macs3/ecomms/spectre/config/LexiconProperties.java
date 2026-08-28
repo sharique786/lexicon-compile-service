@@ -27,8 +27,8 @@ public class LexiconProperties {
             return maxTermsPerRequest;
         }
 
-        public void setMaxTermsPerRequest(int v) {
-            this.maxTermsPerRequest = v;
+        public void setMaxTermsPerRequest(int maxTermsPerRequest) {
+            this.maxTermsPerRequest = maxTermsPerRequest;
         }
     }
 
@@ -43,8 +43,8 @@ public class LexiconProperties {
             return maxFileSize;
         }
 
-        public void setMaxFileSize(String v) {
-            this.maxFileSize = v;
+        public void setMaxFileSize(String maxFileSize) {
+            this.maxFileSize = maxFileSize;
         }
     }
 
@@ -52,23 +52,23 @@ public class LexiconProperties {
         return hyperscanVersion;
     }
 
-    public void setHyperscanVersion(String v) {
-        this.hyperscanVersion = v;
+    public void setHyperscanVersion(String hyperscanVersion) {
+        this.hyperscanVersion = hyperscanVersion;
     }
 
     public Compiler getCompiler() {
         return compiler;
     }
 
-    public void setCompiler(Compiler v) {
-        this.compiler = v;
+    public void setCompiler(Compiler compiler) {
+        this.compiler = compiler;
     }
 
     public Upload getUpload() {
         return upload;
     }
 
-    public void setUpload(Upload v) {
-        this.upload = v;
+    public void setUpload(Upload upload) {
+        this.upload = upload;
     }
 }

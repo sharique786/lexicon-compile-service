@@ -1,10 +1,9 @@
 package com.db.macs3.ecomms.spectre.model;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.time.Instant;
 import java.util.List;
 
 /**
@@ -57,8 +56,8 @@ import java.util.List;
  * split" boolean any more: a caller checks {@code regexPattern.size()}. The
  * same applies to {@code exclusionRegex} for an AND NOT term's excluded side.
  *
- * <p><b>Multiple entries are a real precision trade-off — always check
- * {@code warnings}, and read {@code resolvedPatterns} for the full relationship.</b>
+ * <p><b>Multiple entries are a real precision trade-off — read
+ * {@code resolvedPatterns} for the full relationship.</b>
  * Splitting discards the original NEAR/FOLLOWEDBY ordering/distance
  * constraint BETWEEN leaf patterns: the leaves are combined with pure
  * boolean AND ("all of these appear somewhere in the message"), not with
@@ -67,10 +66,12 @@ import java.util.List;
  * any more — the leaves are pure, gap-free fragments. The full relationship
  * — including the term author's raw, un-clamped NEAR/FOLLOWEDBY distance —
  * is instead conveyed separately via {@code resolvedPatterns}, as literal
- * keyword text. {@code warnings} always carries an explicit entry whenever
- * this trade-off applies to either side, so no caller can silently treat a
- * split match as a genuine proximity match without realizing precision
- * moved to {@code resolvedPatterns}.
+ * keyword text. A server-side log entry is always written whenever this
+ * trade-off applies to either side (see {@code LexiconCompileService}), so
+ * the condition is diagnosable even though it is no longer surfaced as a
+ * {@code warnings} field in the response itself — no caller can silently
+ * treat a split match as a genuine proximity match without the precision
+ * trade-off being logged and moved to {@code resolvedPatterns}.
  *
  * <p><b>AND NOT has two different correct implementations, for two different callers</b>
  * <p>{@code regexPattern} and {@code exclusionRegex} are independently
@@ -237,9 +238,13 @@ public record TermCompilationResult(
         /*
          * Hyperscan compile-flag bitmask applied to the pattern(s).
          * {@code 1}=CASELESS, {@code 32}=UTF8, {@code 64}=UCP.
-         * {@code 0} indicates translation never completed.
+         * {@code 0} indicates translation never completed. Not part of the
+         * response JSON any more ({@code @JsonIgnore}) — it remains a real
+         * field because {@code HyperscanCombinationHandler} still needs it
+         * to build {@code /compile/bundle}'s combined-database expressions;
+         * its value is logged instead (see {@code LexiconCompileService}).
          */
-        @JsonProperty("hyperscanFlags")
+        @JsonIgnore
         int hyperscanFlags,
 
         /*
@@ -261,18 +266,6 @@ public record TermCompilationResult(
          */
         @JsonProperty("exclusionRegex")
         List<String> exclusionRegex,
-
-        /*
-         * Non-fatal issues worth surfacing to the caller — never null, may
-         * be empty. Always includes an explicit entry whenever NEAR/FOLLOWEDBY
-         * splitting applied to either side (see class Javadoc), and whenever the term
-         * relied on chained NEAR/FOLLOWEDBY without explicit parentheses
-         * (see {@code ExpressionParser}). Present regardless of
-         * {@code compilationStatus}, though in practice only PASS terms
-         * currently produce any.
-         */
-        @JsonProperty("warnings")
-        List<String> warnings,
 
         /*
          * This term (or, for AND NOT, both sides joined by the literal
@@ -335,11 +328,7 @@ public record TermCompilationResult(
          * outside {@code /compile/bundle}.
          */
         @JsonProperty("patternMapping")
-        String patternMapping,
-
-        @JsonProperty("compiledAt")
-        @JsonFormat(shape = JsonFormat.Shape.STRING)
-        Instant compiledAt
+        String patternMapping
 
 ) {
     // ── Factory methods ───────────────────────────────────────────────────────
@@ -348,36 +337,35 @@ public record TermCompilationResult(
      * Creates a PASS result. {@code regexPattern} and (when
      * {@code requiresExclusionCheck}) {@code exclusionRegex} may each have
      * one entry (no NEAR/FOLLOWEDBY structure) or several (split) — see class Javadoc.
-     * {@code warnings} may be empty. {@code resolvedPatterns} should be null
-     * only for a Regex-type term (which never goes through the translator
-     * this field is built from).
+     * {@code resolvedPatterns} should be null only for a Regex-type term
+     * (which never goes through the translator this field is built from).
+     * Any translation warnings are logged by the caller (see
+     * {@code LexiconCompileService#compileTerm}) — this result carries none.
      */
     public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
                                              List<String> regexPattern,
                                              int hyperscanFlags,
                                              boolean requiresExclusionCheck,
                                              List<String> exclusionRegex,
-                                             List<String> warnings,
                                              String resolvedPatterns) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(),
                 CompilationStatus.PASS,
                 regexPattern, null, null,
                 hyperscanFlags, requiresExclusionCheck, exclusionRegex,
-                warnings == null ? List.of() : List.copyOf(warnings),
                 resolvedPatterns,
-                null, null, null, null, Instant.now());
+                null, null, null, null);
     }
 
     /**
-     * Convenience overload for a PASS result with no AND-NOT exclusion, no
-     * warnings, and no {@code resolvedPatterns} — used for Regex-type terms,
-     * which never go through the translator/AST this field is built from.
+     * Convenience overload for a PASS result with no AND-NOT exclusion and
+     * no {@code resolvedPatterns} — used for Regex-type terms, which never
+     * go through the translator/AST this field is built from.
      */
     public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
                                              List<String> regexPattern,
                                              int hyperscanFlags) {
-        return pass(input, regexPattern, hyperscanFlags, false, null, List.of(), null);
+        return pass(input, regexPattern, hyperscanFlags, false, null, null);
     }
 
     /**
@@ -396,9 +384,9 @@ public record TermCompilationResult(
                 input.termId(), input.termDescription(),
                 CompilationStatus.FAILED,
                 regexPattern, errorLog, null,
-                hyperscanFlags, false, null, List.of(),
+                hyperscanFlags, false, null,
                 null,
-                null, null, null, null, Instant.now());
+                null, null, null, null);
     }
 
     /**
@@ -413,9 +401,9 @@ public record TermCompilationResult(
                 input.termId(), input.termDescription(),
                 CompilationStatus.FAILED,
                 null, null, translationError,
-                0, false, null, List.of(),
+                0, false, null,
                 null,
-                null, null, null, null, Instant.now());
+                null, null, null, null);
     }
 
     /**
@@ -433,9 +421,9 @@ public record TermCompilationResult(
         return new TermCompilationResult(
                 termId, termDescription, compilationStatus,
                 regexPattern, errorLog, translationError,
-                hyperscanFlags, requiresExclusionCheck, exclusionRegex, warnings,
+                hyperscanFlags, requiresExclusionCheck, exclusionRegex,
                 resolvedPatterns,
-                id, null, null, patternMapping, compiledAt);
+                id, null, null, patternMapping);
     }
 
     /**
@@ -458,15 +446,26 @@ public record TermCompilationResult(
         return new TermCompilationResult(
                 termId, termDescription, compilationStatus,
                 regexPattern, errorLog, translationError,
-                hyperscanFlags, requiresExclusionCheck, exclusionRegex, warnings,
+                hyperscanFlags, requiresExclusionCheck, exclusionRegex,
                 resolvedPatterns,
-                null, requiredExpressionIds, excludedExpressionIds, patternMapping, compiledAt);
+                null, requiredExpressionIds, excludedExpressionIds, patternMapping);
     }
 
+    /**
+     * Not part of the response JSON ({@code @JsonIgnore}) — record accessor
+     * naming (Jackson would otherwise also serialise this as a bean-style
+     * {@code "pass"} property alongside {@code compilationStatus}, which
+     * already conveys the same information).
+     */
+    @JsonIgnore
     public boolean isPass() {
         return CompilationStatus.PASS == compilationStatus;
     }
 
+    /**
+     * Not part of the response JSON — see {@link #isPass()}.
+     */
+    @JsonIgnore
     public boolean isFailed() {
         return CompilationStatus.FAILED == compilationStatus;
     }

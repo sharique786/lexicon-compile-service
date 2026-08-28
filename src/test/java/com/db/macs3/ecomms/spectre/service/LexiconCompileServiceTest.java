@@ -74,7 +74,7 @@ class LexiconCompileServiceTest {
         assertThat(resp.results().getFirst().compilationStatus()).isEqualTo(CompilationStatus.PASS);
         assertThat(resp.results().getFirst().regexPattern()).isNotEmpty();
         assertThat(resp.results().getFirst().regexPattern().getFirst()).isNotBlank();
-        assertThat(resp.results().getFirst().compiledAt()).isNotNull();
+        assertThat(resp.compiledAt()).isNotNull();
     }
 
     @Test

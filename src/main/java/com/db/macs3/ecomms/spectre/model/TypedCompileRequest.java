@@ -99,6 +99,23 @@ public class TypedCompileRequest {
             String termDescription
 
     ) {
+        /**
+         * Strips newline ({@code \n}, {@code \r}) and tab ({@code \t})
+         * characters out of {@code termDescription}, converting each run of
+         * them to a single space, before this input is ever validated or
+         * translated — a term pasted from a multi-line source should not
+         * silently change meaning (or, for a Regex-type term, break PCRE
+         * syntax) just because it carries stray control characters. Runs
+         * before {@code @NotBlank} is evaluated, so a description that was
+         * nothing but newlines/tabs is correctly rejected as blank.
+         */
+        public TermInput {
+            termDescription = stripNewlinesAndTabs(termDescription);
+        }
+
+        private static String stripNewlinesAndTabs(String text) {
+            return text == null ? null : text.replaceAll("[\\t\\n\\r]+", " ");
+        }
     }
 
     // ── Derived helpers ────────────────────────────────────────────────────────
@@ -118,31 +135,31 @@ public class TypedCompileRequest {
         return requestId;
     }
 
-    public void setRequestId(String v) {
-        this.requestId = v;
+    public void setRequestId(String requestId) {
+        this.requestId = requestId;
     }
 
     public String getLexiconRuleName() {
         return lexiconRuleName;
     }
 
-    public void setLexiconRuleName(String v) {
-        this.lexiconRuleName = v;
+    public void setLexiconRuleName(String lexiconRuleName) {
+        this.lexiconRuleName = lexiconRuleName;
     }
 
     public TermType getRequestType() {
         return requestType;
     }
 
-    public void setRequestType(TermType v) {
-        this.requestType = v;
+    public void setRequestType(TermType requestType) {
+        this.requestType = requestType;
     }
 
     public List<TermInput> getTerms() {
         return terms;
     }
 
-    public void setTerms(List<TermInput> v) {
-        this.terms = v;
+    public void setTerms(List<TermInput> terms) {
+        this.terms = terms;
     }
 }

@@ -87,10 +87,10 @@ import java.util.function.IntFunction;
  * <pre>{@code
  * // OLD — hard-coded word-only gap:
  * String gap  = "(?:\\s+\\S+){0,%d}\\s+".formatted(n);
- * String near = "(?:%s%s%s|%s%s%s)".formatted(a, gap, b, b, gap, a);
+ * String near = "(?:%s%s%s|%s%s%s)".formatted(leftOperand, gap, rightOperand, rightOperand, gap, leftOperand);
  *
  * // NEW — language-aware:
- * BuildResult result = MultiLanguagePatternBuilder.buildNear(termA, termB, maxDistance);
+ * BuildResult result = MultiLanguagePatternBuilder.buildNear(leftOperand, rightOperand, maxDistance);
  * String near    = result.pattern();
  * int    hsFlags = result.recommendedHsFlags();
  * }</pre>
@@ -213,17 +213,17 @@ public final class MultiLanguagePatternBuilder {
     /**
      * Builds a bidirectional NEAR pattern.
      *
-     * <p>NEAR{n} matches when {@code termA} appears within n words/characters
-     * of {@code termB} in either order — i.e.:
-     * {@code termA…termB} OR {@code termB…termA}.
+     * <p>NEAR{n} matches when {@code leftOperand} appears within n words/characters
+     * of {@code rightOperand} in either order — i.e.:
+     * {@code leftOperand…rightOperand} OR {@code rightOperand…leftOperand}.
      *
-     * @param termA       first operand (already escaped for Hyperscan PCRE)
-     * @param termB       second operand
-     * @param maxDistance maximum distance in "word gaps" (or character multiples for CJK)
+     * @param leftOperand  first operand (already escaped for Hyperscan PCRE)
+     * @param rightOperand second operand
+     * @param maxDistance  maximum distance in "word gaps" (or character multiples for CJK)
      * @return {@link BuildResult} containing the pattern and recommended flags
      */
-    public static BuildResult buildNear(String termA, String termB, int maxDistance) {
-        ScriptType script = ScriptDetector.detectCombined(termA, termB);
+    public static BuildResult buildNear(String leftOperand, String rightOperand, int maxDistance) {
+        ScriptType script = ScriptDetector.detectCombined(leftOperand, rightOperand);
         // Trial shape used only to test-compile candidate gap widths against real
         // Hyperscan (see charBasedGap/wordBasedGap) — the real bidirectional NEAR
         // shape, with this term's actual (possibly OR-expanded) operand text baked
@@ -231,25 +231,26 @@ public final class MultiLanguagePatternBuilder {
         // not a generic two-word calibration. Gap-fragment format depends on script
         // (char-based [\s\S]{0,n} vs. word-based (?:\s+\S+){0,n}\s+ — see buildGap).
         IntFunction<String> trial = script.isCharBased()
-                ? n -> "(?:%s[\\s\\S]{0,%d}%s|%s[\\s\\S]{0,%d}%s)".formatted(termA, n, termB, termB, n, termA)
+                ? n -> "(?:%s[\\s\\S]{0,%d}%s|%s[\\s\\S]{0,%d}%s)"
+                        .formatted(leftOperand, n, rightOperand, rightOperand, n, leftOperand)
                 : n -> "(?:%s(?:\\s+\\S+){0,%d}\\s+%s|%s(?:\\s+\\S+){0,%d}\\s+%s)"
-                        .formatted(termA, n, termB, termB, n, termA);
-        GapResult gr = buildGap(script, maxDistance, trial);
-        String gap = gr.pattern();
+                        .formatted(leftOperand, n, rightOperand, rightOperand, n, leftOperand);
+        GapResult gapResult = buildGap(script, maxDistance, trial);
+        String gap = gapResult.pattern();
 
         // Bidirectional: (A gap B) OR (B gap A)
-        String pattern = "(?:%s%s%s|%s%s%s)".formatted(termA, gap, termB, termB, gap, termA);
+        String pattern = "(?:%s%s%s|%s%s%s)".formatted(leftOperand, gap, rightOperand, rightOperand, gap, leftOperand);
 
         log.debug("NEAR{} built: script={}, gap={}, pattern={}",
                 maxDistance, script, gap, pattern);
 
-        return new BuildResult(pattern, script, script.recommendedHsFlags(), gr.warning());
+        return new BuildResult(pattern, script, script.recommendedHsFlags(), gapResult.warning());
     }
 
     /**
      * Builds a directional FOLLOWEDBY pattern.
      *
-     * <p>FOLLOWEDBY{n} matches when {@code termA} appears before {@code termB}
+     * <p>FOLLOWEDBY{n} matches when {@code leftOperand} appears before {@code rightOperand}
      * in logical (stored) order, with at most n word gaps between them.
      *
      * <p><b>RTL note</b>
@@ -259,37 +260,37 @@ public final class MultiLanguagePatternBuilder {
      * result because the user's visual intent (e.g. Arabic word "comes after"
      * an English word) may not align with logical-order matching.
      *
-     * @param termA       first operand (expected to appear first in text)
-     * @param termB       second operand (expected to follow termA)
-     * @param maxDistance maximum gap distance
+     * @param leftOperand  first operand (expected to appear first in text)
+     * @param rightOperand second operand (expected to follow leftOperand)
+     * @param maxDistance  maximum gap distance
      * @return {@link BuildResult} containing the pattern and recommended flags
      */
-    public static BuildResult buildFollowedBy(String termA, String termB, int maxDistance) {
-        ScriptType script = ScriptDetector.detectCombined(termA, termB);
+    public static BuildResult buildFollowedBy(String leftOperand, String rightOperand, int maxDistance) {
+        ScriptType script = ScriptDetector.detectCombined(leftOperand, rightOperand);
         // See buildNear for why this trial shape matters — here it's the real
         // directional FOLLOWEDBY shape instead of the bidirectional NEAR one.
         IntFunction<String> trial = script.isCharBased()
-                ? n -> "%s[\\s\\S]{0,%d}%s".formatted(termA, n, termB)
-                : n -> "%s(?:\\s+\\S+){0,%d}\\s+%s".formatted(termA, n, termB);
-        GapResult gr = buildGap(script, maxDistance, trial);
-        String gap = gr.pattern();
+                ? n -> "%s[\\s\\S]{0,%d}%s".formatted(leftOperand, n, rightOperand)
+                : n -> "%s(?:\\s+\\S+){0,%d}\\s+%s".formatted(leftOperand, n, rightOperand);
+        GapResult gapResult = buildGap(script, maxDistance, trial);
+        String gap = gapResult.pattern();
 
         // Directional: A then B
-        String pattern = "%s%s%s".formatted(termA, gap, termB);
+        String pattern = "%s%s%s".formatted(leftOperand, gap, rightOperand);
 
         // Warn for mixed RTL+LTR FOLLOWEDBY — reading order may differ visually
         String rtlWarning = null;
-        if (ScriptDetector.hasRtlComponent(termA, termB)
-                && !ScriptDetector.isPurelyRtl(termA, termB)) {
+        if (ScriptDetector.hasRtlComponent(leftOperand, rightOperand)
+                && !ScriptDetector.isPurelyRtl(leftOperand, rightOperand)) {
             rtlWarning = "FOLLOWEDBY with mixed RTL+LTR operands matches in logical "
                     + "(stored) byte order, not visual reading order. "
-                    + "Verify the intended direction for: '" + termA + "' FOLLOWEDBY '" + termB + "'";
+                    + "Verify the intended direction for: '" + leftOperand + "' FOLLOWEDBY '" + rightOperand + "'";
             log.warn(rtlWarning);
         }
-        if (gr.hasWarning()) {
-            log.warn(gr.warning());
+        if (gapResult.hasWarning()) {
+            log.warn(gapResult.warning());
         }
-        String warning = combineWarnings(rtlWarning, gr.warning());
+        String warning = combineWarnings(rtlWarning, gapResult.warning());
 
         log.debug("FOLLOWEDBY{} built: script={}, gap={}, pattern={}",
                 maxDistance, script, gap, pattern);
@@ -312,12 +313,12 @@ public final class MultiLanguagePatternBuilder {
      * Returns the recommended Hyperscan flag bitmask for a given pair of operands.
      * Useful when the caller needs the flags independently of pattern construction.
      *
-     * @param termA first operand
-     * @param termB second operand
+     * @param leftOperand  first operand
+     * @param rightOperand second operand
      * @return Hyperscan flag bitmask (includes UTF8+UCP for non-Latin scripts)
      */
-    public static int recommendedHsFlags(String termA, String termB) {
-        return ScriptDetector.detectCombined(termA, termB).recommendedHsFlags();
+    public static int recommendedHsFlags(String leftOperand, String rightOperand) {
+        return ScriptDetector.detectCombined(leftOperand, rightOperand).recommendedHsFlags();
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -697,14 +698,14 @@ public final class MultiLanguagePatternBuilder {
      * Convenience wrapper for callers that build the full CompileResponse
      * separately.
      */
-    public static String nearPattern(String termA, String termB, int maxDistance) {
-        return buildNear(termA, termB, maxDistance).pattern();
+    public static String nearPattern(String leftOperand, String rightOperand, int maxDistance) {
+        return buildNear(leftOperand, rightOperand, maxDistance).pattern();
     }
 
     /**
      * Returns only the FOLLOWEDBY pattern string (no metadata).
      */
-    public static String followedByPattern(String termA, String termB, int maxDistance) {
-        return buildFollowedBy(termA, termB, maxDistance).pattern();
+    public static String followedByPattern(String leftOperand, String rightOperand, int maxDistance) {
+        return buildFollowedBy(leftOperand, rightOperand, maxDistance).pattern();
     }
 }

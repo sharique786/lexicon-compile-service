@@ -15,6 +15,28 @@ import java.util.function.IntFunction;
 /**
  * Builds NEAR and FOLLOWEDBY Hyperscan PCRE patterns with full multi-language support.
  *
+ * <p><b>Narrowed to one residual caller as of the {@code resolvedPatterns}
+ * change — no longer the general NEAR/FOLLOWEDBY path</b>
+ * <p>NEAR/FOLLOWEDBY structure now unconditionally splits into independent
+ * leaf patterns via {@link PatternDecomposer}, with the gap conveyed as
+ * literal {@code NEAR{n}}/{@code FOLLOWEDBY{n}} keyword text in
+ * {@code resolvedPatterns} instead of being compiled into a regex fragment
+ * — see that class's Javadoc "the one exception". This builder's
+ * {@link #buildNear}/{@link #buildFollowedBy} (and therefore the static
+ * clamp and adaptive real-Hyperscan retry below) are reachable from exactly
+ * ONE remaining path: {@link PatternCodeGenerator#generateNear}/
+ * {@link PatternCodeGenerator#generateFollowedBy}, called only when a
+ * NEAR/FOLLOWEDBY node is nested inside a multi-operand {@code OR} — a case
+ * confirmed to be real, currently-used functionality that cannot be
+ * losslessly flattened into a flat leaf list, so it deliberately keeps
+ * compiling as a single gap-embedded pattern exactly as before. Both the
+ * static clamp and the adaptive retry stay live specifically because this
+ * residual path can still, in principle, produce a gap Hyperscan rejects as
+ * "too large" — removing either here would silently reintroduce that bug
+ * for this narrower case. Do not "finish disconnecting" this class without
+ * first re-reading {@code PatternDecomposer}'s Javadoc on why OR-nested
+ * proximity is excluded from unconditional splitting.
+ *
  * <p><b>Problem with the previous implementation</b>
  * <p>The old builder always used a word-token gap:
  * <pre>{@code (?:\s+\S+){0,n}\s+}</pre>

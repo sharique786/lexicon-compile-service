@@ -18,6 +18,10 @@ import java.util.List;
  *   <li>{@code errorLog} — non-null only for Hyperscan-stage failures</li>
  *   <li>{@code translationError} — non-null only for translation-stage failures</li>
  *   <li>{@code exclusionRegex} — non-null only when {@code requiresExclusionCheck} is true</li>
+ *   <li>{@code resolvedPatterns} — non-null for every PASS Natural-Language term (see
+ *       "{@code resolvedPatterns}" below); null for a FAILED term and for a PASS
+ *       Regex-type term (which never goes through the translator/AST this field is
+ *       built from)</li>
  *   <li>{@code hyperscanExpressionId} — populated only on a {@code /compile/bundle}
  *       response, and only for a term that does NOT require an exclusion check
  *       (simple or purely decomposed). Null for {@code /compile}/{@code /compile/csv},
@@ -30,7 +34,7 @@ import java.util.List;
  *       which uses {@code hyperscanExpressionId} instead).</li>
  *   <li>{@code patternMapping} — populated only on a {@code /compile/bundle}
  *       response, and only when the term needed MORE than one Hyperscan
- *       expression id to represent it (a pure-decomposition term, an AND NOT
+ *       expression id to represent it (a term with NEAR/FOLLOWEDBY structure, an AND NOT
  *       term, or both at once). Null for a simple term (single
  *       {@code hyperscanExpressionId}, nothing to map) and null outside
  *       {@code /compile/bundle} — see "{@code patternMapping}: the logical
@@ -41,30 +45,32 @@ import java.util.List;
  * Both are null when {@code compilationStatus} is {@code PASS}.
  *
  * <p><b>{@code regexPattern} and {@code exclusionRegex} are always lists</b>
- * <p>Every lexicon term — however structurally complex, and whether or not
- * it uses {@code AND NOT} — is represented uniformly: {@code regexPattern}
- * holds the required side's independently Hyperscan-valid pattern(s), one
- * entry for a term simple enough to compile as a single pattern, two or
- * more for a term too structurally complex for that (see
- * {@code PatternComplexityAnalyzer} / {@code PatternDecomposer}) — decomposed
- * into independent leaf patterns instead of being rejected outright. There
- * is no separate "was this decomposed" boolean any more: a caller checks
- * {@code regexPattern.size()}. The same applies to
- * {@code exclusionRegex} for an AND NOT term's excluded side.
+ * <p>Every Natural-Language lexicon term — however structurally complex, and
+ * whether or not it uses {@code AND NOT} — is represented uniformly:
+ * {@code regexPattern} holds the required side's independently
+ * Hyperscan-valid pattern(s), one entry for a side with no NEAR/FOLLOWEDBY
+ * structure (or whose NEAR/FOLLOWEDBY is nested inside an {@code OR} — see
+ * {@code PatternDecomposer} class Javadoc "the one exception"), two or more
+ * for a side containing NEAR/FOLLOWEDBY structure elsewhere — split into
+ * independent leaf patterns unconditionally, not as a complexity-driven
+ * fallback (see {@code PatternDecomposer}). There is no separate "was this
+ * split" boolean any more: a caller checks {@code regexPattern.size()}. The
+ * same applies to {@code exclusionRegex} for an AND NOT term's excluded side.
  *
  * <p><b>Multiple entries are a real precision trade-off — always check
- * {@code warnings}.</b> Decomposition discards the original NEAR/FOLLOWEDBY
- * ordering/distance constraint BETWEEN leaf patterns: the leaves are
- * combined with pure boolean AND ("all of these appear somewhere in the
- * message"), not with any positional relationship to EACH OTHER. Each leaf
- * after the first still carries its own originating NEAR/FOLLOWEDBY node's
- * gap fragment as a literal prefix in its own pattern text (so it can never
- * match with nothing preceding it — e.g. as the message's first token), but
- * that gap is no longer anchored to the SPECIFIC leaf that preceded it in
- * the original term — only the cross-leaf relationship is lost, not the gap
- * width itself. {@code warnings} always carries an explicit entry whenever
+ * {@code warnings}, and read {@code resolvedPatterns} for the full relationship.</b>
+ * Splitting discards the original NEAR/FOLLOWEDBY ordering/distance
+ * constraint BETWEEN leaf patterns: the leaves are combined with pure
+ * boolean AND ("all of these appear somewhere in the message"), not with
+ * any positional relationship to EACH OTHER. Unlike an earlier revision of
+ * this codebase, NO gap fragment is baked into any leaf's own pattern text
+ * any more — the leaves are pure, gap-free fragments. The full relationship
+ * — including the term author's raw, un-clamped NEAR/FOLLOWEDBY distance —
+ * is instead conveyed separately via {@code resolvedPatterns}, as literal
+ * keyword text. {@code warnings} always carries an explicit entry whenever
  * this trade-off applies to either side, so no caller can silently treat a
- * decomposed match as a genuine proximity match.
+ * split match as a genuine proximity match without realizing precision
+ * moved to {@code resolvedPatterns}.
  *
  * <p><b>AND NOT has two different correct implementations, for two different callers</b>
  * <p>{@code regexPattern} and {@code exclusionRegex} are independently
@@ -99,16 +105,48 @@ import java.util.List;
  *       {@code HyperscanCombinationHandler} and {@code LexiconCompileBundleService}.</li>
  * </ul>
  *
+ * <p><b>{@code resolvedPatterns}: the literal-keyword proximity/AND-NOT structure,
+ * for a downstream Java-regex-based consumer</b>
+ * <p>Since {@code regexPattern}/{@code exclusionRegex} no longer encode any
+ * NEAR/FOLLOWEDBY gap or AND-NOT relationship (both are conveyed only as
+ * pure boolean-AND presence via ids/{@code patternMapping} above),
+ * {@code resolvedPatterns} is where that relationship actually lives: this
+ * term (or, for AND NOT, both sides joined by the literal keyword) rendered
+ * with {@code NEAR{n}}/{@code FOLLOWEDBY{n}}/{@code AND NOT} standing in for
+ * whatever would otherwise be a gap regex — e.g.
+ * {@code "bash FOLLOWEDBY{30} (?:fuck|fck)"} or
+ * {@code "insider AND NOT ((?:wordA...) FOLLOWEDBY{2} (?:wordH...) FOLLOWEDBY{2} (?:wordO...))"}.
+ * Despite the plural field name (matching how downstream consumers refer to
+ * it), this is always exactly ONE {@code String} per term, never a list —
+ * every leaf substring within it is byte-identical to the corresponding
+ * {@code regexPattern}/{@code exclusionRegex} entry, in the same
+ * left-to-right order, so a consumer can correlate a leaf's own
+ * Hyperscan-match presence with its exact position inside this string. A
+ * downstream Java-regex-based matcher (Lexicon Scan Engine / Lexicon
+ * Scanner Service — not part of this repo) tokenizes this text and applies
+ * the actual proximity/AND-NOT logic itself; see
+ * {@code src/test/java/.../TokenProximityMatcher.java}-family classes in
+ * this repo's test tree for a reference implementation of that downstream
+ * technique. See {@code PatternDecomposer} class Javadoc for exactly how
+ * this string is built, including the one deliberate exception (NEAR/FOLLOWEDBY
+ * nested inside an {@code OR} still compiles as a single gap-embedded
+ * pattern, and this field's corresponding text is that same gap-embedded
+ * string, byte-identical to its {@code regexPattern}/{@code exclusionRegex}
+ * entry). Populated identically for all three endpoints — unlike
+ * {@code hyperscanExpressionId}/{@code patternMapping}/
+ * {@code requiredExpressionIds}/{@code excludedExpressionIds}, which are
+ * {@code /compile/bundle}-only.
+ *
  * <p><b>{@code hyperscanExpressionId}: the term's own term number, when it applies</b>
  * <p>On a {@code /compile/bundle} response, a non-AND-NOT PASS term's
- * reportable Hyperscan expression id — whether it needed decomposition or
+ * reportable Hyperscan expression id — whether it needed splitting or
  * not — is ALWAYS its own term number (parsed from its {@code termId}'s
  * {@code ::<n>} suffix). This is deliberate: a downstream consumer that
  * already knows a term's number can predict which expression id to watch
  * for WITHOUT reading this JSON at all. An AND NOT term does not have this
  * property any more — see the two-implementations note above — and reports
  * via {@code requiredExpressionIds}/{@code excludedExpressionIds} instead.
- * Every QUIET sub-expression a pure-decomposition combination needs is
+ * Every QUIET sub-expression a term with NEAR/FOLLOWEDBY structure needs is
  * assigned an id from a separate allocated range that never collides with
  * any term number — see {@code HyperscanCombinationHandler}.
  *
@@ -118,15 +156,18 @@ import java.util.List;
  * {@code HS_FLAG_COMBINATION} formulas use — e.g. {@code "(5&6&7)"} or
  * {@code "(8&!(9&10&11))"}. Each side (required / excluded, when present)
  * is AND-joined: a bare id when that side has exactly one, or a
- * parenthesised {@code (id1&id2&...)} when it was decomposed into several
+ * parenthesised {@code (id1&id2&...)} when it was split into several
  * — matching the "AND convention" documented above for
- * {@code requiredExpressionIds}/{@code excludedExpressionIds}.
+ * {@code requiredExpressionIds}/{@code excludedExpressionIds}. Kept
+ * unchanged, additive alongside {@code resolvedPatterns} — a caller that
+ * only needs presence/AND-NOT boolean logic (not proximity precision) can
+ * keep using this field exactly as before.
  *
  * <p><b>This does NOT always mean the {@code .hdb} file itself contains a
  * native {@code HS_FLAG_COMBINATION} expression evaluating this formula —
  * read the id/case carefully:</b>
  * <ul>
- *   <li><b>Pure decomposition, no AND NOT</b> — the {@code .hdb} DOES
+ *   <li><b>A term with NEAR/FOLLOWEDBY structure, no AND NOT</b> — the {@code .hdb} DOES
  *       contain a real {@code COMBINATION} expression at
  *       {@code hyperscanExpressionId} evaluating exactly this formula
  *       natively during the scan (see {@code HyperscanCombinationHandler}
@@ -134,7 +175,7 @@ import java.util.List;
  *       {@code patternMapping} mirrors that same formula string for a
  *       caller that wants it without cross-referencing the {@code .hdb}'s
  *       own expression metadata.</li>
- *   <li><b>AND NOT (regardless of decomposition on either side)</b> — the
+ *   <li><b>AND NOT (regardless of NEAR/FOLLOWEDBY structure on either side)</b> — the
  *       {@code .hdb} file contains NO combination for this formula at all
  *       — confirmed unsafe, since Hyperscan evaluates a formula mixing a
  *       positive requirement with a negation eagerly and progressively,
@@ -175,8 +216,8 @@ public record TermCompilationResult(
         /*
          * Hyperscan error message when a pattern was syntactically valid
          * PCRE but Hyperscan's compiler still rejected it — the main
-         * pattern, the exclusion pattern, or a decomposed leaf of either
-         * side (the message says which). Null for PASS terms and for
+         * pattern, the exclusion pattern, or a leaf of either side (the
+         * message says which). Null for PASS terms and for
          * translation-stage failures.
          */
         @JsonProperty("errorLog")
@@ -185,10 +226,9 @@ public record TermCompilationResult(
         /*
          * Error from the operator-language translator, when the term's text
          * could not be converted into a PCRE pattern at all (e.g. missing
-         * operand for NEAR{n}), OR when a side was over budget AND had no
-         * NEAR/FOLLOWEDBY structure left to decompose, OR when even a
-         * decomposed leaf was itself over budget on its own — see
-         * {@code PatternDecomposer}. Null for PASS terms and for
+         * operand for NEAR{n}), OR when a leaf with no further NEAR/FOLLOWEDBY
+         * structure was itself rejected by Hyperscan — see
+         * {@code TermSyntaxTranslator}. Null for PASS terms and for
          * Hyperscan-stage failures.
          */
         @JsonProperty("translationError")
@@ -224,8 +264,8 @@ public record TermCompilationResult(
 
         /*
          * Non-fatal issues worth surfacing to the caller — never null, may
-         * be empty. Always includes an explicit entry whenever decomposition
-         * applied to either side (see class Javadoc), and whenever the term
+         * be empty. Always includes an explicit entry whenever NEAR/FOLLOWEDBY
+         * splitting applied to either side (see class Javadoc), and whenever the term
          * relied on chained NEAR/FOLLOWEDBY without explicit parentheses
          * (see {@code ExpressionParser}). Present regardless of
          * {@code compilationStatus}, though in practice only PASS terms
@@ -233,6 +273,18 @@ public record TermCompilationResult(
          */
         @JsonProperty("warnings")
         List<String> warnings,
+
+        /*
+         * This term (or, for AND NOT, both sides joined by the literal
+         * keyword) rendered with NEAR{n}/FOLLOWEDBY{n}/AND NOT keyword text
+         * standing in for any gap regex — see class Javadoc
+         * "resolvedPatterns". Always exactly one String (never a list,
+         * despite the plural name) for a PASS Natural-Language term; null
+         * for a FAILED term and for a PASS Regex-type term. Populated
+         * identically across all three endpoints.
+         */
+        @JsonProperty("resolvedPatterns")
+        String resolvedPatterns,
 
         /*
          * On a {@code /compile/bundle} response only, for a term that does NOT
@@ -276,7 +328,7 @@ public record TermCompilationResult(
 
         /*
          * On a {@code /compile/bundle} response only, for a term that needed
-         * more than one Hyperscan expression id (pure decomposition, AND
+         * more than one Hyperscan expression id (NEAR/FOLLOWEDBY structure, AND
          * NOT, or both): the logical formula over those ids — see class
          * Javadoc "patternMapping: the logical formula...". Null for a
          * simple term (single {@code hyperscanExpressionId}) and null
@@ -295,36 +347,42 @@ public record TermCompilationResult(
     /**
      * Creates a PASS result. {@code regexPattern} and (when
      * {@code requiresExclusionCheck}) {@code exclusionRegex} may each have
-     * one entry (simple term) or several (decomposed) — see class Javadoc.
-     * {@code warnings} may be empty.
+     * one entry (no NEAR/FOLLOWEDBY structure) or several (split) — see class Javadoc.
+     * {@code warnings} may be empty. {@code resolvedPatterns} should be null
+     * only for a Regex-type term (which never goes through the translator
+     * this field is built from).
      */
     public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
                                              List<String> regexPattern,
                                              int hyperscanFlags,
                                              boolean requiresExclusionCheck,
                                              List<String> exclusionRegex,
-                                             List<String> warnings) {
+                                             List<String> warnings,
+                                             String resolvedPatterns) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(),
                 CompilationStatus.PASS,
                 regexPattern, null, null,
                 hyperscanFlags, requiresExclusionCheck, exclusionRegex,
                 warnings == null ? List.of() : List.copyOf(warnings),
+                resolvedPatterns,
                 null, null, null, null, Instant.now());
     }
 
     /**
-     * Convenience overload for a PASS result with no AND-NOT exclusion and no warnings.
+     * Convenience overload for a PASS result with no AND-NOT exclusion, no
+     * warnings, and no {@code resolvedPatterns} — used for Regex-type terms,
+     * which never go through the translator/AST this field is built from.
      */
     public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
                                              List<String> regexPattern,
                                              int hyperscanFlags) {
-        return pass(input, regexPattern, hyperscanFlags, false, null, List.of());
+        return pass(input, regexPattern, hyperscanFlags, false, null, List.of(), null);
     }
 
     /**
      * Creates a FAILED result where Hyperscan rejected a pattern — the main
-     * pattern, the exclusion pattern, or a decomposed leaf of either side
+     * pattern, the exclusion pattern, or a leaf of either side
      * (the message says which).
      *
      * @param regexPattern the pattern(s) attempted, for visibility — may be null
@@ -339,14 +397,15 @@ public record TermCompilationResult(
                 CompilationStatus.FAILED,
                 regexPattern, errorLog, null,
                 hyperscanFlags, false, null, List.of(),
+                null,
                 null, null, null, null, Instant.now());
     }
 
     /**
      * Creates a FAILED result where the term's syntax could not be translated
-     * into a PCRE pattern at all — including the narrower decomposition-failure
-     * cases (no proximity structure left to decompose; a leaf itself over
-     * budget) — see {@code TermSyntaxTranslator}. Hyperscan was never invoked.
+     * into a PCRE pattern at all — including a leaf with no further
+     * NEAR/FOLLOWEDBY structure that was itself rejected by Hyperscan — see
+     * {@code TermSyntaxTranslator}. Hyperscan was never invoked.
      */
     public static TermCompilationResult failedTranslation(TypedCompileRequest.TermInput input,
                                                           String translationError) {
@@ -355,6 +414,7 @@ public record TermCompilationResult(
                 CompilationStatus.FAILED,
                 null, null, translationError,
                 0, false, null, List.of(),
+                null,
                 null, null, null, null, Instant.now());
     }
 
@@ -367,13 +427,14 @@ public record TermCompilationResult(
      *
      * @param patternMapping the logical formula over this term's leaf ids —
      *                       see class Javadoc "patternMapping" — null for a
-     *                       simple, non-decomposed term (nothing to map)
+     *                       simple, non-split term (nothing to map)
      */
     public TermCompilationResult withHyperscanExpressionId(int id, String patternMapping) {
         return new TermCompilationResult(
                 termId, termDescription, compilationStatus,
                 regexPattern, errorLog, translationError,
                 hyperscanFlags, requiresExclusionCheck, exclusionRegex, warnings,
+                resolvedPatterns,
                 id, null, null, patternMapping, compiledAt);
     }
 
@@ -398,6 +459,7 @@ public record TermCompilationResult(
                 termId, termDescription, compilationStatus,
                 regexPattern, errorLog, translationError,
                 hyperscanFlags, requiresExclusionCheck, exclusionRegex, warnings,
+                resolvedPatterns,
                 null, requiredExpressionIds, excludedExpressionIds, patternMapping, compiledAt);
     }
 

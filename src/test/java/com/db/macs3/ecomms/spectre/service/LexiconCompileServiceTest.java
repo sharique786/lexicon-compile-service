@@ -268,12 +268,14 @@ class LexiconCompileServiceTest {
 
     @Test
     @Order(30)
-    @DisplayName("FOLLOWEDBY{3}: don't FOLLOWEDBY{3} compliance → PASS")
+    @DisplayName("FOLLOWEDBY{3}: don't FOLLOWEDBY{3} compliance → PASS, split into two gap-less leaves, "
+            + "with the proximity conveyed via resolvedPatterns instead of a gap regex")
     void followedByCompiles() {
         var resp = compile("fb_rule", "don't FOLLOWEDBY{3} compliance");
         assertThat(resp.passCount()).isEqualTo(1);
-        assertThat(resp.results().getFirst().regexPattern().getFirst()).contains("don't");
-        assertThat(resp.results().getFirst().regexPattern().getFirst()).contains("{0,3}");
+        var result = resp.results().getFirst();
+        assertThat(result.regexPattern()).containsExactly("don't", "compliance");
+        assertThat(result.resolvedPatterns()).isEqualTo("don't FOLLOWEDBY{3} compliance");
     }
 
     // ── AND: corrected co-occurrence semantics ──────────────────────────────────

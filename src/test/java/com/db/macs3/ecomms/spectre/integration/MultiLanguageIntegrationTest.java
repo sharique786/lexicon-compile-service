@@ -133,23 +133,13 @@ class MultiLanguageIntegrationTest {
             John
             """;
 
-    @Test
-    @Order(1)
-    @DisplayName("English email: NEAR{5} — 'manipulate the stock price' → MATCH")
-    void englishNearMatch() throws Exception {
-        assertThat(matches(
-                "(manipulat*) NEAR{5} ((price) OR (spread) OR (stock))",
-                OUTLOOK_EMAIL_1)).isTrue();
-    }
-
-    @Test
-    @Order(2)
-    @DisplayName("English email: NEAR{5} — spread also within distance → MATCH")
-    void englishNearSpreadMatch() throws Exception {
-        assertThat(matches(
-                "(manipulat*) NEAR{5} ((price) OR (spread) OR (stock))",
-                "The spread manipulation was clear from the order flow.")).isTrue();
-    }
+    // englishNearMatch / englishNearSpreadMatch removed: a NEAR term now splits into
+    // independent leaves with no gap regex at all (see PatternDecomposer class Javadoc),
+    // so matches()'s single-hsPattern check would only be testing whether "manipulat*"
+    // appears anywhere in the message — no longer a meaningful NEAR{5} verification.
+    // See ResolvedPatternMatchingIntegrationTest.RealisticFixtures#englishNearMatch,
+    // which verifies this exact scenario end-to-end via regexPattern + resolvedPatterns
+    // + ResolvedPatternMatcher instead.
 
     @Test
     @Order(3)
@@ -160,13 +150,8 @@ class MultiLanguageIntegrationTest {
                 OUTLOOK_EMAIL_1)).isTrue();
     }
 
-    @Test
-    @Order(4)
-    @DisplayName("English email: FOLLOWEDBY{5} — 'don't ... compliance' → MATCH")
-    void englishFollowedByMatch() throws Exception {
-        // "don't forward this email to compliance" — 4 words in between
-        assertThat(matches("don't FOLLOWEDBY{5} compliance", OUTLOOK_EMAIL_1)).isTrue();
-    }
+    // englishFollowedByMatch removed — same reason as englishNearMatch above. See
+    // ResolvedPatternMatchingIntegrationTest.RealisticFixtures#englishFollowedByMatch.
 
     @Test
     @Order(5)
@@ -189,14 +174,8 @@ class MultiLanguageIntegrationTest {
                 "We plan to manipulate the price of the stock.")).isTrue();
     }
 
-    @Test
-    @Order(7)
-    @DisplayName("English email: unrelated content → NO MATCH for price+manipulation")
-    void englishNoMatch() throws Exception {
-        assertThat(matches(
-                "(manipulat*) NEAR{5} ((price) OR (spread) OR (stock))",
-                "Please see the attached quarterly report for your review.")).isFalse();
-    }
+    // englishNoMatch removed — same reason as englishNearMatch above. See
+    // ResolvedPatternMatchingIntegrationTest.RealisticFixtures#englishNoMatch.
 
     // ═════════════════════════════════════════════════════════════════════════
     // SCENARIO 2: Symphony chat — Korean
@@ -267,15 +246,10 @@ class MultiLanguageIntegrationTest {
         assertThat(result.isSuccess()).isFalse();
     }
 
-    @Test
-    @Order(32)
-    @DisplayName("Bloomberg chat: tip NEAR{4} announcement — 4 intervening tokens (💰, act, now, before)")
-    void englishNearInBloombergChat() throws Exception {
-        // BLOOMBERG_CHAT has exactly 4 tokens between "tip" and "announcement":
-        // "💰 act now before" — NEAR{4} is the tight boundary that matches; NEAR{3}
-        // would not, since it allows at most 3 intervening words.
-        assertThat(matches("tip NEAR{4} announcement", BLOOMBERG_CHAT)).isTrue();
-    }
+    // englishNearInBloombergChat removed — same reason as englishNearMatch above. See
+    // ResolvedPatternMatchingIntegrationTest.RealisticFixtures#tightBoundary, which
+    // verifies this exact NEAR{4}-passes/NEAR{3}-fails boundary via regexPattern +
+    // resolvedPatterns + ResolvedPatternMatcher instead.
 
     // ═════════════════════════════════════════════════════════════════════════
     // SCENARIO 4: Teams message — Chinese/Mandarin

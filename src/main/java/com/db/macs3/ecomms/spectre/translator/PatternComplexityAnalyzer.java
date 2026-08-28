@@ -9,6 +9,20 @@ import com.db.macs3.ecomms.spectre.util.ScriptDetector;
  * {@link PatternCodeGenerator} even runs — with a specific, actionable error
  * instead of letting Hyperscan fail opaquely at compile time.
  *
+ * <p><b>Unused/dormant as of the {@code resolvedPatterns} change — no live
+ * caller</b>
+ * <p>{@link TermSyntaxTranslator} no longer consults {@link #isOverBudget}/
+ * {@link #estimate} to decide anything: NEAR/FOLLOWEDBY structure now always
+ * splits unconditionally, via {@link PatternDecomposer}, regardless of
+ * complexity — see that class's own Javadoc. The specific problem this
+ * class was built to predict — a gap-embedded pattern too large for
+ * Hyperscan to compile — can no longer occur for that unconditional path at
+ * all, since the gap is never compiled into a regex fragment any more. This
+ * class is kept in the codebase (not deleted) purely for reference/possible
+ * future reuse; do not wire it back into {@link TermSyntaxTranslator}
+ * without re-reading {@code PatternDecomposer}'s and
+ * {@code TermCompilationResult.resolvedPatterns}' Javadoc first.
+ *
  * <p><b>Why string length isn't the right signal</b>
  * <p>The reported failure case compiles to a 190-character pattern — nowhere
  * near any raw length limit. Hyperscan's "Pattern is too large" is a

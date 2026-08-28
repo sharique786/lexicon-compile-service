@@ -54,19 +54,21 @@ class TermSyntaxTranslatorTest {
     class BracketResolution {
 
         @Test
-        @DisplayName("Example 1: (crap OR bad) NEAR{3} (bonus OR comp)")
+        @DisplayName("Example 1: (crap OR bad) NEAR{3} (bonus OR comp) — splits into two gap-less "
+                + "leaves, proximity conveyed via resolvedPatterns instead of a gap regex")
         void example1_orInsideNear() {
             var s = translateOk("(crap OR bad) NEAR{3} (bonus OR comp)");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo(
-                    "(?:(?:crap|bad)(?:\\s+\\S+){0,3}\\s+(?:bonus|comp)"
-                            + "|(?:bonus|comp)(?:\\s+\\S+){0,3}\\s+(?:crap|bad))");
+            assertThat(s.hsPatterns()).containsExactly("(?:crap|bad)", "(?:bonus|comp)");
+            assertThat(s.resolvedPattern()).isEqualTo("(?:crap|bad) NEAR{3} (?:bonus|comp)");
         }
 
         @Test
-        @DisplayName("Example 2: (F) FOLLOWEDBY{1} (((me) OR (cking))) — triple redundant wrapping")
+        @DisplayName("Example 2: (F) FOLLOWEDBY{1} (((me) OR (cking))) — triple redundant wrapping, "
+                + "splits into two gap-less leaves")
         void example2_deeplyRedundantWrapping() {
             var s = translateOk("(F) FOLLOWEDBY{1} (((me) OR (cking)))");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("F(?:\\s+\\S+){0,1}\\s+(?:me|cking)");
+            assertThat(s.hsPatterns()).containsExactly("F", "(?:me|cking)");
+            assertThat(s.resolvedPattern()).isEqualTo("F FOLLOWEDBY{1} (?:me|cking)");
         }
 
         @ParameterizedTest(name = "[{index}] {0}")
@@ -134,7 +136,7 @@ class TermSyntaxTranslatorTest {
         @DisplayName("Unwrapped phrase inside NEAR/FOLLOWEDBY operands is also accepted")
         void unwrappedPhraseInProximityOperand() {
             var s = translateOk("insider trading NEAR{3} market manipulation");
-            assertThat(s.hsPatterns().getFirst()).contains("insider trading").contains("market manipulation");
+            assertThat(s.hsPatterns()).containsExactly("insider trading", "market manipulation");
         }
 
         @Test
@@ -277,10 +279,12 @@ class TermSyntaxTranslatorTest {
                 "never baked into hsPattern as an invalid lookbehind")
         void andNot_positivePatternAndSeparateExclusion() {
             var s = translateOk("((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)");
-            assertThat(s.hsPatterns().getFirst()).contains("fix|rig").contains("the rate");
-            assertThat(s.hsPatterns().getFirst()).doesNotContain("fed rate move");
-            assertThat(NO_LOOKAROUND_CHECK.matcher(s.hsPatterns().getFirst()).find()).isFalse();
+            assertThat(s.hsPatterns()).containsExactly("(?:fix|rig)", "the rate");
+            assertThat(s.hsPatterns()).noneMatch(p -> p.contains("fed rate move"));
+            assertThat(s.hsPatterns()).noneMatch(p -> NO_LOOKAROUND_CHECK.matcher(p).find());
             assertThat(s.exclusionRegexs().getFirst()).contains("fed rate move");
+            assertThat(s.resolvedPattern()).isEqualTo(
+                    "(?:fix|rig) FOLLOWEDBY{2} the rate AND NOT (fed rate move)");
         }
 
         @Test
@@ -288,14 +292,16 @@ class TermSyntaxTranslatorTest {
         void andNotWithoutSpaceBeforeParen() {
             var s = translateOk("(hello) AND NOT(world)");
             assertThat(s.requiresExclusionCheck()).isTrue();
-            assertThat(s.exclusionRegexs().getFirst()).isEqualTo("(?:world)");
+            assertThat(s.exclusionRegexs().getFirst()).isEqualTo("world");
         }
 
         @Test
         @DisplayName("Explicitly-nested FOLLOWEDBY inside an AND-NOT exclusion (different grammar levels) still resolves")
         void nestedFollowedByInsideAndNotExclusion() {
             var s = translateOk("(hello) AND NOT(((a OR b) FOLLOWEDBY{1} (c OR d)) FOLLOWEDBY{1} (e OR f))");
-            assertThat(s.exclusionRegexs().getFirst()).contains("(?:a|b)").contains("(?:c|d)").contains("(?:e|f)");
+            assertThat(s.exclusionRegexs()).containsExactly("(?:a|b)", "(?:c|d)", "(?:e|f)");
+            assertThat(s.resolvedPattern()).isEqualTo(
+                    "hello AND NOT ((?:a|b) FOLLOWEDBY{1} (?:c|d) FOLLOWEDBY{1} (?:e|f))");
         }
 
         @Test
@@ -636,7 +642,7 @@ class TermSyntaxTranslatorTest {
         @DisplayName("Term 3: prefix-wildcard German words compile with wildcard correctly expanded")
         void term3_prefixWildcardOnGermanWords() {
             var s = translateOk("(gemobbt OR eingeschüchtert) NEAR{2} (broker OR *händler OR *haendler)");
-            assertThat(s.hsPatterns().getFirst()).contains("\\S*h\u00e4ndler").contains("\\S*haendler");
+            assertThat(s.hsPatterns().get(1)).contains("\\S*h\u00e4ndler").contains("\\S*haendler");
         }
 
         @Test
@@ -707,26 +713,28 @@ class TermSyntaxTranslatorTest {
     class PatternComplexity {
 
         @Test
-        @DisplayName("THE REPORTED FAILING TERM: nested FOLLOWEDBY with wide OR/wildcard operands " +
-                "DECOMPOSES into independent leaves instead of failing outright, with an explicit warning")
+        @DisplayName("THE REPORTED FAILING TERM: nested FOLLOWEDBY with wide OR/wildcard operands "
+                + "SPLITS into independent leaves — unconditionally now, not as a complexity-driven "
+                + "fallback — with an explicit warning")
         void reportedFailingTerm_decomposesWithWarning() {
             String term = "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) FOLLOWEDBY{4} "
                     + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
                     + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
 
             var s = translateOk(term);
-            assertThat(s.hsPatterns()).hasSize(3); // decomposed into 3 independent leaves
+            assertThat(s.hsPatterns()).hasSize(3); // split into 3 independent leaves
             assertThat(s.warnings()).isNotEmpty();
-            boolean hasComplexityWarning = s.warnings().stream()
-                    .anyMatch(w -> w.contains("estimated complexity") && w.contains("DECOMPOSED"));
-            assertThat(hasComplexityWarning).isTrue();
+            boolean hasSplitWarning = s.warnings().stream()
+                    .anyMatch(w -> w.contains("NEAR/FOLLOWEDBY structure") && w.contains("split into"));
+            assertThat(hasSplitWarning).isTrue();
         }
 
         @Test
-        @DisplayName("BUG FIX: decomposed leaves must carry their enclosing FOLLOWEDBY's own gap fragment "
-                + "as a literal prefix, not drop it entirely — real German lexicon term that exposed the "
-                + "regression, nested FOLLOWEDBY over wildcard/multi-word OR groups")
-        void decomposedLeaves_carryFollowedByGapPrefix() {
+        @DisplayName("NO gap fragment is baked into any leaf any more — the FOLLOWEDBY chain's distance "
+                + "is conveyed entirely via resolvedPatterns instead — real German lexicon term that "
+                + "exposed the earlier gap-baking regression, nested FOLLOWEDBY over wildcard/multi-word "
+                + "OR groups")
+        void decomposedLeaves_carryNoGapPrefix() {
             String term = "(((versuch nicht OR mach* nicht OR tu* nicht OR vermeide) FOLLOWEDBY{4} "
                     + "(frontrun* OR front run* OR übergeh* OR überspring*)) FOLLOWEDBY{4} "
                     + "(das OR dies OR mich OR sie OR flow OR Druck OR Ausdruck))";
@@ -735,8 +743,12 @@ class TermSyntaxTranslatorTest {
 
             assertThat(s.hsPatterns()).containsExactly(
                     "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide)",
-                    "(?:\\s+\\S+){0,4}\\s+(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
-                    "(?:\\s+\\S+){0,4}\\s+(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
+                    "(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
+                    "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
+            assertThat(s.resolvedPattern()).isEqualTo(
+                    "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide) FOLLOWEDBY{4} "
+                    + "(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*) FOLLOWEDBY{4} "
+                    + "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
         }
 
         @Test
@@ -770,9 +782,9 @@ class TermSyntaxTranslatorTest {
                     + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
             var s = translateOk(nestedTerm);
             assertThat(s.hsPatterns()).hasSize(1);        // required side untouched, still simple
-            assertThat(s.exclusionRegexs()).hasSize(3); // excluded side decomposed into 3 leaves
+            assertThat(s.exclusionRegexs()).hasSize(3); // excluded side split into 3 leaves
             boolean hasExcludedWarning = s.warnings().stream()
-                    .anyMatch(w -> w.contains("excluded (AND NOT)") && w.contains("estimated complexity"));
+                    .anyMatch(w -> w.contains("excluded (AND NOT)") && w.contains("NEAR/FOLLOWEDBY structure"));
             assertThat(hasExcludedWarning).isTrue();
         }
 
@@ -785,49 +797,38 @@ class TermSyntaxTranslatorTest {
         }
 
         @Test
-        @DisplayName("REGRESSION (the exact bug real Hyperscan testing found): a WIDE single-level NEAR " +
-                "must PASS even though it scores higher in raw terms than a NARROWER but NESTED " +
-                "FOLLOWEDBY term, which must FAIL — nesting depth, not branch width, drives real " +
-                "Hyperscan compile failure")
-        void nestingDepthNotBranchWidth_correctRelativeOrdering() {
-            // Real, un-simplified examples from production: single-level NEAR over an
-            // 18-alternative and an 8-alternative OR group (no nesting) — compiles
-            // successfully in real Hyperscan.
+        @DisplayName("Any NEAR/FOLLOWEDBY structure always splits now, regardless of OR-branch width or "
+                + "nesting depth — this used to differ (a wide single-level NEAR stayed a single pattern; "
+                + "only a narrower-but-nested FOLLOWEDBY chain decomposed), since decomposition used to be "
+                + "a complexity-heuristic-triggered fallback. It is now unconditional, so both split, for "
+                + "the same reason: NEAR/FOLLOWEDBY gaps are never compiled into regex any more, period.")
+        void anyProximityStructureAlwaysSplits_regardlessOfWidthOrNesting() {
+            // Real, un-simplified example from production: single-level NEAR over an
+            // 18-alternative and an 8-alternative OR group (no nesting) — previously
+            // compiled as ONE pattern since it was comfortably under the old complexity
+            // budget; now splits into 2 leaves (one per NEAR operand) like any other NEAR.
             String wideSingleLevelTerm =
-                    "((Steuer* OR Gesetz* OR Richtlinie OR Police OR Polizei OR Genehmigung OR Approval OR "
+                    "(Steuer* OR Gesetz* OR Richtlinie OR Police OR Polizei OR Genehmigung OR Approval OR "
                             + "Compliance OR Kontrolle OR Behörde OR Behoerde OR Bafin OR Regulierung OR Regulation OR "
                             + "Regulator OR Regulatoren OR Regelung OR Strafe) NEAR{2} (vermied* OR vermied* OR umgeh* OR "
-                            + "umgangen OR umging OR entgeh* OR ausweichen OR ausgewichen)) AND "
-                            + "NOT(Ausnahmegenehmigung OR mit Steuern umgehen können OR mit Steuern umgehen koennen)";
+                            + "umgangen OR umging OR entgeh* OR ausweichen OR ausgewichen)";
 
             // Two nested FOLLOWEDBY operators over much narrower 4-alternative OR groups —
-            // rejected by real Hyperscan with "Pattern is too large".
+            // previously rejected by real Hyperscan as a single pattern and required the
+            // complexity heuristic to trigger decomposition up front; now splits the same
+            // way regardless.
             String nestedNarrowerTerm =
                     "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) FOLLOWEDBY{4} "
                             + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
                             + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
 
-            var wideResult = translator.translate(wideSingleLevelTerm);
-            assertThat(wideResult.isSuccess())
-                    .as("the wide single-level term must PASS as a simple (non-decomposed) pattern")
-                    .isTrue();
-            if (wideResult instanceof TranslationResult.Success wideSuccess) {
-                assertThat(wideSuccess.hsPatterns())
-                        .as("the wide term must NOT need decomposition")
-                        .hasSize(1);
-            }
+            var wideSuccess = translateOk(wideSingleLevelTerm);
+            assertThat(wideSuccess.hsPatterns()).hasSize(2);
+            assertThat(wideSuccess.warnings()).isNotEmpty();
 
-            var nestedResult = translator.translate(nestedNarrowerTerm);
-            assertThat(nestedResult.isSuccess())
-                    .as("the narrower but nested term must still SUCCEED via decomposition, not be rejected")
-                    .isTrue();
-            if (nestedResult instanceof TranslationResult.Success nestedSuccess) {
-                assertThat(nestedSuccess.hsPatterns())
-                        .as("the narrower but nested term must DECOMPOSE — proving nesting depth, not "
-                                + "branch width, is what drives the heuristic, matching real Hyperscan's own behavior")
-                        .hasSize(3);
-                assertThat(nestedSuccess.warnings()).isNotEmpty();
-            }
+            var nestedSuccess = translateOk(nestedNarrowerTerm);
+            assertThat(nestedSuccess.hsPatterns()).hasSize(3);
+            assertThat(nestedSuccess.warnings()).isNotEmpty();
         }
 
         @Test
@@ -1040,7 +1041,8 @@ class TermSyntaxTranslatorTest {
             var s = translateOk("apple AND (NOT (apple NEAR{10} banana))");
             assertThat(s.requiresExclusionCheck()).isTrue();
             assertThat(s.hsPatterns()).containsExactly("apple");
-            assertThat(s.exclusionRegexs().getFirst()).contains("apple").contains("banana");
+            assertThat(s.exclusionRegexs()).containsExactly("apple", "banana");
+            assertThat(s.resolvedPattern()).isEqualTo("apple AND NOT (apple NEAR{10} banana)");
         }
 
         // ── Both spellings are equivalent ────────────────────────────────────────

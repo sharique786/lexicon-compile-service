@@ -56,11 +56,12 @@ term description (raw text)
                              Phrase, QuotedPhrase — Not is parser-internal
                              only, always folded into AndNot or rejected
                              before parsing returns; see "Standalone NOT")
-  → PatternComplexityAnalyzer   estimates Hyperscan compiled-state cost
-                                 BEFORE Hyperscan ever sees the pattern
-  → PatternDecomposer        (only if over budget) splits into independent
-                             leaf patterns rather than rejecting the term
-  → PatternCodeGenerator     emits Hyperscan-compatible PCRE
+  → PatternDecomposer        UNCONDITIONALLY splits at every NEAR/FOLLOWEDBY
+                             boundary (see "resolvedPatterns" below) — the
+                             one exception is a NEAR/FOLLOWEDBY nested inside
+                             a multi-operand OR, which still routes through:
+  → PatternCodeGenerator     emits Hyperscan-compatible PCRE (gap-embedded,
+                             for that one OR-nested-proximity exception only)
   → HyperscanCompiler.validate()   the REAL Hyperscan compiler has final say
 ```
 
@@ -73,7 +74,85 @@ the real Hyperscan compiler hasn't validated. A term is PASS only because
 Hyperscan itself accepted the final pattern text — not because the AST
 "looked fine."
 
-### Character-based vs. token-based proximity gaps
+### `resolvedPatterns`: NEAR/FOLLOWEDBY/AND NOT are no longer compiled into regex
+
+**This is the single biggest architectural change in this codebase's
+history — read this section before touching `PatternDecomposer`,
+`TermSyntaxTranslator`, or anything proximity-related.**
+
+`NEAR{n}`/`FOLLOWEDBY{n}` used to be compiled into a single Hyperscan
+pattern with the gap embedded literally (`A(?:\s+\S+){0,n}\s+B` for
+word-based scripts, `A[\s\S]{0,N}B` for char-based scripts, `N = n ×
+avgCharsPerWord`). This was fragile: CJK/Thai/Hangul terms multiplied the
+author's distance by `avgCharsPerWord`, frequently exceeding what Hyperscan
+could compile ("Pattern is too large"), and the fallback (splitting into
+independent leaves — see the old "Complexity, decomposition" history below)
+only fired when a complexity heuristic or a real Hyperscan rejection
+triggered it.
+
+**Now: NEAR/FOLLOWEDBY splitting is unconditional, and the gap is NEVER
+compiled into regex for the split case — not even as a leaf prefix.**
+`PatternDecomposer.decompose(Ast, ParseContext)` is the single, always-on
+path for any side containing NEAR/FOLLOWEDBY structure; it returns a
+`Result(List<String> leaves, String resolvedText)` built in ONE unified
+recursive pass, so `regexPattern`/`exclusionRegex` (the leaves — pure,
+gap-less, individually Hyperscan-validated fragments) and
+`resolvedPatterns` (the SAME tree rendered with literal `NEAR{n}`/
+`FOLLOWEDBY{n}`/`AND NOT` keyword text standing in for the gap, using the
+author's raw, un-clamped distance) can never drift out of sync — they come
+from the same walk, not two independently-maintained ones. `PatternComplexityAnalyzer`
+no longer gates anything (kept in the repo, unused/dormant — see its own
+class Javadoc).
+
+```
+Input: "((bash)) FOLLOWEDBY{30} ((fuck) OR (fck))"
+  regexPattern:     ["bash", "(?:fuck|fck)"]
+  resolvedPatterns: "bash FOLLOWEDBY{30} (?:fuck|fck)"
+
+Input: "(insider AND NOT ((wordA...) FOLLOWEDBY{2} (wordH...) FOLLOWEDBY{2} (wordO...)))"
+  regexPattern:     ["insider"]
+  exclusionRegex:   ["(?:wordA...)", "(?:wordH...)", "(?:wordO...)"]
+  resolvedPatterns: "insider AND NOT ((?:wordA...) FOLLOWEDBY{2} (?:wordH...) FOLLOWEDBY{2} (?:wordO...))"
+```
+
+A downstream Java-regex-based consumer (Lexicon Scan Engine / Lexicon
+Scanner Service — **not part of this repo**) tokenizes `resolvedPatterns`
+and re-applies the actual proximity/AND-NOT logic itself. See
+`src/test/java/.../ResolvedPatternMatcher.java` (test tree) for a full
+reference implementation of exactly that downstream technique, and
+`ResolvedPatternMatchingIntegrationTest` for it exercised end-to-end
+against real `TermSyntaxTranslator` output — **these two classes are a
+required deliverable of this change, explicitly requested as a blueprint
+for the other two services' own eventual implementations, not incidental
+test coverage.**
+
+**One case is deliberately excluded — NEAR/FOLLOWEDBY nested inside `OR`**
+(not as `OR`'s content — as one alternative sibling to others, e.g.
+`"(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"`, real, currently-used
+functionality). This genuinely cannot be flattened into a flat AND'd leaf
+list without changing what `OR` means (that would need `regexPattern` to
+become a nested/tree structure, not a flat list — a materially larger
+change, deliberately out of scope). This one case still compiles as a
+single gap-embedded pattern exactly as before —
+`PatternCodeGenerator.generateNear`/`generateFollowedBy` and
+`MultiLanguagePatternBuilder` (including its static clamp AND its adaptive
+real-Hyperscan retry — see "Character-based vs. token-based proximity
+gaps, historical" below) stay **connected**, not disconnected, reachable
+ONLY via this one residual path (`PatternDecomposer`'s `default` arm
+treating a multi-operand `Or` as one opaque leaf, whose own `generate()`
+call recurses into any NEAR/FOLLOWEDBY nested inside it, exactly as
+before). Do not remove the clamp/retry there — it is the only remaining
+safety net against "Pattern is too large" for this narrower case.
+
+`AND` is flattened (not left opaque) when one of its operands contains
+NEAR/FOLLOWEDBY — this is lossless, since `AND`'s own semantics ("all
+operands co-occur anywhere, any order, unbounded distance") is already
+exactly equivalent to "these leaves are all independently present
+somewhere." A plain `AND` with NO nested proximity anywhere is completely
+unaffected — still one self-contained permutation pattern, exactly as
+before.
+
+### Character-based vs. token-based proximity gaps — now historical, except for OR-nested proximity
 
 `NEAR{n}`/`FOLLOWEDBY{n}` mean "within n words" — but "word" has no single
 universal definition across scripts. `ScriptDetector` (ICU4J-based, chosen
@@ -88,9 +167,13 @@ supplementary-plane/emoji handling) classifies each operand and picks:
   space-free.
 
 Don't "simplify" this to one universal strategy — it's handling a real
-linguistic difference, not redundant complexity.
+linguistic difference, not redundant complexity. **This whole mechanism
+(`MultiLanguagePatternBuilder`) is only reachable now via the
+OR-nested-proximity exception above** — for the unconditional-splitting
+path, no gap is ever computed at all, so this script-detection/gap-strategy
+logic has nothing to do there.
 
-### Complexity, decomposition, and why it's not a full solution
+### Complexity, decomposition, and why it used to matter — historical
 
 Hyperscan's "Pattern is too large" is driven by compiled **state count**,
 not string length — and empirically, by **nesting depth** more than
@@ -98,34 +181,29 @@ OR-branch width (a NEAR whose operand is itself a NEAR/FOLLOWEDBY forces
 tracking two simultaneous gap-counters — multiplicative, not additive; see
 `PatternComplexityAnalyzer`'s explicit nesting-depth penalty,
 `COMPLEXITY_BUDGET = 700`, calibrated against two known real Hyperscan
-outcomes — a heuristic, not a proof). When a term is judged too complex,
-`PatternDecomposer` breaks it into independent leaves rather than
-rejecting it — but **this discards the ordering/distance constraint
-BETWEEN leaves**: decomposed leaves are combined with pure boolean AND
-("all these appear somewhere"), independently of each other, not "in this
-order, within this distance relative to one another."
+outcomes — a heuristic, not a proof). **This class no longer gates
+anything** — decomposition is unconditional now (see "resolvedPatterns"
+above) — but it's kept in the repo, unused/dormant, since the underlying
+state-count reasoning is still correct history.
 
-**Confirmed-fixed regression, worth knowing the shape of**: an earlier
-revision of `PatternDecomposer` (`collectLeaves`) discarded each
-NEAR/FOLLOWEDBY node's gap *entirely*, not just the cross-leaf
-relationship — e.g. `(A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C` decomposed to
+**Confirmed-fixed regression this project has now deliberately re-opened,
+on purpose, with `resolvedPatterns` compensating**: an earlier revision of
+`PatternDecomposer` (`collectLeaves`) discarded each NEAR/FOLLOWEDBY node's
+gap *entirely* — e.g. `(A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C` decomposed to
 three totally independent leaves `A`, `B`, `C`, with no trace of either
-`{4}` left anywhere, incorrectly allowing `B` or `C` to match as the
-message's literal first token. `PatternDecomposer.decompose()` now bakes
-each NEAR/FOLLOWEDBY node's own gap fragment (word- or character-based,
-chosen the same way `MultiLanguagePatternBuilder` would for the
-equivalent non-decomposed pattern) into the START of the leaf that
-immediately followed it in the original term text — for the example
-above: `[A, "(?:\s+\S+){0,4}\s+"+B, "(?:\s+\S+){0,4}\s+"+C]`. This is
-still **not** the original proximity constraint — the gap is a literal
-prefix baked into one leaf's own pattern, not a cross-expression
-constraint (Hyperscan has no mechanism for one independently-scanned
-expression's match position to depend on another's), so it does not
-require that preceding content be the OTHER leaf's own match. What it
-restores is narrower but real: a leaf that sat on the right of a
-NEAR/FOLLOWEDBY can no longer match with literally nothing before it.
-`warnings` always carries an explicit entry when the decomposition
-trade-off applies — never silently discard that field downstream.
+`{4}` left anywhere. A LATER fix (this section, before the
+`resolvedPatterns` change) had `PatternDecomposer.decompose()` bake each
+NEAR/FOLLOWEDBY node's own gap fragment into the START of the leaf that
+immediately followed it — `[A, "(?:\s+\S+){0,4}\s+"+B, "(?:\s+\S+){0,4}\s+"+C]`
+— as a "safe strengthening." **The `resolvedPatterns` change removes this
+gap-baking again** — leaves are now pure, gap-less fragments, full stop —
+but this is NOT a silent repeat of the original regression: the lost
+information is now fully and explicitly recovered via `resolvedPatterns`'
+literal keyword text, which a downstream consumer is expected to read and
+apply (unlike the original regression, where the `{4}` was simply gone with
+no replacement anywhere). `warnings` always carries an explicit entry
+whenever a side split into more than one leaf, pointing at
+`resolvedPatterns`.
 
 ---
 
@@ -249,9 +327,9 @@ already in `HyperscanCombinationHandler.addExpressions()`:
 
 | Case | Method | Flags |
 |---|---|---|
-| AND NOT — every required/excluded pattern, regardless of decomposition on either side | `toAndNotExpressionFlags(bitmask)` | `CASELESS` always; `UTF8`/`UCP` when `bitmask` indicates non-Latin content |
-| Pure decomposition leaf, no AND NOT | `toSubExpressionFlags(bitmask)` | `CASELESS`, `QUIET` always; `UTF8`/`UCP` when `bitmask` indicates non-Latin content |
-| Simple, single-pattern, non-AND-NOT, error-free, complexity-under-budget PASS term (also the flag set `HyperscanCompiler.validate()` always uses for the "too large" pre-check) | `toExpressionFlags(bitmask)` | `CASELESS`, `DOTALL`, `SOM_LEFTMOST` always; `UTF8`/`UCP` only when `bitmask` indicates non-Latin content |
+| AND NOT — every required/excluded pattern, regardless of leaf count on either side | `toAndNotExpressionFlags(bitmask)` | `CASELESS` always; `UTF8`/`UCP` when `bitmask` indicates non-Latin content |
+| A leaf from a term containing NEAR/FOLLOWEDBY structure, no AND NOT (unconditional now, not complexity-triggered — see "resolvedPatterns" above) | `toSubExpressionFlags(bitmask)` | `CASELESS`, `QUIET` always; `UTF8`/`UCP` when `bitmask` indicates non-Latin content |
+| Simple, single-pattern, non-AND-NOT, error-free PASS term (also the flag set `HyperscanCompiler.validate()` always uses for the "too large" pre-check) | `toExpressionFlags(bitmask)` | `CASELESS`, `DOTALL`, `SOM_LEFTMOST` always; `UTF8`/`UCP` only when `bitmask` indicates non-Latin content |
 
 **AND NOT deliberately does not get `SOM_LEFTMOST`** any more, even though
 it would be structurally *safe* there (AND NOT patterns are plain, never
@@ -297,8 +375,28 @@ unconditional in `toExpressionFlags()` without re-checking both of those.
 
 ## The cross-service JSON contract — read before changing `TermCompilationResult`
 
-`requiresExclusionCheck: false` (simple or purely-decomposed term):
-`hyperscanExpressionId` populated, always the term's own number
+`resolvedPatterns` (added for the `resolvedPatterns` change, see above):
+this term (or, for AND NOT, both sides joined by the literal keyword)
+rendered with `NEAR{n}`/`FOLLOWEDBY{n}`/`AND NOT` keyword text standing in
+for any gap regex. Always exactly ONE `String` (never a list, despite the
+plural field name), populated for every PASS Natural-Language term across
+**all three endpoints** (unlike `hyperscanExpressionId`/`patternMapping`/
+`requiredExpressionIds`/`excludedExpressionIds`, which stay
+`/compile/bundle`-only) — null for a FAILED term and for a Regex-type term
+(which never goes through the AST this field is built from). Every leaf
+substring within it is byte-identical to the corresponding
+`regexPattern`/`exclusionRegex` entry, in the same order — this is what
+lets a consumer correlate a leaf's own Hyperscan-match presence with its
+exact position inside this string. `patternMapping` (below) is **unchanged
+and additive** alongside this field, not superseded by it — a consumer that
+only needs presence/AND-NOT boolean logic can keep using `patternMapping`
+exactly as before; a consumer that needs the actual proximity relationship
+reads `resolvedPatterns` instead.
+
+`requiresExclusionCheck: false` (simple term, or one containing
+NEAR/FOLLOWEDBY structure with no AND NOT — the id scheme is unchanged by
+splitting now firing unconditionally instead of only when over budget, see
+above): `hyperscanExpressionId` populated, always the term's own number
 (`termId`'s `::<n>` suffix). `requiredExpressionIds`/`excludedExpressionIds`
 null.
 
@@ -330,7 +428,14 @@ project's scheme changed and they didn't know. **If you change this
 shape, or the AND-NOT-vs-decomposition boundary, both other services need
 a corresponding check, not just this one.** There is no compile-time link
 across the three projects; a mismatch fails silently (wrong `term_id` in
-BigQuery, or an incorrect hit/no-hit decision), not loudly.
+BigQuery, or an incorrect hit/no-hit decision), not loudly. **The
+`resolvedPatterns` field is a NEW instance of exactly this risk** — neither
+downstream service reads it yet (it's brand new), but once one does, this
+project's `NEAR`/`FOLLOWEDBY`/`AND NOT` keyword text format and the
+byte-identity guarantee with `regexPattern`/`exclusionRegex` become another
+un-linked cross-project contract; see `ResolvedPatternMatcher`
+(`src/test/java/...`) for the reference parser/evaluator this format was
+designed against.
 
 **`databaseError` (top-level `CompileResponse` field, `/compile/bundle`
 only)**: set when every term individually reached PASS/FAILED normally but
@@ -397,7 +502,7 @@ Genuinely compiled and tested — not merely reviewed — against a hand-built
 but functionally faithful stub environment (real Hyperscan `Scanner`/
 `Database` simulation with genuine `COMBINATION`/`QUIET` evaluation, real
 JSON parsing, a real parameterized-test runner for `@ParameterizedTest`/
-`@ValueSource`). 439 tests passing as of the standalone-NOT fix. The one
+`@ValueSource`). 449+ tests passing as of the `resolvedPatterns` change. The one
 file needing full Spring Test infrastructure
 (`LexiconCompileControllerTest`, `MockMvc`) is out of this stub
 environment's scope — reviewed by hand, not compiled, consistent with the
@@ -495,3 +600,25 @@ verification scaffolding, not a repository fixture.
     previously accepted any bare expression (`price AND NOT legitimate`).
     Folds into the exact same `Ast.AndNot` shape at parse time — no
     downstream class changed.
+13. **`resolvedPatterns` added; NEAR/FOLLOWEDBY splitting made unconditional**:
+    the single biggest architectural change in this project's history — see
+    "`resolvedPatterns`: NEAR/FOLLOWEDBY/AND NOT are no longer compiled into
+    regex" above for the full account. `PatternDecomposer` becomes the
+    unconditional, always-on path for any NEAR/FOLLOWEDBY structure
+    (`PatternComplexityAnalyzer` no longer gates anything, kept dormant); no
+    gap is ever baked into a leaf any more (reverting the (7) fix above, this
+    time with `resolvedPatterns` fully compensating); `AND` gained lossless
+    flattening for a nested-proximity operand; one case — NEAR/FOLLOWEDBY
+    nested inside a multi-operand `OR` — is deliberately excluded and keeps
+    the old gap-embedded behavior (`MultiLanguagePatternBuilder` stays
+    connected for that one residual path, not disconnected). `TermCompilationResult`/
+    `TranslationResult.Success` gained `resolvedPatterns`/`resolvedPattern`,
+    populated across all three endpoints, additive alongside the unchanged
+    `patternMapping`. `HyperscanCombinationHandler`'s id-allocation logic
+    needed NO code change (it already discriminated purely on
+    `regexPattern.size()`, never on why). A reference downstream matcher
+    (`ResolvedPatternMatcher` + `ResolvedPatternMatchingIntegrationTest`,
+    test tree) was added as a required deliverable proving the new field is
+    actually sufficient for a Java-regex-based consumer to reconstruct
+    correct match decisions — see "Relationship with the other two
+    services."

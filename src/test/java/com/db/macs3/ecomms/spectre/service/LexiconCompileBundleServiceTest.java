@@ -205,16 +205,16 @@ class LexiconCompileBundleServiceTest {
 
     @Test
     @Order(20)
-    @DisplayName("Natural Language term: NEAR{5} translated exactly like /compile")
+    @DisplayName("Natural Language term: NEAR{5} translated exactly like /compile — split into two "
+            + "gap-less leaves, proximity conveyed via resolvedPatterns")
     void naturalLanguageTermTranslated() {
         var req = naturalLanguage("std_test", "(manipulate) NEAR{5} (price)");
         var bundle = bundleService.buildBundle(req);
 
         var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
-        assertThat(result.regexPattern()).hasSize(1);
-        assertThat(result.regexPattern().getFirst()).contains("manipulate").contains("price");
-        assertThat(result.regexPattern().getFirst()).contains("\\s+\\S+");
+        assertThat(result.regexPattern()).containsExactly("manipulate", "price");
+        assertThat(result.resolvedPatterns()).isEqualTo("manipulate NEAR{5} price");
     }
 
     @Test
@@ -627,10 +627,17 @@ class LexiconCompileBundleServiceTest {
         var result = bundle.jsonResponse().results().getFirst();
 
         assertThat(result.isPass()).isTrue();
+        // No gap fragment is baked onto any leaf any more — each leaf is a pure,
+        // gap-less fragment; the FOLLOWEDBY{4} chain is instead conveyed literally
+        // in resolvedPatterns below.
         assertThat(result.regexPattern()).containsExactly(
                 "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide)",
-                "(?:\\s+\\S+){0,4}\\s+(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
-                "(?:\\s+\\S+){0,4}\\s+(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
+                "(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
+                "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
+        assertThat(result.resolvedPatterns()).isEqualTo(
+                "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide) FOLLOWEDBY{4} "
+                + "(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*) FOLLOWEDBY{4} "
+                + "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
         assertThat(result.hyperscanExpressionId()).isEqualTo(4);
         assertThat(result.patternMapping()).isEqualTo("(5&6&7)");
     }
@@ -844,8 +851,11 @@ class LexiconCompileBundleServiceTest {
 
     @Test
     @Order(94)
-    @DisplayName("A simple AND NOT term's exclusionRegex is unaffected by the decomposition feature — " +
-            "still a single-entry list with the pre-decomposition pattern text")
+    @DisplayName("A simple AND NOT term's exclusionRegex is a single-entry list with a single-level "
+            + "wrapped pattern — PatternDecomposer.decompose() now always sees through the single-operand "
+            + "Or wrapper TermSyntaxTranslator builds for the excluded side, even for a term with no "
+            + "NEAR/FOLLOWEDBY structure, so it no longer double-wraps this the way plain "
+            + "PatternCodeGenerator.generateOr() alone would have")
     void simpleAndNot_unaffectedByDecompositionFeature() {
         var req = request("test-rule", TermType.NATURAL_LANGUAGE,
                 term("((don't forward) AND NOT (compliance OR legal))"));
@@ -854,7 +864,7 @@ class LexiconCompileBundleServiceTest {
 
         assertThat(result.regexPattern()).hasSize(1);
         assertThat(result.exclusionRegex()).hasSize(1);
-        assertThat(result.exclusionRegex().getFirst()).isEqualTo("(?:(?:compliance|legal))");
+        assertThat(result.exclusionRegex().getFirst()).isEqualTo("(?:compliance|legal)");
     }
 
     // ── HyperscanCombinationHandler-specific: the COMBINATION/QUIET flag constraint ──

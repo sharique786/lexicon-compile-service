@@ -46,16 +46,20 @@ import java.util.stream.Collectors;
  *       produced.</li>
  * </ul>
  *
- * <p><b>Pure decomposition (no AND NOT) is unaffected and remains on
- * native COMBINATION</b> — {@code R1&R2&...&Rn} involves no negation at
- * all, so it has no such ambiguity: a positive sub-expression's truth
- * value is only ever true after it genuinely matches, never before.
+ * <p><b>A term with NEAR/FOLLOWEDBY structure but no AND NOT is unaffected
+ * and remains on native COMBINATION</b> — {@code R1&R2&...&Rn} involves no
+ * negation at all, so it has no such ambiguity: a positive sub-expression's
+ * truth value is only ever true after it genuinely matches, never before.
  * Hyperscan's own worked example in the same documentation shows exactly
  * this kind of formula firing correctly and progressively as each
  * referenced sub-expression matches. Whether a term uses native
  * COMBINATION is therefore decided strictly by
  * {@link TermCompilationResult#requiresExclusionCheck()}, not by whether
- * either side was decomposed.
+ * either side has more than one pattern — this now fires unconditionally
+ * for any NEAR/FOLLOWEDBY structure (see {@code PatternDecomposer}), not
+ * only when a complexity heuristic previously flagged a side as over
+ * budget; the branch logic below was already indifferent to WHY
+ * {@code regexPattern.size()>1}, so nothing here needed to change.
  *
  * <p><b>The fix: no combination for AND NOT — every pattern reports individually,
  * evaluated by the caller after the whole scan completes</b>
@@ -223,8 +227,9 @@ public class HyperscanCombinationHandler {
             return new ExpressionAssignment(termNumber, null, null, null);
         }
 
-        // Pure decomposition, no AND NOT — native COMBINATION remains safe here (no negation
-        // involved) — see class Javadoc for why this path is unaffected by the AND NOT fix.
+        // NEAR/FOLLOWEDBY structure, no AND NOT — native COMBINATION remains safe here (no
+        // negation involved) — see class Javadoc for why this path is unaffected by the AND
+        // NOT fix, and now fires unconditionally rather than only when over budget.
         List<Integer> leafIds = addQuietSide(requiredPatterns, termResult.hyperscanFlags(), idAllocator, expressionsOut);
         String combinationFormula = "(" + joinWithAnd(leafIds) + ")";
         expressionsOut.add(new Expression(combinationFormula, compiler.toCombinationExpressionFlags(), termNumber));

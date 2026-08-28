@@ -199,7 +199,83 @@ the outermost level, e.g. `(A NEAR{n} C) AND NOT B`.
 
 ---
 
-## Character-based vs. word-based lexicon terms
+## `resolvedPatterns`: NEAR/FOLLOWEDBY/AND NOT are no longer compiled into regex
+
+**Read this before the two sections below** — they now describe historical
+behavior for one narrow residual case, not the general path.
+
+`NEAR{n}`/`FOLLOWEDBY{n}` used to be compiled into a single Hyperscan
+pattern with the gap embedded literally. This was fragile — CJK/Thai/Hangul
+terms multiplied the author's distance by a per-script `avgCharsPerWord`
+factor, frequently producing a gap Hyperscan couldn't compile ("Pattern is
+too large"). **Now, NEAR/FOLLOWEDBY splitting is unconditional** (not a
+complexity-triggered fallback), and the gap is never compiled into regex
+for the split case — not even as a leaf prefix. Instead, the relationship
+is conveyed as literal keyword text, using the author's raw distance, in a
+new response field: `resolvedPatterns`.
+
+```
+Input: "((bash)) FOLLOWEDBY{30} ((fuck) OR (fck))"
+  regexPattern:     ["bash", "(?:fuck|fck)"]
+  resolvedPatterns: "bash FOLLOWEDBY{30} (?:fuck|fck)"
+
+Input: "(insider AND NOT ((wordA word B OR wordC* wordD OR wordE* wordF OR wordG)
+         FOLLOWEDBY{2} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)
+         FOLLOWEDBY{2} (wordO* OR wordP* wordQ OR wordR* wordS OR wordT)))"
+  regexPattern:     ["insider"]
+  exclusionRegex:   ["(?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG)",
+                      "(?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN)",
+                      "(?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT)"]
+  resolvedPatterns: "insider AND NOT ((?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG)
+                      FOLLOWEDBY{2} (?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN)
+                      FOLLOWEDBY{2} (?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT))"
+
+Input: "(ihr Gespräch OR Gespraech OR *reden) NEAR{30} (threema OR threema messenger OR threema IM)"
+  regexPattern:     ["(?:ihr Gespräch|Gespraech|\\S*reden)", "(?:threema|threema messenger|threema IM)"]
+  resolvedPatterns: "(?:ihr Gespräch|Gespraech|\\S*reden) NEAR{30} (?:threema|threema messenger|threema IM)"
+```
+
+Always exactly **one string** per term (never a list, despite the plural
+name) — every leaf substring inside it is byte-identical to the
+corresponding `regexPattern`/`exclusionRegex` entry, in the same order.
+Populated across **all three endpoints** (unlike `hyperscanExpressionId`/
+`patternMapping`, which stay `/compile/bundle`-only). `patternMapping` is
+unchanged and stays additive alongside it — a caller that only needs
+presence/AND-NOT boolean logic keeps using `patternMapping`; a caller that
+needs the actual proximity relationship reads `resolvedPatterns`.
+
+A downstream Java-regex-based consumer (Lexicon Scan Engine / Lexicon
+Scanner Service — not part of this repo) tokenizes `resolvedPatterns` and
+re-applies the proximity/AND-NOT logic itself. See
+`src/test/java/.../ResolvedPatternMatcher.java` for a reference
+implementation of exactly that technique, and
+`ResolvedPatternMatchingIntegrationTest` for it proven end-to-end against
+real compile-service output — both are a required, intentional deliverable
+of this feature, a blueprint for the other two services, not incidental
+test coverage.
+
+**One case is deliberately excluded from unconditional splitting**: a
+NEAR/FOLLOWEDBY nested *inside* an `OR` (as one alternative sibling to
+others, e.g. `"(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"` — real,
+currently-used functionality) cannot be flattened into a flat AND'd leaf
+list without changing what `OR` means. This one case still compiles as a
+single gap-embedded pattern exactly as described in the next two sections
+— they remain live for it.
+
+`AND` is flattened (not left opaque) when one of its operands contains
+NEAR/FOLLOWEDBY structure — lossless, since `AND`'s own "all present, any
+order, unbounded distance" semantics is already equivalent to flat
+independent presence. A plain `AND` with no nested proximity is completely
+unaffected — still one self-contained permutation pattern.
+
+---
+
+## Character-based vs. word-based lexicon terms — now only for OR-nested proximity
+
+The mechanism below still exists and is still correct, but as of
+`resolvedPatterns` (above) it is reachable **only** via the one excluded
+case — a NEAR/FOLLOWEDBY nested inside a multi-operand `OR`. For every
+other NEAR/FOLLOWEDBY, no gap is ever computed at all.
 
 `ScriptDetector` classifies the dominant Unicode script family of each
 operand (via ICU4J `UScript`, not Java's built-in `Character.UnicodeScript`,
@@ -285,7 +361,15 @@ script voting and the term falls back to Latin (word-based) treatment.
 
 ---
 
-## Complex terms: decomposition, not rejection
+## Complex terms: decomposition — now unconditional, not complexity-triggered
+
+`PatternDecomposer` is now the single, always-on path for ANY term
+containing NEAR/FOLLOWEDBY structure (except the OR-nested-proximity case
+above) — see the `resolvedPatterns` section at the top of this document.
+`PatternComplexityAnalyzer` no longer gates anything; it's kept in the
+codebase, unused/dormant, since the state-count reasoning below is still
+correct history and explains *why* Hyperscan's old gap-embedding approach
+was fragile in the first place.
 
 ### Why "Pattern is too large" isn't about string length
 
@@ -300,9 +384,12 @@ rejected. One proximity operator whose operand is itself a proximity
 operator forces the automaton to track two independent gap-counters
 simultaneously — multiplicative, not additive.
 
-### `PatternComplexityAnalyzer`
+### `PatternComplexityAnalyzer` — dormant, no longer called
 
-Estimates this risk *before* Hyperscan ever sees the pattern:
+Used to estimate this risk *before* Hyperscan ever sees the pattern and
+decide whether to pre-emptively decompose. As of `resolvedPatterns`
+(above), decomposition is unconditional, so nothing calls this class any
+more — kept in the repo for its historical reasoning, not deleted:
 
 - **Nesting penalty** — a NEAR/FOLLOWEDBY whose operand is itself a
   NEAR/FOLLOWEDBY multiplies the expression's score by `(nestedDistance + 1)`.
@@ -326,57 +413,40 @@ Hyperscan double-check below for how a wrong guess is still caught.
 
 ### `PatternDecomposer`
 
-When a side is judged over budget, `PatternDecomposer` breaks it into
-independent leaf patterns instead of rejecting the term outright — a leaf
-is a maximal subtree that is *not itself* a NEAR/FOLLOWEDBY node (an `Or`,
-`And`, `Word`, `Phrase`, or `QuotedPhrase`). `regexPattern` (or
-`exclusionRegex`, for a decomposed excluded side) then has multiple
-entries instead of one — there is no separate "was this decomposed"
-boolean; a caller checks `regexPattern.size()`.
+The single, unconditional path for any side containing NEAR/FOLLOWEDBY
+structure (except the OR-nested-proximity exception) — splits it into
+independent leaf patterns, in the SAME recursive pass that builds
+`resolvedPatterns`' literal-keyword text (so the two can never drift out of
+sync — see `resolvedPatterns` section above). A leaf is a maximal subtree
+that is not itself splittable further: an `Or`, a `Word`/`Phrase`/
+`QuotedPhrase`, or an `And` with no nested proximity of its own. `regexPattern`
+(or `exclusionRegex`, for the excluded side) then has multiple entries
+instead of one — there is no separate "was this split" boolean; a caller
+checks `regexPattern.size()`.
 
-**This is a real precision trade-off, always flagged in `warnings`.**
-Decomposed leaves are combined with pure boolean AND ("all of these appear
-somewhere in the message"), losing the NEAR/FOLLOWEDBY ordering/distance
-constraint *between* leaves. It does **not** discard the gap width itself,
-though: every leaf after the first still carries its originating
-NEAR/FOLLOWEDBY node's own gap fragment (word- or character-based, chosen
-the same way the non-decomposed path would) as a literal prefix in its own
-pattern text — so it can never match with nothing preceding it (e.g. as
-the message's literal first token). What's lost is narrower but real: the
-gap is no longer anchored to the *specific* leaf that preceded it in the
-original term, only to "any content, up to this width, immediately
-before". For `(A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C`, decomposition produces
-exactly `[A, <gap4>B, <gap4>C]`. NEAR is bidirectional; a single decomposed
-leaf approximates it using the same left-to-right, gap-on-the-right
-treatment as FOLLOWEDBY — a safe strengthening (never rejects a message
-NEAR would have matched), not a silent semantic change in the unsafe
-direction.
+**This is a real precision trade-off, always flagged in `warnings`, fully
+compensated by `resolvedPatterns`.** Split leaves are combined with pure
+boolean AND ("all of these appear somewhere in the message"), losing the
+NEAR/FOLLOWEDBY ordering/distance constraint *between* leaves — but unlike
+an earlier revision of this codebase, **no gap fragment is baked into any
+leaf's own pattern text any more, not even as a prefix**. The full
+relationship — including the author's raw, un-clamped distance — lives
+entirely in `resolvedPatterns` instead. For `(A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C`,
+splitting produces exactly `regexPattern = [A, B, C]` and
+`resolvedPatterns = "A FOLLOWEDBY{4} B FOLLOWEDBY{4} C"`.
 
-### The heuristic isn't the only trigger — real Hyperscan has final say
+### Real Hyperscan still has final say
 
-`PatternComplexityAnalyzer` can under-estimate a structure it hasn't seen
-before. `TermSyntaxTranslator` does not treat "under budget" as final: a
-side that passes the heuristic still gets its generated pattern checked
-against the real Hyperscan compiler before being accepted. If Hyperscan
-*itself* rejects it with a size-related error ("... too large ..."),
-translation falls back to decomposition anyway — the same recovery path
-as if the heuristic had caught it up front. A Hyperscan rejection for any
-*other* reason (a genuinely malformed pattern) is not a decomposition
-trigger — that fails translation with Hyperscan's real error surfaced
-directly, since decomposition cannot fix a broken pattern, only an
-oversized one.
-
-**Decomposition itself can still fail — two floors:**
-
-- A side with **no NEAR/FOLLOWEDBY structure left to decompose** (e.g. one
-  large flat OR/AND group that's still over budget) has nothing to split
-  — translation fails with a specific error naming the estimated
-  complexity and suggesting fewer OR-alternatives or splitting into
-  multiple lexicon terms.
-- A leaf that is **itself rejected by Hyperscan** even after decomposition
-  (it has no further proximity structure of its own to split further) also
-  fails translation — decomposition cannot help a single leaf that's
-  independently too large.
+Every leaf `PatternDecomposer` produces is validated against the real
+Hyperscan compiler before being accepted — this codebase's own long-standing
+principle that no stage ever hands Hyperscan a pattern the real compiler
+hasn't validated. A single leaf (no further NEAR/FOLLOWEDBY structure to
+split) that Hyperscan itself rejects — for any reason, including "too
+large" — is a hard translation failure: there's nothing further
+`PatternDecomposer` can do with it. A leaf naming a specific piece of text
+in its error message points the term's author at the exact part needing
+simplification (fewer OR-alternatives, less wildcard usage, or splitting
+into multiple lexicon terms).
 
 ---
 
@@ -389,10 +459,10 @@ still narrows UTF8/UCP *within* case 3):
 
 | Case | Method | Flags |
 |---|---|---|
-| AND NOT — every required/excluded pattern, regardless of decomposition on either side | `HyperscanCompiler.toAndNotExpressionFlags()` | `CASELESS` only |
-| Pure decomposition leaf, no AND NOT (feeds a native `COMBINATION`) | `HyperscanCompiler.toSubExpressionFlags()` | `CASELESS`, `QUIET` only |
+| AND NOT — every required/excluded pattern, regardless of leaf count on either side | `HyperscanCompiler.toAndNotExpressionFlags()` | `CASELESS` only |
+| A leaf from a term with NEAR/FOLLOWEDBY structure, no AND NOT (feeds a native `COMBINATION`; unconditional now, not complexity-triggered — see `resolvedPatterns` above) | `HyperscanCompiler.toSubExpressionFlags()` | `CASELESS`, `QUIET` only |
 | Simple, single-pattern, non-AND-NOT PASS term (also the flag set `HyperscanCompiler.validate()` always uses for validation) | `HyperscanCompiler.toExpressionFlags(bitmask)` | `CASELESS`, `DOTALL`, `SOM_LEFTMOST` always; `UTF8`/`UCP` only when `bitmask` indicates non-Latin content |
-| The one combination expression per decomposed (non-AND-NOT) term | `HyperscanCompiler.toCombinationExpressionFlags()` | `COMBINATION` only |
+| The one combination expression per split (non-AND-NOT) term | `HyperscanCompiler.toCombinationExpressionFlags()` | `COMBINATION` only |
 
 `hyperscanFlags` in the JSON response is a narrower bitmask than the above
 — it only ever carries `1`=CASELESS, `32`=UTF8, `64`=UCP (e.g. `1` for a
@@ -429,18 +499,22 @@ flags an expression may safely carry is a structural fact about its kind
 ## The expression id scheme (`/compile/bundle`)
 
 A **non-AND-NOT** PASS term's reportable Hyperscan expression id — whether
-it needed decomposition or not — is **always its own term number**, parsed
-from its `termId`'s `::<n>` suffix (`<lexicon_rule_name>::<term_number>`,
+it split into multiple leaves or not — is **always its own term number**,
+parsed from its `termId`'s `::<n>` suffix (`<lexicon_rule_name>::<term_number>`,
 e.g. `lexicon_research_1::1`). This is deliberate: a downstream consumer
 that already knows a term's number from the lexicon rule definition can
 predict its expression id **without reading the JSON response at all** —
-the `.hdb` file is self-sufficient for these terms.
+the `.hdb` file is self-sufficient for these terms. Note this scheme
+required **no code change** for the `resolvedPatterns` work — id allocation
+already discriminated purely on `regexPattern.size()`, never on *why*
+there was more than one entry, so it "just works" now that NEAR/FOLLOWEDBY
+splitting fires unconditionally instead of only when over budget.
 
 An **AND NOT** term has no single reportable id — `hyperscanExpressionId`
 is `null`; `requiredExpressionIds`/`excludedExpressionIds` are populated
 instead (one id per pattern in `regexPattern`/`exclusionRegex`
-respectively). Every QUIET sub-expression a pure-decomposition combination
-needs is assigned an id from a separate allocated range
+respectively). Every QUIET sub-expression a split (non-AND-NOT) term's
+combination needs is assigned an id from a separate allocated range
 (`HyperscanCombinationHandler.computeIdOffset` = highest term number in
 the request + 1, handed out sequentially), which can never collide with a
 real term number.
@@ -448,18 +522,19 @@ real term number.
 ### `patternMapping` — the logical formula, whether or not the `.hdb` itself encodes it
 
 Populated only when a term needed **more than one** Hyperscan expression
-id (pure decomposition, AND NOT, or both). A boolean formula over this
-term's expression ids, using the same `&`/`!` syntax Hyperscan's own
-`HS_FLAG_COMBINATION` formulas use:
+id (NEAR/FOLLOWEDBY structure, AND NOT, or both). A boolean formula over
+this term's expression ids, using the same `&`/`!` syntax Hyperscan's own
+`HS_FLAG_COMBINATION` formulas use. **Unchanged and additive alongside
+`resolvedPatterns`** (see above) — not superseded by it:
 
 | Case | `patternMapping` | Encoded natively in the `.hdb`? |
 |---|---|---|
 | Plain, single pattern, no AND NOT | *(null — nothing to map)* | — |
-| Decomposed, no AND NOT | `(R1&R2&...&Rn)` | **Yes** — a real `COMBINATION` expression at `hyperscanExpressionId` (safe, no negation) |
-| AND NOT, neither side decomposed | `(R&!E)` | **No** — every pattern is its own plain expression |
-| AND NOT, required decomposed | `(R1&R2&...&Rn&!E)` | **No** |
-| AND NOT, excluded decomposed | `(R&(!E1|!E2|...|!Em))` | **No** |
-| AND NOT, both decomposed | `(R1&...&Rn&(!E1|...|!Em))` | **No** |
+| Split, no AND NOT | `(R1&R2&...&Rn)` | **Yes** — a real `COMBINATION` expression at `hyperscanExpressionId` (safe, no negation) |
+| AND NOT, neither side split | `(R&!E)` | **No** — every pattern is its own plain expression |
+| AND NOT, required side split | `(R1&R2&...&Rn&!E)` | **No** |
+| AND NOT, excluded side split | `(R&!(E1&E2&...&Em))` | **No** |
+| AND NOT, both sides split | `(R1&...&Rn&!(E1&...&Em))` | **No** |
 
 For an AND NOT term, `patternMapping` is the **only** place this formula
 is recorded — a consumer that loads just the `.hdb` (no JSON) cannot
@@ -709,10 +784,13 @@ Response — one entry per term, showing a **simple PASS**, a **PASS with
       "termId": "lexicon_research_1::1",
       "termDescription": "(manipulate*) NEAR{5} ((price) OR (spread) OR (stock))",
       "compilationStatus": "PASS",
-      "regexPattern": ["(?:manipulate\\S*(?:\\s+\\S+){0,5}\\s+(?:price|spread|stock)|(?:price|spread|stock)(?:\\s+\\S+){0,5}\\s+manipulate\\S*)"],
+      "regexPattern": ["manipulate\\S*", "(?:price|spread|stock)"],
       "hyperscanFlags": 1,
       "requiresExclusionCheck": false,
-      "warnings": [],
+      "warnings": [
+        "This term's term expression contains NEAR/FOLLOWEDBY structure and was split into 2 independent parts (each individually Hyperscan-validated) — see regexPattern in the response. ... see resolvedPatterns ..."
+      ],
+      "resolvedPatterns": "manipulate\\S* NEAR{5} (?:price|spread|stock)",
       "compiledAt": "2026-08-26T10:15:00.410Z"
     },
     {
@@ -724,18 +802,20 @@ Response — one entry per term, showing a **simple PASS**, a **PASS with
       "requiresExclusionCheck": true,
       "exclusionRegex": ["(?:disclaimer)"],
       "warnings": [],
+      "resolvedPatterns": "tip\\S* AND NOT (disclaimer)",
       "compiledAt": "2026-08-26T10:15:00.420Z"
     },
     {
       "termId": "lexicon_research_1::3",
       "termDescription": "((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR (记录))",
       "compilationStatus": "PASS",
-      "regexPattern": ["(?:内幕|正常|的|商业)[\\s\\S]{0,30}(?:活动|记录)"],
+      "regexPattern": ["(?:内幕|正常|的|商业)", "(?:活动|记录)"],
       "hyperscanFlags": 97,
       "requiresExclusionCheck": false,
       "warnings": [
-        "NEAR/FOLLOWEDBY gap for CJK at distance 10 would require [\\s\\S]{0,40}, which real Hyperscan testing found unsafe to compile under this script's required UTF8+UCP flags (\"Pattern is too large\"); clamped to the calibrated safe maximum [\\s\\S]{0,30}. PRECISION LOSS: matches requiring more than 30 intervening characters between the two operands will be missed. Consider a smaller NEAR/FOLLOWEDBY distance for this term."
+        "This term's term expression contains NEAR/FOLLOWEDBY structure and was split into 2 independent parts ... see resolvedPatterns ..."
       ],
+      "resolvedPatterns": "(?:内幕|正常|的|商业) FOLLOWEDBY{10} (?:活动|记录)",
       "compiledAt": "2026-08-26T10:15:00.430Z"
     },
     {
@@ -756,15 +836,17 @@ A term that was structurally valid but rejected by real Hyperscan (rather
 than translation) instead carries `errorLog` (not `translationError`) —
 the two are mutually exclusive and both are `null`/absent for `PASS`.
 
-A term decomposed into multiple leaves looks the same shape as above but
-with two or more entries in `regexPattern`, e.g.:
+A term with NEAR/FOLLOWEDBY structure looks the same shape as above but
+with two or more entries in `regexPattern` (never with any gap fragment
+baked into any entry — the relationship lives only in `resolvedPatterns`), e.g.:
 
 ```json
 "regexPattern": [
   "(?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG)",
-  "(?:\\s+\\S+){0,4}\\s+(?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN)",
-  "(?:\\s+\\S+){0,4}\\s+(?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT)"
-]
+  "(?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN)",
+  "(?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT)"
+],
+"resolvedPatterns": "(?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG) FOLLOWEDBY{4} (?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN) FOLLOWEDBY{4} (?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT)"
 ```
 
 ### `POST /api/lexicon/compile/csv`
@@ -812,6 +894,7 @@ sequentially in term order:
   "regexPattern": ["manipulate\\S*"],
   "hyperscanFlags": 1,
   "requiresExclusionCheck": false,
+  "resolvedPatterns": "manipulate\\S*",
   "hyperscanExpressionId": 1
 }
 ```
@@ -824,6 +907,7 @@ sequentially in term order:
   "hyperscanFlags": 1,
   "requiresExclusionCheck": true,
   "exclusionRegex": ["(?:disclaimer)"],
+  "resolvedPatterns": "tip\\S* AND NOT (disclaimer)",
   "requiredExpressionIds": [4],
   "excludedExpressionIds": [5],
   "patternMapping": "(4&!5)"
@@ -834,9 +918,10 @@ sequentially in term order:
 {
   "termId": "lexicon_research_1::3",
   "compilationStatus": "PASS",
-  "regexPattern": ["A", "(?:\\s+\\S+){0,4}\\s+B", "(?:\\s+\\S+){0,4}\\s+C"],
+  "regexPattern": ["A", "B", "C"],
   "hyperscanFlags": 1,
   "requiresExclusionCheck": false,
+  "resolvedPatterns": "A FOLLOWEDBY{4} B FOLLOWEDBY{4} C",
   "hyperscanExpressionId": 3,
   "patternMapping": "(6&7&8)"
 }

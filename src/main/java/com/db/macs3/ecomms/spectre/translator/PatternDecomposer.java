@@ -1,82 +1,74 @@
 package com.db.macs3.ecomms.spectre.translator;
 
-import com.db.macs3.ecomms.spectre.model.ScriptType;
-import com.db.macs3.ecomms.spectre.util.ScriptDetector;
-
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Breaks an over-budget (see {@link PatternComplexityAnalyzer}) NEAR/FOLLOWEDBY
- * tree into independent leaf sub-patterns, for compilation as separate
- * Hyperscan QUIET expressions combined by a native COMBINATION expression
- * (for {@code /compile/bundle}) or as a caller-combined pattern list (for
- * {@code /compile} and {@code /compile/csv}) — see {@link TermSyntaxTranslator}
- * class Javadoc for the full flow and {@code LexiconCompileBundleService} for
- * how the combination expression itself gets built once real Hyperscan
- * expression ids are assigned.
+ * Splits a {@code NEAR}/{@code FOLLOWEDBY} tree into independent leaf
+ * sub-patterns, and — in the same pass — builds a literal-keyword
+ * "resolved" text representation of the same tree (see
+ * {@link TermCompilationResult#resolvedPatterns()}).
  *
- * <p><b>What "leaf" means here</b>
- * <p>Given a NEAR/FOLLOWEDBY tree, a leaf is a maximal subtree that is NOT
- * itself a NEAR/FOLLOWEDBY node — i.e. an {@link Ast.Or}, {@link Ast.And},
- * {@link Ast.Word}, {@link Ast.Phrase}, or {@link Ast.QuotedPhrase} found by
- * walking down through every NEAR/FOLLOWEDBY node's children. For
- * {@code (A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C}, the three leaves are exactly
- * A, B, and C — the two FOLLOWEDBY nodes themselves contribute no leaf of
- * their own; only what they connect.
+ * <p><b>This is now the unconditional, always-on path for any term
+ * containing proximity structure — not a complexity-overflow fallback.</b>
+ * A previous revision of this codebase only decomposed a term when a
+ * heuristic ({@code PatternComplexityAnalyzer}) or a real Hyperscan
+ * rejection said the gap-embedded single pattern would be "too large" —
+ * and, when it did decompose, baked each NEAR/FOLLOWEDBY node's own gap
+ * fragment as a literal prefix onto the leaf that followed it, as a "safe
+ * strengthening" over an even earlier revision that discarded the gap
+ * entirely.
  *
- * <p><b>The gap is preserved on the leaf that follows it — confirmed bug fix</b>
- * <p>An earlier revision of this class ({@code collectLeaves}) discarded
- * every NEAR/FOLLOWEDBY node's gap entirely — {@code distance} was thrown
- * away along with the node itself, and each leaf was code-generated in
- * total isolation. That is a REAL regression from what the single,
- * non-decomposed pattern for the same term would have expressed: given
- * {@code (A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C}, the non-decomposed pattern is
- * exactly {@code A<gap4>B<gap4>C} — one literal concatenated string. Simply
- * dropping both {@code <gap4>} fragments and emitting {@code A}, {@code B},
- * {@code C} as three totally independent patterns is a bigger precision loss
- * than necessary: it allows, for instance, {@code B} to match as the very
- * FIRST token of the whole message, something the original term's structure
- * never allowed.
+ * <p><b>Both of those are gone now, by design, not by regression.</b> Every
+ * NEAR/FOLLOWEDBY node (with one narrow, deliberate exception — see below)
+ * always splits into independent leaves, and the gap is NEVER compiled into
+ * a regex fragment anywhere, not even as a leaf prefix. The relationship
+ * between leaves is instead conveyed as literal operator text — {@code
+ * " NEAR{n} "} / {@code " FOLLOWEDBY{n} "} — using the term author's raw,
+ * un-clamped, un-multiplied distance, via {@link Result#resolvedText()}. A
+ * downstream Java-regex-based consumer (Lexicon Scan Engine / Lexicon
+ * Scanner Service) reconstructs the actual proximity/AND-NOT relationship
+ * from this text — see {@code TermCompilationResult.resolvedPatterns}
+ * class Javadoc for the full contract, and
+ * {@code src/test/java/.../TokenProximityMatcher.java}-family classes in
+ * this repo's test tree for a reference implementation of that downstream
+ * logic (this repo does not consume {@code resolvedPatterns} itself — it
+ * only produces it).
  *
- * <p>{@link #decompose} fixes this: every non-first leaf that resulted from
- * splitting a NEAR/FOLLOWEDBY node is prefixed with that node's own gap
- * fragment (the exact {@code (?:\s+\S+){0,n}\s+} / {@code [\s\S]{0,N}}
- * fragment {@link MultiLanguagePatternBuilder} would have used at that same
- * position in the non-decomposed pattern — word-based or character-based,
- * chosen the same way, from the same script detection over the same
- * operand pair). For {@code (A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C}, decompose
- * now returns exactly: {@code [A, <gap4(A,B)>B, <gap4(AB,C)>C]}.
+ * <p><b>The one exception: NEAR/FOLLOWEDBY nested inside {@code OR}</b>
+ * <p>A NEAR/FOLLOWEDBY node that is one alternative of a multi-operand
+ * {@code Ast.Or} — e.g. {@code "(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"}
+ * — genuinely cannot be flattened into a flat, boolean-AND'd leaf list
+ * without changing what the surrounding {@code OR} means. This case is
+ * confirmed real, currently-used functionality (not a hypothetical edge
+ * case), so it is deliberately left alone: a multi-operand {@code Or} is
+ * still treated as ONE opaque leaf, generated via
+ * {@link PatternCodeGenerator#generate}, exactly as before — which means
+ * {@code PatternCodeGenerator.generateNear}/{@code generateFollowedBy} (and
+ * therefore {@code MultiLanguagePatternBuilder}'s gap-building, including
+ * its static clamp and adaptive real-Hyperscan retry) are still reachable,
+ * but ONLY via this one residual path. Do not "finish the job" by also
+ * flattening through {@code Or} without first designing how a
+ * consumer-facing OR-of-AND-groups formula would work — that is a
+ * materially larger change than this one (it would require
+ * {@code regexPattern} to become a nested structure, not a flat list — see
+ * {@code HyperscanCombinationHandler}, whose id-allocation scheme assumes
+ * a flat AND-only leaf list).
  *
- * <p><b>This is still NOT the original proximity constraint — read carefully</b>
- * <p>The prefix is a LITERAL gap fragment baked into one leaf's own pattern
- * text, not a cross-expression constraint — Hyperscan has no mechanism to
- * make one independently-scanned expression's match position depend on
- * another's. Each leaf still reports its own match independently, and the
- * decomposed leaves are still combined with pure boolean AND ("all of these
- * appear somewhere in the message") — see {@link TermSyntaxTranslator} class
- * Javadoc and {@code TermCompilationResult} class Javadoc. Concretely: the
- * gap-prefixed leaf for B only requires SOME up-to-{@code n} words/chars of
- * ANY content to precede B WHEREVER B itself occurs in the message — it does
- * NOT require that content to be A's own match. The true guarantee this
- * restores is narrower but real: a leaf that originally sat on the right of
- * a NEAR/FOLLOWEDBY can no longer match with literally nothing before it
- * (e.g. as the message's first token), which the fully-discarded-gap version
- * incorrectly allowed. {@code warnings} still always carries an explicit
- * entry whenever decomposition applies, precisely because the true
- * order/distance relationship BETWEEN leaves remains lost.
- *
- * <p><b>NEAR is bidirectional; the prefix approximates one direction anyway</b>
- * <p>{@link Ast.Near} allows either operand to appear first; a single
- * decomposed leaf cannot faithfully carry "preceded by up to n OR followed
- * by up to n". {@link #decompose} applies the same left-to-right,
- * gap-on-the-right-operand treatment it uses for {@link Ast.FollowedBy} —
- * strictly weaker than NEAR's true bidirectional guarantee (never rejects a
- * message NEAR would have matched because of this approximation; it can
- * only, in the same narrow sense as above, additionally require the
- * right-hand leaf not be the message's literal first token), so this is a
- * safe strengthening in the same spirit as the FOLLOWEDBY case, not a
- * silent semantic change in the unsafe direction.
+ * <p><b>{@code AND} is flattened, not left opaque, when it contains nested
+ * proximity — and this is lossless</b>
+ * <p>Unlike {@code OR}, {@code Ast.And}'s own semantics ("all operands
+ * co-occur anywhere in the message, in any order, unbounded distance") is
+ * ALREADY exactly equivalent to "these operands' leaves are all
+ * independently present somewhere" — the same flat-AND convention every
+ * other multi-leaf case in this codebase already uses. So when an
+ * {@code And} operand is (or contains) a NEAR/FOLLOWEDBY node, decomposing
+ * through the {@code And} loses nothing beyond what decomposing the nested
+ * NEAR/FOLLOWEDBY itself already trades away — seee {@link #containsProximity}.
+ * A plain {@code And} with NO nested proximity anywhere is left completely
+ * untouched (one opaque leaf, via {@code PatternCodeGenerator.generateAnd}'s
+ * existing permutation-based single pattern) — this is what keeps ordinary
+ * {@code AND} terms fully unaffected by this whole feature.
  */
 final class PatternDecomposer {
 
@@ -84,23 +76,38 @@ final class PatternDecomposer {
     }
 
     /**
-     * @param ast a NEAR/FOLLOWEDBY tree (or any AST — a non-proximity root
-     *            simply returns a single-element list containing {@code ast}'s
-     *            generated pattern)
-     * @param ctx shared parse context — mutated with UTF8/UCP flag needs
-     *            exactly as {@link PatternCodeGenerator#generate} would for
-     *            the equivalent non-decomposed pattern, both for each leaf's
-     *            own content and for each gap's script detection
-     * @return the leaf patterns, in left-to-right order as they appear in the
-     * original term text, each one already a complete, independently
-     * Hyperscan-compilable PCRE fragment — every leaf after the first
-     * carries its enclosing NEAR/FOLLOWEDBY node's own gap fragment as a
-     * literal prefix (see class Javadoc)
+     * @param leaves       independent, individually Hyperscan-compilable PCRE
+     *                     fragments, in left-to-right term order — never
+     *                     containing any gap fragment
+     * @param resolvedText the same subtree rendered with literal
+     *                     {@code NEAR{n}}/{@code FOLLOWEDBY{n}}/{@code AND}
+     *                     keyword text standing in for what would otherwise be
+     *                     a gap — see class Javadoc. For a leaf reached via the
+     *                     OR-nested-proximity exception, this is byte-identical
+     *                     to that leaf's own entry in {@code leaves}, since both
+     *                     come from the exact same {@link PatternCodeGenerator#generate}
+     *                     call.
      */
-    static List<String> decompose(Ast ast, ParseContext ctx) {
+    record Result(List<String> leaves, String resolvedText) {
+    }
+
+    /**
+     * @param ast a NEAR/FOLLOWEDBY/AND tree (or any AST — a leaf root simply
+     *            returns a single-element {@code leaves} list containing
+     *            {@code ast}'s generated pattern, with {@code resolvedText}
+     *            identical to it)
+     * @param ctx shared parse context — mutated with UTF8/UCP flag needs and
+     *            warnings exactly as {@link PatternCodeGenerator#generate}
+     *            would for the equivalent non-decomposed pattern; each node
+     *            is visited exactly once by this single unified pass, so
+     *            there is no risk of duplicate flag/warning mutation between
+     *            {@code leaves} and {@code resolvedText} — they are built
+     *            together, not by two independent walks.
+     */
+    static Result decompose(Ast ast, ParseContext ctx) {
         return switch (ast) {
-            case Ast.Near near -> decomposeProximity(near.left(), near.right(), near.distance(), ctx);
-            case Ast.FollowedBy fb -> decomposeProximity(fb.left(), fb.right(), fb.distance(), ctx);
+            case Ast.Near near -> decomposeProximity(near.left(), near.right(), near.distance(), "NEAR", ctx);
+            case Ast.FollowedBy fb -> decomposeProximity(fb.left(), fb.right(), fb.distance(), "FOLLOWEDBY", ctx);
 
             // A single-operand Or is not something the parser itself ever produces
             // (ExpressionParser.parseOr unwraps a lone alternative directly) — it only
@@ -112,78 +119,87 @@ final class PatternDecomposer {
             // decomposition, rather than the Or wrapper being treated as one opaque leaf.
             case Ast.Or or when or.operands().size() == 1 -> decompose(or.operands().getFirst(), ctx);
 
-            default -> List.of(PatternCodeGenerator.generate(ast, ctx));
+            // AND is flattened only when it actually contains nested proximity — see
+            // class Javadoc. A plain AND (no nested NEAR/FOLLOWEDBY anywhere) falls
+            // through to the default arm below, unaffected.
+            case Ast.And and when containsProximity(and) -> decomposeAnd(and, ctx);
+
+            case Ast.Not ignored -> throw new IllegalStateException(
+                    "unreachable — every Ast.Not is folded into Ast.AndNot (or rejected) by "
+                    + "ExpressionParser.parseAnd() before an Ast is ever returned; see Ast.Not Javadoc");
+
+            // Every other case — a multi-operand Or (including one that itself contains
+            // nested proximity — see class Javadoc "the one exception"), a plain And with
+            // no nested proximity, Word, Phrase, QuotedPhrase — is one opaque leaf,
+            // generated exactly as PatternCodeGenerator already would for a non-decomposed
+            // term. resolvedText is deliberately the SAME string, not a re-derivation, so
+            // it can never drift from what regexPattern/exclusionRegex actually contain.
+            default -> {
+                String pattern = PatternCodeGenerator.generate(ast, ctx);
+                yield new Result(List.of(pattern), pattern);
+            }
         };
     }
 
     /**
      * Decomposes both sides of one NEAR/FOLLOWEDBY node and stitches them
      * together: {@code left}'s leaves unchanged, followed by {@code right}'s
-     * leaves with this node's own gap fragment prefixed onto only the FIRST
-     * of them — that first right-hand leaf is exactly the leaf that sat
-     * immediately after this gap in the non-decomposed pattern text; any
-     * further leaves from a right subtree that was itself a further nested
-     * NEAR/FOLLOWEDBY already carry their OWN gap prefix from their own
-     * recursive {@link #decompose} call and must not be touched again here.
+     * leaves — no gap fragment is baked onto either side any more (see class
+     * Javadoc). {@code resolvedText} joins the two sides' own resolved text
+     * with the literal {@code " KEYWORD{distance} "} text instead.
      */
-    private static List<String> decomposeProximity(Ast left, Ast right, int distance, ParseContext ctx) {
-        List<String> leftLeaves = decompose(left, ctx);
-        List<String> rightLeaves = new ArrayList<>(decompose(right, ctx));
+    private static Result decomposeProximity(Ast left, Ast right, int distance, String keyword, ParseContext ctx) {
+        Result leftResult = decompose(left, ctx);
+        Result rightResult = decompose(right, ctx);
 
-        String firstRightLeaf = rightLeaves.get(0);
-        String gap = gapBetween(left, right, distance, ctx, firstRightLeaf);
-        rightLeaves.set(0, gap + firstRightLeaf);
+        List<String> combined = new ArrayList<>(leftResult.leaves().size() + rightResult.leaves().size());
+        combined.addAll(leftResult.leaves());
+        combined.addAll(rightResult.leaves());
 
-        List<String> combined = new ArrayList<>(leftLeaves.size() + rightLeaves.size());
-        combined.addAll(leftLeaves);
-        combined.addAll(rightLeaves);
-        return combined;
+        String resolvedText = leftResult.resolvedText() + " " + keyword + "{" + distance + "} " + rightResult.resolvedText();
+        return new Result(combined, resolvedText);
     }
 
     /**
-     * Computes exactly the gap fragment {@link PatternCodeGenerator}'s
-     * non-decomposed {@code generateNear}/{@code generateFollowedBy} would
-     * have used for this same {@code left}/{@code right} pair and
-     * {@code distance} — same script detection, over the same fully
-     * generated (non-decomposed) text of both operands, so a term's gap
-     * choice (word-based vs. character-based — see {@link ScriptDetector}
-     * class Javadoc) is identical whether or not that term ends up
-     * decomposed.
-     *
-     * <p>{@code left}/{@code right} are re-generated here (in full, ignoring
-     * any decomposition within them) purely as script-detection input — this
-     * mirrors exactly what the non-decomposed code path itself passes to
-     * {@link ScriptDetector#detectCombined}, and is cheap (string building
-     * only, no Hyperscan calls).
-     *
-     * <p>This also supplies {@link MultiLanguagePatternBuilder#buildGap} a
-     * trial-pattern builder for the REAL decomposed-leaf shape —
-     * {@code gap + rightLeafText}, the exact fragment that ends up as this
-     * leaf's own independently-compiled Hyperscan expression — so a gap
-     * width that is safe in the generic calibration but not for this
-     * specific leaf (e.g. a leaf itself containing a wide OR group) gets
-     * adaptively narrowed the same way the non-decomposed NEAR/FOLLOWEDBY
-     * path already does. The gap-fragment format the trial builder emits
-     * must match {@code script}'s own choice ({@code [\s\S]{0,n}} for a
-     * character-based script, {@code (?:\s+\S+){0,n}\s+} for a word-based
-     * one) — see {@link MultiLanguagePatternBuilder#charBasedGap(ScriptType, int, java.util.function.IntFunction)}
-     * and {@link MultiLanguagePatternBuilder#wordBasedGap(int, java.util.function.IntFunction)}.
-     *
-     * @param rightLeafText the already-generated pattern of the first right-hand
-     *                      leaf this gap will be prefixed onto (see {@link #decomposeProximity})
+     * Flattens an {@code And} node known (via {@link #containsProximity}) to
+     * contain nested proximity structure: every operand is independently
+     * decomposed and their leaves concatenated (AND's own semantics is
+     * already flat-presence — see class Javadoc), and {@code resolvedText}
+     * joins each operand's own resolved text with the literal {@code " AND "}
+     * keyword.
      */
-    private static String gapBetween(Ast left, Ast right, int distance, ParseContext ctx, String rightLeafText) {
-        String leftText = PatternCodeGenerator.generate(left, ctx);
-        String rightText = PatternCodeGenerator.generate(right, ctx);
-        ScriptType script = ScriptDetector.detectCombined(leftText, rightText);
-        if ((script.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
-            ctx.setNeedsUtf8();
+    private static Result decomposeAnd(Ast.And and, ParseContext ctx) {
+        List<String> combined = new ArrayList<>();
+        StringBuilder resolvedText = new StringBuilder();
+        boolean first = true;
+        for (Ast operand : and.operands()) {
+            Result operandResult = decompose(operand, ctx);
+            combined.addAll(operandResult.leaves());
+            if (!first) {
+                resolvedText.append(" AND ");
+            }
+            resolvedText.append(operandResult.resolvedText());
+            first = false;
         }
-        java.util.function.IntFunction<String> trial = script.isCharBased()
-                ? n -> "[\\s\\S]{0,%d}".formatted(n) + rightLeafText
-                : n -> "(?:\\s+\\S+){0,%d}\\s+".formatted(n) + rightLeafText;
-        MultiLanguagePatternBuilder.GapResult gr = MultiLanguagePatternBuilder.buildGap(script, distance, trial);
-        ctx.addWarning(gr.warning());
-        return gr.pattern();
+        return new Result(combined, resolvedText.toString());
+    }
+
+    /**
+     * True when {@code ast} contains a {@link Ast.Near}/{@link Ast.FollowedBy}
+     * node reachable by recursing only through {@link Ast.And} — {@link Ast.Or}
+     * is deliberately NOT recursed into (an {@code Or} is always its own
+     * opaque boundary for this check, matching the OR-nested-proximity
+     * exception in class Javadoc: whether or not one of an {@code Or}'s
+     * alternatives contains proximity has no bearing on whether the
+     * ENCLOSING {@code And} should flatten — that {@code Or} stays one
+     * opaque leaf regardless).
+     */
+    private static boolean containsProximity(Ast ast) {
+        return switch (ast) {
+            case Ast.Near ignored -> true;
+            case Ast.FollowedBy ignored -> true;
+            case Ast.And and -> and.operands().stream().anyMatch(PatternDecomposer::containsProximity);
+            default -> false;
+        };
     }
 }

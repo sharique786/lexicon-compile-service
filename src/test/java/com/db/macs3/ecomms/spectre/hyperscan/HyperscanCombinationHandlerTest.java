@@ -51,6 +51,7 @@ class HyperscanCombinationHandlerTest {
                 "t::1", "desc", CompilationStatus.PASS,
                 regexPattern, null, null,
                 1, requiresExclusionCheck, exclusionRegex, List.of(),
+                null,
                 null, null, null, null, Instant.now());
     }
 
@@ -212,6 +213,7 @@ class HyperscanCombinationHandlerTest {
                     "t::1", "desc", CompilationStatus.PASS,
                     List.of("\\x{1F600}", "\\x{1F601}"), null, null,
                     97, false, null, List.of(), // CASELESS(1) | UTF8(32) | UCP(64) = 97
+                    null,
                     null, null, null, null, Instant.now());
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 3, new HyperscanCombinationHandler.HyperscanIdAllocator(4), out);
@@ -321,6 +323,7 @@ class HyperscanCombinationHandlerTest {
                     "t::1", "desc", CompilationStatus.PASS,
                     List.of("\\x{1F6AB}"), null, null,
                     97, true, List.of("\\x{1F4B0}"), List.of(), // CASELESS(1) | UTF8(32) | UCP(64) = 97
+                    null,
                     null, null, null, null, Instant.now());
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
@@ -472,6 +475,7 @@ class HyperscanCombinationHandlerTest {
                     "t::1", "desc", CompilationStatus.PASS,
                     List.of("내부자"), null, null,
                     97, false, null, List.of(), // CASELESS(1) | UTF8(32) | UCP(64) = 97
+                    null,
                     null, null, null, null, Instant.now());
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);

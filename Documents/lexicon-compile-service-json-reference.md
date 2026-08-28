@@ -1,5 +1,19 @@
 # Lexicon Compile Service — JSON Response Reference
 
+> **This document is stale relative to the current code** (predates several
+> changes — `regexPattern`/`exclusionRegex` are now `List<String>`, not a bare
+> string; `riskDriverName`/`requiresAndPostFilter` no longer exist;
+> `requiresExclusionCheck`/`exclusionRegex`/`warnings`/`hyperscanExpressionId`/
+> `requiredExpressionIds`/`excludedExpressionIds`/`patternMapping`/
+> **`resolvedPatterns`** are missing entirely). Needs a full refresh against
+> `TermCompilationResult`'s own class Javadoc (the current source of truth) —
+> not attempted here as a one-field patch. **`resolvedPatterns`**: a new
+> `String` field (one per term, despite the plural name), populated across all
+> three endpoints, conveying NEAR{n}/FOLLOWEDBY{n}/AND NOT structure as literal
+> keyword text now that `regexPattern`/`exclusionRegex` no longer encode it —
+> see `README.md`'s "`resolvedPatterns`" section and
+> `TermCompilationResult`'s own Javadoc for the full contract.
+
 This document explains every attribute in the JSON response returned by the
 Lexicon Compile Service.
 

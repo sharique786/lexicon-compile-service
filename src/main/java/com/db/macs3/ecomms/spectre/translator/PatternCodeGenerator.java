@@ -147,6 +147,16 @@ final class PatternCodeGenerator {
         return requiredPattern;
     }
 
+    /**
+     * Builds a full gap-embedded NEAR pattern. As of the {@code resolvedPatterns}
+     * change, {@code generate()} is only ever invoked directly on an
+     * {@code Ast.Near} node via {@link #generateOr}'s recursion into a
+     * multi-operand {@code Or} — {@link PatternDecomposer} intercepts every
+     * OTHER NEAR/FOLLOWEDBY node first, splitting it into independent
+     * gap-less leaves instead. See {@link PatternDecomposer} class Javadoc
+     * "the one exception" and {@link MultiLanguagePatternBuilder}'s own
+     * class Javadoc for why this one path still needs to exist.
+     */
     private static String generateNear(Ast.Near near, ParseContext ctx) {
         String leftPat = generate(near.left(), ctx);
         String rightPat = generate(near.right(), ctx);
@@ -156,6 +166,10 @@ final class PatternCodeGenerator {
         return r.pattern();
     }
 
+    /**
+     * Builds a full gap-embedded FOLLOWEDBY pattern — see {@link #generateNear}
+     * Javadoc for why this remains reachable only via the OR-nested-proximity path.
+     */
     private static String generateFollowedBy(Ast.FollowedBy fb, ParseContext ctx) {
         String leftPat = generate(fb.left(), ctx);
         String rightPat = generate(fb.right(), ctx);

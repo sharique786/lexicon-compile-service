@@ -13,38 +13,42 @@ import java.util.List;
  * }
  * </pre>
  *
- * <p><b>{@code hsPatterns} is always a list — this is how decomposition is represented</b>
- * <p>A term whose required side is simple enough for Hyperscan to compile as
- * one pattern has {@code hsPatterns} with exactly one entry. A term too
- * structurally complex for that — see {@code PatternComplexityAnalyzer} and
- * {@code PatternDecomposer} — has {@code hsPatterns} with two or more
- * entries: independent, individually Hyperscan-validated leaf patterns that
- * a caller (or, for {@code /compile/bundle}, {@code HyperscanCombinationHandler})
- * combines with pure boolean AND. There is no separate boolean flag for
- * "was this decomposed" — the caller simply checks {@code hsPatterns.size()}.
- * The same applies to {@link #exclusionRegexs()} for an AND NOT term's
- * excluded side.
+ * <p><b>{@code hsPatterns} is always a list — this is how NEAR/FOLLOWEDBY splitting is represented</b>
+ * <p>A term whose required side has no NEAR/FOLLOWEDBY structure (or whose
+ * NEAR/FOLLOWEDBY is nested inside an {@code OR} — see
+ * {@code PatternDecomposer} class Javadoc "the one exception") has
+ * {@code hsPatterns} with exactly one entry. A term with NEAR/FOLLOWEDBY
+ * structure elsewhere always splits — see {@code PatternDecomposer} — into
+ * two or more entries: independent, individually Hyperscan-validated leaf
+ * patterns that a caller (or, for {@code /compile/bundle},
+ * {@code HyperscanCombinationHandler}) combines with pure boolean AND.
+ * There is no separate boolean flag for "was this split" — the caller
+ * simply checks {@code hsPatterns.size()}. The same applies to
+ * {@link #exclusionRegexs()} for an AND NOT term's excluded side.
  *
  * <p><b>This is a real precision trade-off, not a lossless rewrite, whenever
- * a list has more than one entry.</b> Decomposition discards the DISTANCE and
- * ORDER constraint BETWEEN leaf patterns that a nested NEAR/FOLLOWEDBY
- * structure expressed — the leaves are combined with pure boolean AND ("all
- * of these appear somewhere in the message"), not with any positional
- * relationship to EACH OTHER. It does NOT, however, discard the gap width
- * itself: {@code PatternDecomposer} bakes each originating NEAR/FOLLOWEDBY
- * node's own gap fragment into the start of the leaf that followed it in the
- * original term text, so that leaf can never match with nothing preceding
- * it — only its anchor (specifically the PRECEDING leaf, rather than
- * whichever text is actually there) is lost, not the bound itself. A term
- * originally written as {@code (A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C} — "these
- * in this order, this close together" — becomes, once decomposed, "A and
- * (something FOLLOWEDBY{4} B) and (something FOLLOWEDBY{4} C) all appear
- * somewhere in this message, independently of each other". This trade-off
- * exists specifically so a term that would otherwise be REJECTED outright
- * still produces a usable (if less precise) result — see {@link #warnings()},
- * which always carries an explicit warning whenever this trade-off applies to
- * either side, so no caller can silently treat a decomposed match as a
- * genuine proximity match without realizing precision was reduced.
+ * a list has more than one entry.</b> Splitting discards the DISTANCE and
+ * ORDER constraint BETWEEN leaf patterns that a NEAR/FOLLOWEDBY structure
+ * expressed — the leaves are combined with pure boolean AND ("all of these
+ * appear somewhere in the message"), not with any positional relationship
+ * to EACH OTHER. Unlike an earlier revision of this codebase, NO gap
+ * fragment is baked into any leaf any more — the full relationship,
+ * including the term author's raw distance, is instead conveyed separately
+ * via {@link #resolvedPattern()}, as literal {@code NEAR{n}}/
+ * {@code FOLLOWEDBY{n}}/{@code AND NOT} keyword text — see that field's
+ * Javadoc and {@code TermCompilationResult.resolvedPatterns} for the full
+ * contract. A term originally written as
+ * {@code (A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C} — "these in this order, this
+ * close together" — becomes, once split, "A and B and C all appear
+ * somewhere in this message, independently of each other" for
+ * {@code hsPatterns} alone; a caller that needs the original proximity
+ * relationship reads {@link #resolvedPattern()} instead. This trade-off
+ * exists specifically so a term whose NEAR/FOLLOWEDBY gap would otherwise
+ * risk "Pattern is too large" still produces a usable result — see
+ * {@link #warnings()}, which always carries an explicit warning whenever
+ * this trade-off applies to either side, so no caller can silently treat a
+ * split match as a genuine proximity match without realizing precision was
+ * moved to {@link #resolvedPattern()}.
  *
  * <p><b>AND NOT: a two-side contract, not a single regex</b>
  * <p>Hyperscan cannot express "absent from the whole message" — that is
@@ -81,16 +85,25 @@ public sealed interface TranslationResult
      *                               false; never null or empty when it is true.
      * @param warnings               non-fatal issues worth surfacing to the caller — never null,
      *                               may be empty. Always includes an explicit entry whenever
-     *                               decomposition applied to either side, and whenever the term
+     *                               NEAR/FOLLOWEDBY splitting applied to either side, and whenever the term
      *                               relied on chained NEAR/FOLLOWEDBY without explicit parentheses
      *                               (see {@code ExpressionParser}).
+     * @param resolvedPattern        this term rendered with literal
+     *                               {@code NEAR{n}}/{@code FOLLOWEDBY{n}}/{@code AND NOT} keyword text
+     *                               standing in for whatever {@code hsPatterns}/{@code exclusionRegexs}
+     *                               no longer encode as a gap regex — always exactly one string, never
+     *                               null for a {@code Success}. Every leaf substring within it is
+     *                               byte-identical to the corresponding {@code hsPatterns}/
+     *                               {@code exclusionRegexs} entry — see {@code PatternDecomposer} class
+     *                               Javadoc for exactly how this is built.
      */
     record Success(
             List<String> hsPatterns,
             int hsFlags,
             boolean requiresExclusionCheck,
             List<String> exclusionRegexs,
-            List<String> warnings
+            List<String> warnings,
+            String resolvedPattern
     ) implements TranslationResult {
 
         public Success {
@@ -104,6 +117,9 @@ public sealed interface TranslationResult
             if (!requiresExclusionCheck && exclusionRegexs != null) {
                 throw new IllegalArgumentException(
                         "exclusionRegexs must be null when requiresExclusionCheck is false");
+            }
+            if (resolvedPattern == null || resolvedPattern.isBlank()) {
+                throw new IllegalArgumentException("resolvedPattern must not be null or blank");
             }
         }
 
@@ -135,30 +151,33 @@ public sealed interface TranslationResult
     /**
      * Factory: successful translation with no AND-NOT exclusion, no warnings.
      */
-    static TranslationResult success(List<String> patterns, int flags) {
-        return new Success(patterns, flags, false, null, List.of());
+    static TranslationResult success(List<String> patterns, int flags, String resolvedPattern) {
+        return new Success(patterns, flags, false, null, List.of(), resolvedPattern);
     }
 
     /**
      * Factory: successful translation with no AND-NOT exclusion, carrying warnings.
      */
-    static TranslationResult successWithWarnings(List<String> patterns, int flags, List<String> warnings) {
-        return new Success(patterns, flags, false, null, List.copyOf(warnings));
+    static TranslationResult successWithWarnings(
+            List<String> patterns, int flags, List<String> warnings, String resolvedPattern) {
+        return new Success(patterns, flags, false, null, List.copyOf(warnings), resolvedPattern);
     }
 
     /**
      * Factory: successful translation WITH an AND-NOT exclusion, no warnings.
      */
-    static TranslationResult successWithExclusion(List<String> patterns, int flags, List<String> exclusionRegexs) {
-        return new Success(patterns, flags, true, exclusionRegexs, List.of());
+    static TranslationResult successWithExclusion(
+            List<String> patterns, int flags, List<String> exclusionRegexs, String resolvedPattern) {
+        return new Success(patterns, flags, true, exclusionRegexs, List.of(), resolvedPattern);
     }
 
     /**
      * Factory: successful translation WITH an AND-NOT exclusion, carrying warnings.
      */
     static TranslationResult successWithExclusionAndWarnings(
-            List<String> patterns, int flags, List<String> exclusionRegexs, List<String> warnings) {
-        return new Success(patterns, flags, true, exclusionRegexs, List.copyOf(warnings));
+            List<String> patterns, int flags, List<String> exclusionRegexs, List<String> warnings,
+            String resolvedPattern) {
+        return new Success(patterns, flags, true, exclusionRegexs, List.copyOf(warnings), resolvedPattern);
     }
 
     /**

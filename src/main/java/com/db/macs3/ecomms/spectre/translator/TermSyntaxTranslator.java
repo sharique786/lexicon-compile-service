@@ -17,40 +17,43 @@ import java.util.List;
  * <pre>
  * raw text → preprocess → Tokenizer → List&lt;Token&gt; → ExpressionParser → Ast (+ warnings)
  *          → per side (required; excluded, if AND NOT):
- *              PatternComplexityAnalyzer over budget?
- *                → yes: PatternDecomposer → independent leaf patterns, EACH real-Hyperscan-validated (+ warning)
- *                → no:  PatternCodeGenerator → one pattern → real-Hyperscan-validated
- *                         → Hyperscan ALSO rejects it as "too large"? → fall back to decomposition anyway
- *                         → Hyperscan rejects it for any OTHER reason?  → translation fails (real error surfaced)
+ *              PatternDecomposer.decompose() → independent leaf pattern(s) + literal-keyword
+ *                resolvedText, EACH leaf real-Hyperscan-validated
  * </pre>
  *
  * <p>Each stage is a separate, independently-testable class.
  *
- * <p><b>Decomposition triggers on EITHER signal — heuristic OR real Hyperscan rejection</b>
- * <p>{@link PatternComplexityAnalyzer} is a heuristic (see its class Javadoc)
- * calibrated on two known real outcomes — it can under-estimate a structure
- * it has not seen before. This class therefore does not treat "under budget"
- * as the final word: a side that passes the heuristic still gets its
- * generated pattern checked against the REAL Hyperscan compiler
- * ({@link HyperscanCompiler#validate}) before being accepted. If Hyperscan
- * itself rejects that pattern with a size-related error ("Pattern is too
- * large" / "too large" — see {@link #isPatternTooLargeError}), this class
- * falls back to decomposition exactly as it would have if the heuristic had
- * caught it up front — the two triggers converge on the same recovery path.
- * A Hyperscan rejection for any OTHER reason (a genuinely malformed pattern)
- * is NOT treated as a decomposition trigger — decomposition cannot fix a
- * broken pattern, only an oversized one, so that case fails translation with
- * Hyperscan's real error surfaced directly.
+ * <p><b>NEAR/FOLLOWEDBY always split into independent leaves — never a gap-regex</b>
+ * <p>{@link PatternDecomposer} is now the unconditional path for ANY side
+ * containing NEAR/FOLLOWEDBY structure — not a complexity-driven fallback
+ * (see {@link PatternComplexityAnalyzer}'s class Javadoc for why that
+ * heuristic is no longer consulted here at all). The gap between two
+ * proximity operands is NEVER compiled into a regex fragment for this path
+ * — instead, {@link PatternDecomposer.Result#resolvedText()} conveys the
+ * relationship as literal {@code NEAR{n}}/{@code FOLLOWEDBY{n}}/
+ * {@code AND NOT} keyword text, using the term author's raw, un-clamped
+ * distance, populated into {@link TranslationResult.Success#resolvedPattern()}.
+ * One narrow, deliberate exception remains: a NEAR/FOLLOWEDBY nested inside
+ * a multi-operand {@code OR} still compiles as a single gap-embedded
+ * pattern, exactly as before — see {@link PatternDecomposer} class Javadoc
+ * "the one exception" for why that case can't be flattened losslessly.
  *
- * <p>Because every pattern this class returns (single or decomposed) has
- * therefore ALREADY been validated against real Hyperscan, {@code
- * LexiconCompileService} and {@code LexiconCompileBundleService} no longer
- * need to independently re-validate a translator-produced pattern — they
- * trust {@link TranslationResult.Success} as already Hyperscan-clean. (The
+ * <p>A side's leaf pattern(s) are always validated against the REAL
+ * Hyperscan compiler ({@link HyperscanCompiler#validate}) before being
+ * accepted — a leaf Hyperscan itself rejects, for any reason, is a hard
+ * translation failure; there is nothing further for decomposition to try,
+ * since {@link PatternDecomposer} has already split every NEAR/FOLLOWEDBY
+ * boundary it safely can.
+ *
+ * <p>Because every pattern this class returns has therefore ALREADY been
+ * validated against real Hyperscan, {@code LexiconCompileService} and
+ * {@code LexiconCompileBundleService} no longer need to independently
+ * re-validate a translator-produced pattern — they trust
+ * {@link TranslationResult.Success} as already Hyperscan-clean. (The
  * separate {@code Regex} term type — raw, caller-supplied PCRE that never
  * passes through this translator at all — is unaffected and still validated
- * directly where it is compiled; decomposition fundamentally cannot apply to
- * it either, since it has no parsed AST/proximity structure to decompose.)
+ * directly where it is compiled; it has no parsed AST/proximity structure to
+ * decompose either, and gets no {@code resolvedPattern}.)
  *
  * <p><b>Operator precedence (grammar — see {@link ExpressionParser})</b>
  * <table>
@@ -65,43 +68,51 @@ import java.util.List;
  * <tr><td>OR</td><td>alternation (lowest)</td></tr>
  * </table>
  *
- * <p><b>AND: same technique as NEAR/FOLLOWEDBY, just unbounded</b>
+ * <p><b>AND: same technique as before, unaffected by this class's NEAR/FOLLOWEDBY changes</b>
  * <p>{@code price AND rigging} compiles to a single, fully correct Hyperscan
- * pattern using the same bidirectional-alternation technique NEAR uses for a
- * bounded gap, with the gap made unbounded — see {@link PatternCodeGenerator}
- * class Javadoc. No lookahead, no post-filter, no scan-time cooperation
- * needed from the caller.
+ * pattern using bidirectional-alternation over an unbounded gap — see
+ * {@link PatternCodeGenerator} class Javadoc. No lookahead, no post-filter,
+ * no scan-time cooperation needed from the caller. An {@code AND} whose
+ * operand contains NEAR/FOLLOWEDBY structure is the one case that DOES
+ * split now — see {@link PatternDecomposer} class Javadoc "AND is
+ * flattened".
  *
  * <p><b>AND NOT: a two-pattern contract, not a single regex</b>
  * <p>Hyperscan cannot express "absent from the whole message" — that is
  * exactly what negative lookaround is for, and Hyperscan supports none.
  * {@code A AND NOT B} therefore returns TWO independently Hyperscan-valid
- * patterns: {@link TranslationResult.Success#hsPattern()} (A) and
- * {@link TranslationResult.Success#exclusionRegex()} (B). The term is
- * correctly matched only when {@code hsPattern} matches the message AND
- * {@code exclusionRegex} does not — see {@link TranslationResult} class
- * Javadoc for the exact contract.
+ * pattern lists: {@link TranslationResult.Success#hsPatterns()} (A) and
+ * {@link TranslationResult.Success#exclusionRegexs()} (B). The term is
+ * correctly matched only when EVERY entry of {@code hsPatterns} matches the
+ * message AND NOT every entry of {@code exclusionRegexs} does — see
+ * {@link TranslationResult} class Javadoc for the exact contract.
  *
  * <p><b>Pattern examples</b>
  * <pre>
  * (crap OR bad) NEAR{3} (bonus OR comp)
- *   → (?:(?:crap|bad)(?:\s+\S+){0,3}\s+(?:bonus|comp)|(?:bonus|comp)(?:\s+\S+){0,3}\s+(?:crap|bad))
+ *   → hsPatterns:     [(?:crap|bad), (?:bonus|comp)]
+ *     resolvedPattern: "(?:crap|bad) NEAR{3} (?:bonus|comp)"
  *
  * (F) FOLLOWEDBY{1} (((me) OR (cking)))
- *   → F(?:\s+\S+){0,1}\s+(?:me|cking)
+ *   → hsPatterns:     [F, (?:me|cking)]
+ *     resolvedPattern: "F FOLLOWEDBY{1} (?:me|cking)"
  *
  * price AND rigging
- *   → hsPattern: (?:price[\s\S]*rigging|rigging[\s\S]*price)
+ *   → hsPatterns: [(?:price[\s\S]*rigging|rigging[\s\S]*price)]   (still one self-contained pattern — AND alone is unaffected)
  *   Matches "...price change and market rigging is going on" (both present,
  *   any order, any distance apart). Does NOT match "There's price change"
  *   alone (rigging never appears).
  *
  * ((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)
- *   → hsPattern:               (?:fix|rig)(?:\s+\S+){0,2}\s+the rate
- *     requiresExclusionCheck:  true
- *     exclusionRegex:        (?:fed rate move)
- *   The caller must check BOTH: matched iff hsPattern matches AND
- *   exclusionRegex does not — see README "AND NOT: the two-pattern contract".
+ *   → hsPatterns:            [(?:fix|rig), the rate]
+ *     requiresExclusionCheck: true
+ *     exclusionRegexs:        [(?:fed rate move)]
+ *     resolvedPattern:        "(?:fix|rig) FOLLOWEDBY{2} the rate AND NOT ((?:fed rate move))"
+ *   The caller must check BOTH: matched iff every hsPatterns entry matches
+ *   AND not every exclusionRegexs entry does — see README "AND NOT: the
+ *   two-pattern contract". A caller that also needs to enforce the
+ *   FOLLOWEDBY{2} proximity itself (Hyperscan no longer does) reads
+ *   resolvedPattern.
  *
  * ((he?d kill) OR (she?d kill))
  *   → (?:he\?d kill|she\?d kill)     — '?' is always literal
@@ -110,7 +121,8 @@ import java.util.List;
  *   → (?:check her out|chimp\S*)
  *
  * 내부자 NEAR{3} 거래    (Korean insider NEAR trading)
- *   → (?:내부자[\s\S]{0,18}거래|거래[\s\S]{0,18}내부자)
+ *   → hsPatterns:     [내부자, 거래]
+ *     resolvedPattern: "내부자 NEAR{3} 거래"   (raw distance 3 — no avgCharsPerWord multiplication any more)
  *
  * 💰 OR 🤫
  *   → (?:\x{1F4B0}|\x{1F92B})  (with UTF8+UCP flags)
@@ -129,7 +141,7 @@ public final class TermSyntaxTranslator {
 
     /**
      * Translates one lexicon term description into a Hyperscan PCRE pattern
-     * (or, for a side that needed decomposition, a set of independent
+     * (or, for a side split by NEAR/FOLLOWEDBY, a set of independent
      * Hyperscan-validated patterns — see class Javadoc). Every pattern in a
      * successful result has already been checked against the real Hyperscan
      * compiler.
@@ -166,31 +178,35 @@ public final class TermSyntaxTranslator {
 
                 // Multiple "AND NOT X AND NOT Y" excluded operands are combined via OR into
                 // one Ast, exactly as PatternCodeGenerator.generateAndNot() already does inline
-                // for the non-decomposed case — see PatternDecomposer/generateAndNot comparison.
+                // for the non-split case — see PatternDecomposer for how this Or is then seen
+                // through when it has exactly one operand.
                 Ast excludedCombined = new Ast.Or(andNot.excluded());
 
-                // GENERATE both sides' candidate patterns before validating EITHER — see class
-                // Javadoc "the flag-accuracy reason this is two phases, not one": a side validated
-                // before the OTHER side has even been generated could be checked against a flags
-                // value missing UTF8/UCP only the other side's content would have required.
-                Candidate requiredCandidate = generateSide(andNot.required(), ctx);
-                Candidate excludedCandidate = generateSide(excludedCombined, ctx);
+                // Decompose BOTH sides before validating EITHER — same flag-accuracy reason as
+                // before: a side validated before the OTHER side has even been generated could
+                // be checked against a flags value missing UTF8/UCP only the other side's
+                // content would have required.
+                PatternDecomposer.Result requiredResult = PatternDecomposer.decompose(andNot.required(), ctx);
+                PatternDecomposer.Result excludedResult = PatternDecomposer.decompose(excludedCombined, ctx);
                 int flags = ctx.computeFlags();
 
                 SideResult required
-                        = validateSide(requiredCandidate, ctx, flags,
+                        = validateLeaves(requiredResult.leaves(), flags,
                         preprocessed, "required", warnings);
                 SideResult excluded
-                        = validateSide(excludedCandidate, ctx, flags,
+                        = validateLeaves(excludedResult.leaves(), flags,
                         preprocessed, "excluded (AND NOT)", warnings);
                 warnings.addAll(ctx.getWarnings());
+
+                String resolvedPattern = requiredResult.resolvedText()
+                        + " AND NOT (" + excludedResult.resolvedText() + ")";
 
                 log.debug("Translated (AND NOT): '{}' -> required={} excluded={} flags={} warnings={}",
                         rawExpression, required, excluded, flags, warnings.size());
 
                 return new TranslationResult.Success(
                         required.patterns(), flags, true, excluded.patterns(),
-                        List.copyOf(warnings));
+                        List.copyOf(warnings), resolvedPattern);
             }
 
             // The root is NOT AndNot — per rejectNestedAndNot() Javadoc, an AndNot node
@@ -200,9 +216,9 @@ public final class TermSyntaxTranslator {
             // then discarded entirely, since this branch always sets requiresExclusionCheck=false.
             rejectNestedAndNot(ast, preprocessed);
 
-            Candidate candidate = generateSide(ast, ctx);
+            PatternDecomposer.Result result = PatternDecomposer.decompose(ast, ctx);
             int flags = ctx.computeFlags();
-            SideResult required = validateSide(candidate, ctx, flags, preprocessed, "term", warnings);
+            SideResult required = validateLeaves(result.leaves(), flags, preprocessed, "term", warnings);
             warnings.addAll(ctx.getWarnings());
 
             log.debug("Translated: '{}' -> {} flags={} warnings={}",
@@ -210,7 +226,7 @@ public final class TermSyntaxTranslator {
 
             return new TranslationResult.Success(
                     required.patterns(), flags, false, null,
-                    List.copyOf(warnings));
+                    List.copyOf(warnings), result.resolvedText());
 
         } catch (TranslationException te) {
             log.warn("Translation failed for '{}': {}", rawExpression, te.getMessage());
@@ -302,14 +318,14 @@ public final class TermSyntaxTranslator {
         }
     }
 
-    // ── Per-side translation: generate (Phase 1), then validate (Phase 2) ──────
+    // ── Per-side translation: decompose, then validate every leaf ──────────────
 
     /**
      * One side's translation outcome — always a list: exactly one entry for
-     * a side that compiled as a single pattern, two or more when it was
-     * decomposed. See {@link TranslationResult} class Javadoc for why there
-     * is no separate boolean "was this decomposed" flag any more — the
-     * caller just checks {@code patterns.size()}.
+     * a side with no NEAR/FOLLOWEDBY structure, two or more when
+     * {@link PatternDecomposer} split it. See {@link TranslationResult}
+     * class Javadoc for why there is no separate boolean "was this split"
+     * flag any more — the caller just checks {@code patterns.size()}.
      */
     private record SideResult(List<String> patterns) {
         boolean isDecomposed() {
@@ -322,149 +338,44 @@ public final class TermSyntaxTranslator {
     }
 
     /**
-     * Phase-1 (generation-only, no Hyperscan calls) outcome for one side.
-     * Exactly one of {@code singlePattern} / {@code preDecomposedLeaves} is set:
-     * the heuristic already flagged this side as over budget (pre-decomposed,
-     * every leaf already generated), or it did not (single pattern generated,
-     * still needing Phase-2 validation before being trusted).
-     */
-    private record Candidate(Ast sideAst, String singlePattern, List<String> preDecomposedLeaves) {
-        boolean isPreDecomposed() {
-            return preDecomposedLeaves != null;
-        }
-    }
-
-    /**
-     * Phase 1: generates this side's pattern(s) — WITHOUT calling Hyperscan —
-     * so that {@code ctx}'s UTF8/UCP flag needs are fully populated from
-     * EVERY side of the term before {@link ParseContext#computeFlags} is
-     * called once, term-wide (see call site in {@link #translate}). This is
-     * what keeps Phase 2's validation flags accurate even when, say, only
-     * an AND NOT term's EXCLUDED side contains the non-ASCII content that
-     * determines whether UTF8/UCP are needed — the REQUIRED side must still
-     * be validated with those flags, not with whatever was known before the
-     * excluded side was even looked at.
-     */
-    private Candidate generateSide(Ast sideAst, ParseContext ctx) {
-        if (PatternComplexityAnalyzer.isOverBudget(sideAst)) {
-            List<String> leafPatterns = PatternDecomposer.decompose(sideAst, ctx);
-            return new Candidate(sideAst, null, leafPatterns);
-        }
-        String pattern = PatternCodeGenerator.generate(sideAst, ctx);
-        return new Candidate(sideAst, pattern, null);
-    }
-
-    /**
-     * Phase 2: validates a Phase-1 {@link Candidate} against the real
-     * Hyperscan compiler, using the term's final, complete flags. See class
-     * Javadoc for the two decomposition triggers this implements: the
-     * heuristic firing in Phase 1 ({@code candidate.isPreDecomposed()}), or
-     * real Hyperscan rejecting an under-budget single pattern as too large
-     * anyway (handled here, falling back to decomposition on the same leaves
-     * {@link PatternDecomposer} would have produced up front).
+     * Validates every leaf {@link PatternDecomposer#decompose} already
+     * produced for one side against the REAL Hyperscan compiler, using the
+     * term's final, complete flags. {@link PatternDecomposer} has already
+     * done all the splitting this class is willing to do — a leaf Hyperscan
+     * rejects here (for any reason, including "too large") is a hard
+     * failure, since there is no further NEAR/FOLLOWEDBY structure left to
+     * split it with.
      *
-     * @param candidate    this side's Phase-1 generation outcome
-     * @param ctx          shared {@link ParseContext} — used here only to re-derive
-     *                     leaves' patterns if a late decomposition is triggered;
-     *                     flags are NOT recomputed from it (the caller's {@code flags}
-     *                     parameter, computed once after ALL sides were generated, is final)
+     * @param leafPatterns already-generated, already-decomposed leaf pattern(s) for this side
      * @param flags        the term's final Hyperscan flag bitmask (computed once,
-     *                     after every side's Phase-1 generation — see {@link #translate})
+     *                     after every side's decomposition — see {@link #translate})
      * @param originalTerm the original term text, for error/warning messages
      * @param sideLabel    "term", "required", or "excluded (AND NOT)" — for error/warning messages
-     * @param warnings     mutable list this method appends to when decomposition is applied
+     * @param warnings     mutable list this method appends to when the side has more than one leaf
      */
-    private SideResult validateSide(Candidate candidate, ParseContext ctx, int flags, String originalTerm,
-                                     String sideLabel, List<String> warnings) {
-        if (candidate.isPreDecomposed()) {
-            log.debug("'{}' side of '{}' was over budget by heuristic (score {}) — validating its "
-                            + "{} pre-generated leaf pattern(s)",
-                    sideLabel, originalTerm, PatternComplexityAnalyzer.estimate(candidate.sideAst()),
-                    candidate.preDecomposedLeaves().size());
-            return validateDecomposedLeaves(candidate.sideAst(), candidate.preDecomposedLeaves(), flags,
-                    originalTerm, sideLabel, warnings);
-        }
-
-        String pattern = candidate.singlePattern();
-        HyperscanCompiler.ValidationResult validation = compiler.validate(pattern, flags);
-        if (validation.isPass()) {
+    private SideResult validateLeaves(List<String> leafPatterns, int flags, String originalTerm,
+                                       String sideLabel, List<String> warnings) {
+        if (leafPatterns.size() == 1) {
+            String pattern = leafPatterns.getFirst();
+            HyperscanCompiler.ValidationResult validation = compiler.validate(pattern, flags);
+            if (!validation.isPass()) {
+                throw new TranslationException(
+                        "This term's " + sideLabel + " expression translated to a pattern Hyperscan rejected: "
+                        + validation.errorMessage() + " In term: '" + originalTerm + "'. This expression has"
+                        + " no NEAR/FOLLOWEDBY structure to split further — to fix, reduce the number of"
+                        + " OR-alternatives, reduce wildcard usage, or split this into multiple simpler"
+                        + " lexicon terms.");
+            }
             return new SideResult(List.of(pattern));
-        }
-
-        if (!isPatternTooLargeError(validation.errorMessage())) {
-            // A genuinely malformed pattern -- decomposition cannot fix this, only
-            // hide it behind a confusing partial result. Surface Hyperscan's real error.
-            throw new TranslationException(
-                    "This term's " + sideLabel + " expression translated to a pattern Hyperscan rejected"
-                    + " (not a size issue — decomposition would not help): " + validation.errorMessage()
-                    + " In term: '" + originalTerm + "'.");
-        }
-
-        log.info("'{}' side of '{}' passed the complexity heuristic (score {}, budget {}) but was REJECTED"
-                        + " by real Hyperscan as too large ({}) — falling back to decomposition",
-                sideLabel, originalTerm, PatternComplexityAnalyzer.estimate(candidate.sideAst()),
-                PatternComplexityAnalyzer.COMPLEXITY_BUDGET, validation.errorMessage());
-
-        // The leaves here are subtrees of sideAst, already visited once during this same
-        // side's single-pattern generation above — ctx (and therefore `flags`) already
-        // reflects everything they need; regenerating their pattern strings is cheap and
-        // does not require recomputing flags.
-        List<String> leafPatterns = PatternDecomposer.decompose(candidate.sideAst(), ctx);
-        return validateDecomposedLeaves(candidate.sideAst(), leafPatterns, flags, originalTerm, sideLabel, warnings);
-    }
-
-    /**
-     * True when a Hyperscan validation failure message indicates the pattern
-     * was rejected for being too large/complex to compile — as opposed to
-     * being rejected for a genuine syntax/semantic problem, which
-     * decomposition cannot fix. Hyperscan's own wording for this case is
-     * "Pattern is too large" (propagated verbatim by
-     * {@code HyperscanCompiler.buildErrorMessage} into
-     * {@link HyperscanCompiler.ValidationResult#errorMessage()}), so a
-     * simple case-insensitive substring check is robust without being so
-     * broad it would misfire on an unrelated error.
-     */
-    private static boolean isPatternTooLargeError(String errorMessage) {
-        return errorMessage != null && errorMessage.toLowerCase(java.util.Locale.ROOT).contains("too large");
-    }
-
-    /**
-     * Validates every already-generated leaf pattern against real Hyperscan
-     * (using the term's final flags), records the precision-trade-off
-     * warning on success, and returns the decomposed {@link SideResult}.
-     *
-     * @throws TranslationException if there are fewer than 2 leaves (nothing
-     *                               to decompose — the side is already maximally
-     *                               flat and still over budget/rejected), or if
-     *                               any individual leaf is ALSO rejected by real
-     *                               Hyperscan on its own (decomposition cannot
-     *                               help there; the leaf itself needs simplifying
-     *                               by the author)
-     */
-    private SideResult validateDecomposedLeaves(Ast sideAst, List<String> leafPatterns, int flags,
-                                                 String originalTerm, String sideLabel, List<String> warnings) {
-        int wholeScore = PatternComplexityAnalyzer.estimate(sideAst);
-
-        if (leafPatterns.size() < 2) {
-            throw new TranslationException(
-                    "This term's " + sideLabel + " expression is too structurally complex for Hyperscan to"
-                    + " compile as a single pattern (estimated complexity " + wholeScore + ", budget "
-                    + PatternComplexityAnalyzer.COMPLEXITY_BUDGET + ") in term: '" + originalTerm + "',"
-                    + " and has no NEAR/FOLLOWEDBY structure to decompose — it is a single flat"
-                    + " expression (e.g. one large OR/AND group), so splitting it into independent"
-                    + " parts would not reduce its own complexity. To fix: reduce the number of"
-                    + " OR-alternatives, reduce wildcard usage, or split this into multiple simpler"
-                    + " lexicon terms.");
         }
 
         for (String leafPattern : leafPatterns) {
             HyperscanCompiler.ValidationResult leafValidation = compiler.validate(leafPattern, flags);
             if (!leafValidation.isPass()) {
                 throw new TranslationException(
-                        "This term's " + sideLabel + " expression (estimated complexity " + wholeScore
-                        + ", budget " + PatternComplexityAnalyzer.COMPLEXITY_BUDGET + ") was decomposed into "
-                        + leafPatterns.size() + " independent parts to avoid \"Pattern is too large\", but one"
-                        + " part ('" + leafPattern + "') was STILL rejected by Hyperscan: "
+                        "This term's " + sideLabel + " expression was split into " + leafPatterns.size()
+                        + " independent parts (see resolvedPatterns for the full NEAR/FOLLOWEDBY/AND NOT"
+                        + " structure), but one part ('" + leafPattern + "') was rejected by Hyperscan: "
                         + leafValidation.errorMessage() + " — decomposition cannot help here, since that part"
                         + " has no further NEAR/FOLLOWEDBY structure of its own to split. In term: '"
                         + originalTerm + "'. To fix: reduce the number of OR-alternatives or wildcard usage"
@@ -473,21 +384,17 @@ public final class TermSyntaxTranslator {
         }
 
         warnings.add(
-                "This term's " + sideLabel + " expression (estimated complexity " + wholeScore + ", budget "
-                + PatternComplexityAnalyzer.COMPLEXITY_BUDGET + ") was too structurally complex for Hyperscan"
-                + " to compile as one pattern, and was DECOMPOSED into " + leafPatterns.size()
-                + " independent parts (each individually Hyperscan-validated) — see"
-                + ("excluded (AND NOT)".equals(sideLabel) ? " exclusionRegex" : " regexPattern")
-                + " in the response. IMPORTANT — this changes the term's matching semantics: decomposition"
-                + " discards the original NEAR/FOLLOWEDBY ordering/distance constraint BETWEEN parts. The"
-                + " decomposed parts are combined with a boolean AND (natively via Hyperscan's logical"
-                + " combination for /compile/bundle, or by the caller for /compile and /compile/csv) and"
-                + " match when ALL parts are found ANYWHERE in the message, independently of each other —"
-                + " NOT tied to the specific order or proximity the original term expressed relative to ONE"
-                + " ANOTHER. Each part after the first still carries its own original NEAR/FOLLOWEDBY gap as"
-                + " a literal prefix in its own pattern text (so it cannot match with nothing preceding it),"
-                + " but that gap is no longer anchored to the specific part that preceded it in the original"
-                + " term — only the cross-part relationship is lost, not the gap width itself."
+                "This term's " + sideLabel + " expression contains NEAR/FOLLOWEDBY structure and was split"
+                + " into " + leafPatterns.size() + " independent parts (each individually Hyperscan-validated)"
+                + " — see" + ("excluded (AND NOT)".equals(sideLabel) ? " exclusionRegex" : " regexPattern")
+                + " in the response. IMPORTANT — the parts are combined with a boolean AND (natively via"
+                + " Hyperscan's logical combination for /compile/bundle, or by the caller for /compile and"
+                + " /compile/csv) and match when ALL parts are found ANYWHERE in the message, independently"
+                + " of each other. The NEAR/FOLLOWEDBY distance and order relationship between the parts is"
+                + " NOT encoded in these patterns at all — it is conveyed separately, as literal operator"
+                + " text, in resolvedPatterns; a caller that needs to enforce proximity precisely must read"
+                + " resolvedPatterns and apply that logic itself (Hyperscan here only confirms every"
+                + " individual part appears somewhere in the message)."
                 + " Term: '" + originalTerm + "'.");
 
         return new SideResult(List.copyOf(leafPatterns));
@@ -512,8 +419,7 @@ public final class TermSyntaxTranslator {
      */
     private String preprocess(String raw) {
         String normalizedText = raw.trim();
-        normalizedText = normalizedText.replace("\"\"", "\u0000DQ\u0000");
-        normalizedText = normalizedText.replace("\u0000DQ\u0000", "\"");
+        normalizedText = normalizedText.replace("\"\"", "\"");
         try {
             normalizedText = Normalizer2.getNFCInstance().normalize(normalizedText);
         } catch (Exception e) {

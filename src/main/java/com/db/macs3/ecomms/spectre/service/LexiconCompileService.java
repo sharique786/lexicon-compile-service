@@ -133,7 +133,7 @@ public class LexiconCompileService {
             case TranslationResult.Success success -> TermCompilationResult.pass(
                     term, success.hsPatterns(), success.hsFlags(),
                     success.requiresExclusionCheck(), success.exclusionRegexs(),
-                    success.warnings());
+                    success.warnings(), success.resolvedPattern());
         };
     }
 }

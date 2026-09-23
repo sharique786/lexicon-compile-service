@@ -274,7 +274,10 @@ class LexiconCompileServiceTest {
         var resp = compile("fb_rule", "don't FOLLOWEDBY{3} compliance");
         assertThat(resp.passCount()).isEqualTo(1);
         var result = resp.results().getFirst();
-        assertThat(result.regexPattern()).containsExactly("don't", "compliance");
+        // Simple/safe proximity term — merges into ONE gap-embedded pattern rather than
+        // splitting; resolvedPatterns still conveys the relationship as literal keyword text.
+        assertThat(result.regexPattern()).hasSize(1);
+        assertThat(result.regexPattern().getFirst()).contains("don't").contains("compliance");
         assertThat(result.resolvedPatterns()).isEqualTo("don't FOLLOWEDBY{3} compliance");
     }
 

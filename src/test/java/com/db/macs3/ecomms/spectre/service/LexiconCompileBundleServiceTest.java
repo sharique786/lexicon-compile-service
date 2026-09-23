@@ -205,15 +205,16 @@ class LexiconCompileBundleServiceTest {
 
     @Test
     @Order(20)
-    @DisplayName("Natural Language term: NEAR{5} translated exactly like /compile — split into two "
-            + "gap-less leaves, proximity conveyed via resolvedPatterns")
+    @DisplayName("Natural Language term: NEAR{5} translated exactly like /compile — simple/safe, so it "
+            + "merges into ONE gap-embedded pattern; proximity is ALSO still conveyed via resolvedPatterns")
     void naturalLanguageTermTranslated() {
         var req = naturalLanguage("std_test", "(manipulate) NEAR{5} (price)");
         var bundle = bundleService.buildBundle(req);
 
         var result = bundle.jsonResponse().results().getFirst();
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
-        assertThat(result.regexPattern()).containsExactly("manipulate", "price");
+        assertThat(result.regexPattern()).hasSize(1);
+        assertThat(result.regexPattern().getFirst()).contains("manipulate").contains("price");
         assertThat(result.resolvedPatterns()).isEqualTo("manipulate NEAR{5} price");
     }
 
@@ -315,8 +316,10 @@ class LexiconCompileBundleServiceTest {
 
     @Test
     @Order(50)
-    @DisplayName("Mixed PASS/FAILED within a Regex request: combined DB built from PASS subset only, with id gaps")
-    void mixedPassFailedDbBuiltFromPassOnly() throws IOException {
+    @DisplayName("REGRESSION: mixed PASS/FAILED within a Regex request — NO combined database is built "
+            + "at all, even though other terms passed, since a caller must never receive a .hdb that "
+            + "silently omits the failed term's intended coverage")
+    void mixedPassFailedNoDatabaseAtAll() {
         var req = regex("mixed_test",
                 "(?:price|spread)",     // term number 1 — PASS
                 "[unclosed",             // term number 2 — FAILED
@@ -328,12 +331,16 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.jsonResponse().failedCount()).isEqualTo(1);
         assertThat(bundle.jsonResponse().results().get(1).compilationStatus())
                 .isEqualTo(CompilationStatus.FAILED);
-        assertThat(bundle.hasDatabase()).isTrue();
 
-        try (Database db = Database.load(new ByteArrayInputStream(bundle.hyperscanDatabaseBytes()))) {
-            assertThat(scanMatchesIds(db, "price")).contains(1);
-            assertThat(scanMatchesIds(db, "insider")).contains(3);
-        }
+        assertThat(bundle.hasDatabase()).isFalse();
+        assertThat(bundle.hyperscanDatabaseBytes()).isNull();
+        assertThat(bundle.databaseNote()).isNotBlank();
+        assertThat(bundle.databaseNote()).contains("did not reach PASS status").contains("mixed_test::2");
+        // Still a 200-zip-with-NO_DATABASE.txt case, not a databaseBuildFailed/HTTP-500 case — the
+        // combined build was never even attempted, since it's already fully explained by the term's
+        // own FAILED status in the JSON.
+        assertThat(bundle.databaseBuildFailed()).isFalse();
+        assertThat(bundle.jsonResponse().databaseError()).isNull();
     }
 
     @Test
@@ -347,7 +354,7 @@ class LexiconCompileBundleServiceTest {
         assertThat(bundle.hasDatabase()).isFalse();
         assertThat(bundle.hyperscanDatabaseBytes()).isNull();
         assertThat(bundle.databaseNote()).isNotBlank();
-        assertThat(bundle.databaseNote()).contains("zero terms reached PASS");
+        assertThat(bundle.databaseNote()).contains("did not reach PASS status");
         // Zero-PASS is fully explained by each term's own FAILED status already —
         // NOT the "all terms passed but the build itself failed" case below.
         assertThat(bundle.databaseBuildFailed()).isFalse();
@@ -640,6 +647,35 @@ class LexiconCompileBundleServiceTest {
                 + "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
         assertThat(result.hyperscanExpressionId()).isEqualTo(4);
         assertThat(result.patternMapping()).isEqualTo("(5&6&7)");
+    }
+
+    @Test
+    @Order(816)
+    @DisplayName("WORKED EXAMPLE from the bug report: a NEAR whose RIGHT operand is itself a NEAR — "
+            + "'(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)' — retains its "
+            + "authored tree shape in BOTH resolvedPatterns (explicit parens around the nested group) "
+            + "and patternMapping ('(54&(55&56))', not the flat '(54&55&56)')")
+    void patternMapping_nestedNearRightOperand_retainsAuthoredTree() {
+        String term = "(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)";
+
+        var req = new TypedCompileRequest();
+        req.setRequestId("worked-example-3");
+        req.setLexiconRuleName("worked_example_3");
+        req.setRequestType(TermType.NATURAL_LANGUAGE);
+        // termId ::53 pushes the id offset to 54, so this term's 3 leaves land on the exact
+        // ids the bug report used (54, 55, 56), for a byte-for-byte comparison.
+        req.setTerms(List.of(new TypedCompileRequest.TermInput("lexicon_research_1::53", term)));
+
+        var bundle = bundleService.buildBundle(req);
+        var result = bundle.jsonResponse().results().getFirst();
+
+        assertThat(result.isPass()).isTrue();
+        assertThat(result.regexPattern()).containsExactly(
+                "(?:manipulate|front run)", "(?:price|spread)", "stock");
+        assertThat(result.resolvedPatterns()).isEqualTo(
+                "(?:manipulate|front run) NEAR{5} ((?:price|spread) NEAR{5} stock)");
+        assertThat(result.hyperscanExpressionId()).isEqualTo(53);
+        assertThat(result.patternMapping()).isEqualTo("(54&(55&56))");
     }
 
     @Test

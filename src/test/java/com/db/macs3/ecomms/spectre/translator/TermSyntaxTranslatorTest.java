@@ -54,20 +54,22 @@ class TermSyntaxTranslatorTest {
     class BracketResolution {
 
         @Test
-        @DisplayName("Example 1: (crap OR bad) NEAR{3} (bonus OR comp) — splits into two gap-less "
-                + "leaves, proximity conveyed via resolvedPatterns instead of a gap regex")
+        @DisplayName("Example 1: (crap OR bad) NEAR{3} (bonus OR comp) — simple/safe, so it merges "
+                + "into ONE gap-embedded pattern; proximity is ALSO still conveyed via resolvedPatterns")
         void example1_orInsideNear() {
             var s = translateOk("(crap OR bad) NEAR{3} (bonus OR comp)");
-            assertThat(s.hsPatterns()).containsExactly("(?:crap|bad)", "(?:bonus|comp)");
+            assertThat(s.hsPatterns()).hasSize(1);
+            assertThat(s.hsPatterns().getFirst()).contains("(?:crap|bad)").contains("(?:bonus|comp)");
             assertThat(s.resolvedPattern()).isEqualTo("(?:crap|bad) NEAR{3} (?:bonus|comp)");
         }
 
         @Test
         @DisplayName("Example 2: (F) FOLLOWEDBY{1} (((me) OR (cking))) — triple redundant wrapping, "
-                + "splits into two gap-less leaves")
+                + "merges into ONE gap-embedded pattern")
         void example2_deeplyRedundantWrapping() {
             var s = translateOk("(F) FOLLOWEDBY{1} (((me) OR (cking)))");
-            assertThat(s.hsPatterns()).containsExactly("F", "(?:me|cking)");
+            assertThat(s.hsPatterns()).hasSize(1);
+            assertThat(s.hsPatterns().getFirst()).contains("F").contains("(?:me|cking)");
             assertThat(s.resolvedPattern()).isEqualTo("F FOLLOWEDBY{1} (?:me|cking)");
         }
 
@@ -136,7 +138,8 @@ class TermSyntaxTranslatorTest {
         @DisplayName("Unwrapped phrase inside NEAR/FOLLOWEDBY operands is also accepted")
         void unwrappedPhraseInProximityOperand() {
             var s = translateOk("insider trading NEAR{3} market manipulation");
-            assertThat(s.hsPatterns()).containsExactly("insider trading", "market manipulation");
+            assertThat(s.hsPatterns()).hasSize(1);
+            assertThat(s.hsPatterns().getFirst()).contains("insider trading").contains("market manipulation");
         }
 
         @Test
@@ -148,18 +151,39 @@ class TermSyntaxTranslatorTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // Requirement 3: '?' is always literal
+    // Requirement 3: '?' is a single-character wildcard
     // ══════════════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("Requirement 3 — '?' is always literal")
-    class LiteralQuestionMark {
+    @DisplayName("Requirement 3 — '?' is a single-character wildcard")
+    class QuestionMarkWildcard {
 
         @Test
-        @DisplayName("he?d / she?d — '?' escaped as a literal character, never a live quantifier")
-        void questionMarkIsLiteral() {
+        @DisplayName("he?d / she?d — '?' becomes \\S (exactly one non-whitespace character), never a "
+                + "live PCRE quantifier and never a literal question mark")
+        void questionMarkIsSingleCharWildcard() {
             var s = translateOk("((he?d kill) OR (she?d kill))");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:he\\?d kill|she\\?d kill)");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:he\\Sd kill|she\\Sd kill)");
+        }
+
+        @Test
+        @DisplayName("REPORTED: 'I?ll kill you' matches text where '?' stands in for an apostrophe")
+        void questionMarkWildcard_matchesRealText() {
+            var s = translateOk("I?ll kill you");
+            assertThat(s.hsPatterns()).containsExactly("I\\Sll kill you");
+            boolean matched = java.util.regex.Pattern
+                    .compile(s.hsPatterns().getFirst(), java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher("I'll kill you before the term sheet went out, so please review it before the pricing call.")
+                    .find();
+            assertThat(matched).isTrue();
+        }
+
+        @Test
+        @DisplayName("A literal question mark is still available via a quoted phrase — quotes mean "
+                + "'match this exactly', unaffected by the bare-word wildcard change")
+        void questionMarkInQuotesStaysLiteral() {
+            var s = translateOk("\"he?d\"");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("he\\?d");
         }
     }
 
@@ -279,7 +303,9 @@ class TermSyntaxTranslatorTest {
                 "never baked into hsPattern as an invalid lookbehind")
         void andNot_positivePatternAndSeparateExclusion() {
             var s = translateOk("((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)");
-            assertThat(s.hsPatterns()).containsExactly("(?:fix|rig)", "the rate");
+            // Required side's FOLLOWEDBY is simple/safe, so it merges into ONE gap-embedded pattern.
+            assertThat(s.hsPatterns()).hasSize(1);
+            assertThat(s.hsPatterns().getFirst()).contains("(?:fix|rig)").contains("the rate");
             assertThat(s.hsPatterns()).noneMatch(p -> p.contains("fed rate move"));
             assertThat(s.hsPatterns()).noneMatch(p -> NO_LOOKAROUND_CHECK.matcher(p).find());
             assertThat(s.exclusionRegexs().getFirst()).contains("fed rate move");
@@ -296,10 +322,12 @@ class TermSyntaxTranslatorTest {
         }
 
         @Test
-        @DisplayName("Explicitly-nested FOLLOWEDBY inside an AND-NOT exclusion (different grammar levels) still resolves")
+        @DisplayName("Explicitly-nested FOLLOWEDBY inside an AND-NOT exclusion (different grammar levels) still "
+                + "resolves — simple/safe, so it merges into ONE gap-embedded pattern")
         void nestedFollowedByInsideAndNotExclusion() {
             var s = translateOk("(hello) AND NOT(((a OR b) FOLLOWEDBY{1} (c OR d)) FOLLOWEDBY{1} (e OR f))");
-            assertThat(s.exclusionRegexs()).containsExactly("(?:a|b)", "(?:c|d)", "(?:e|f)");
+            assertThat(s.exclusionRegexs()).hasSize(1);
+            assertThat(s.exclusionRegexs().getFirst()).contains("(?:a|b)").contains("(?:c|d)").contains("(?:e|f)");
             assertThat(s.resolvedPattern()).isEqualTo(
                     "hello AND NOT ((?:a|b) FOLLOWEDBY{1} (?:c|d) FOLLOWEDBY{1} (?:e|f))");
         }
@@ -460,6 +488,168 @@ class TermSyntaxTranslatorTest {
         void singleProximityOperator_unaffected() {
             assertThat(translator.translate("(a) NEAR{3} (b)").isSuccess()).isTrue();
             assertThat(translator.translate("(a) FOLLOWEDBY{3} (b)").isSuccess()).isTrue();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // BUG REPORT 1: NEAR nested as the RIGHT operand of another NEAR loses
+    // its authored tree shape in resolvedPatterns/patternMapping
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Nested proximity retains its authored tree shape — right-side nesting is wrapped")
+    class NestedProximityTreeShape {
+
+        @Test
+        @DisplayName("REPORTED BUG: '(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)' "
+                + "— resolvedPatterns wraps the nested right-hand NEAR in parentheses instead of "
+                + "flattening it indistinguishably from a left-associative chain")
+        void nearNestedAsRightOperand_resolvedPatternsRetainsGrouping() {
+            var s = translateOk("(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)");
+            assertThat(s.hsPatterns()).containsExactly("(?:manipulate|front run)", "(?:price|spread)", "stock");
+            assertThat(s.resolvedPattern()).isEqualTo(
+                    "(?:manipulate|front run) NEAR{5} ((?:price|spread) NEAR{5} stock)");
+        }
+
+        @Test
+        @DisplayName("Same shape with FOLLOWEDBY on both levels")
+        void followedByNestedAsRightOperand_resolvedPatternsRetainsGrouping() {
+            var s = translateOk("(a OR b) FOLLOWEDBY{5} ((c OR d) FOLLOWEDBY{3} e)");
+            assertThat(s.resolvedPattern()).isEqualTo("(?:a|b) FOLLOWEDBY{5} ((?:c|d) FOLLOWEDBY{3} e)");
+        }
+
+        @Test
+        @DisplayName("Left-nested chaining (implicit or explicit) is UNCHANGED — still flat, no extra parens")
+        void leftNestedChain_staysFlat() {
+            var chained = translateOk("(a) NEAR{5} (b) NEAR{5} (c)");
+            assertThat(chained.resolvedPattern()).isEqualTo("a NEAR{5} b NEAR{5} c");
+
+            var explicit = translateOk("((a) NEAR{5} (b)) NEAR{5} (c)");
+            assertThat(explicit.resolvedPattern()).isEqualTo("a NEAR{5} b NEAR{5} c");
+        }
+
+        @Test
+        @DisplayName("Right-nesting three levels deep wraps each nested level in its own parentheses")
+        void deeplyRightNested_wrapsEachLevel() {
+            var s = translateOk("(a) NEAR{5} ((b) NEAR{4} ((c) NEAR{3} (d)))");
+            assertThat(s.resolvedPattern()).isEqualTo("a NEAR{5} (b NEAR{4} (c NEAR{3} d))");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // BUG REPORT 2: proximity operators sandwiched between OR alternatives
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Validation — NEAR/FOLLOWEDBY sandwiched between OR alternatives is rejected")
+    class SandwichedProximityValidation {
+
+        @Test
+        @DisplayName("REPORTED BUG (exact term): a FOLLOWEDBY buried in the middle of a long OR list "
+                + "compiles today but silently relates only its own two immediate operands to each "
+                + "other, ignoring every other OR alternative — now rejected")
+        void reportedSandwichedFollowedBy_rejected() {
+            String msg = translateError(
+                    "(I) OR (you) OR (they) OR (we) OR (DB) OR (he) OR (she) OR (client) OR (us) OR (him) "
+                            + "OR (her) OR (them) FOLLOWEDBY{3} (sin bin) OR (penalty box) OR sinbin");
+            assertThat(msg).containsIgnoringCase("NEAR/FOLLOWEDBY");
+            assertThat(msg).containsIgnoringCase("ambiguous");
+        }
+
+        @Test
+        @DisplayName("Sample fix 1 from the bug report: grouping the whole term into one top-level "
+                + "FOLLOWEDBY (no OR left sandwiching anything) compiles")
+        void sampleFix1_topLevelFollowedByOfTwoOrGroups_compiles() {
+            var result = translator.translate(
+                    "((I) OR (you) OR (they) OR (we) OR (DB) OR (he) OR (she) OR (client) OR (us) OR (him) "
+                            + "OR (her) OR (them)) FOLLOWEDBY{3} ((sin bin) OR (penalty box) OR sinbin)");
+            assertThat(result.isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Sample fix 2 from the bug report: wrapping the FOLLOWEDBY clause as its own "
+                + "OR alternative (an EDGE position, nothing after it) compiles")
+        void sampleFix2_followedByAsItsOwnOrAlternative_compiles() {
+            var result = translator.translate(
+                    "((I) OR (you) OR (they) OR (we) OR (DB) OR (he) OR (she) OR (client) OR (us) OR (him) "
+                            + "OR (her)) OR ((them) FOLLOWEDBY{3} (sin bin) OR (penalty box) OR sinbin)");
+            assertThat(result.isSuccess()).isTrue();
+        }
+
+        @Test
+        @DisplayName("A minimal 3-alternative sandwiched NEAR is also rejected")
+        void minimalSandwichedNear_rejected() {
+            String msg = translateError("(a) OR (b) NEAR{3} (c) OR (d)");
+            assertThat(msg).containsIgnoringCase("ambiguous");
+        }
+
+        @Test
+        @DisplayName("LEGITIMATE, currently-documented usage is unaffected: a NEAR/FOLLOWEDBY alternative "
+                + "at either EDGE of the OR list (nothing before it, or nothing after it) still compiles")
+        void edgePositionProximityAlternative_stillAccepted() {
+            assertThat(translator.translate("(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)").isSuccess())
+                    .as("proximity as the LAST alternative").isTrue();
+            assertThat(translator.translate("((EURIBOR FIXING) NEAR{2} TENOR) OR (plain phrase)").isSuccess())
+                    .as("proximity as the FIRST alternative").isTrue();
+        }
+
+        @Test
+        @DisplayName("A proximity operator with only ONE OR sibling (either side) is unaffected — " +
+                "sandwiching requires OTHER alternatives on BOTH sides")
+        void onlyTwoAlternatives_neverSandwiched() {
+            assertThat(translator.translate("(a) OR (b) NEAR{3} (c)").isSuccess()).isTrue();
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // BUG REPORT 3 (Lexicon Scan Engine): NEAR{1}/FOLLOWEDBY{1} with a
+    // single-character operand can never match an intra-word split
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("Validation — NEAR{1}/FOLLOWEDBY{1} with a single-character operand warns")
+    class IntraWordSplitWarning {
+
+        @Test
+        @DisplayName("REPORTED: '(F) FOLLOWEDBY{1} (cking/me/d/ing/up)' — structurally can never match "
+                + "\"Fucking\" (word-distance operators can't bridge within one word) — warned, still compiles")
+        void reportedIntraWordSplitTerm_warnsButCompiles() {
+            var s = translateOk("(F) FOLLOWEDBY{1} (((me) OR (cking) OR (d) OR (ing) OR (up)))");
+            boolean hasIntraWordWarning = s.warnings().stream()
+                    .anyMatch(w -> w.contains("FOLLOWEDBY{1}") && w.contains("single-character"));
+            assertThat(hasIntraWordWarning).isTrue();
+        }
+
+        @Test
+        @DisplayName("Same warning for NEAR{1}")
+        void nearVariant_alsoWarns() {
+            var s = translateOk("(F) NEAR{1} (cking)");
+            boolean hasIntraWordWarning = s.warnings().stream()
+                    .anyMatch(w -> w.contains("NEAR{1}") && w.contains("single-character"));
+            assertThat(hasIntraWordWarning).isTrue();
+        }
+
+        @Test
+        @DisplayName("Distance greater than 1 does not warn — only the tightest distance plausibly "
+                + "means \"no gap at all\"")
+        void distanceGreaterThanOne_noWarning() {
+            var s = translateOk("(F) FOLLOWEDBY{2} (cking)");
+            assertThat(s.warnings()).noneMatch(w -> w.contains("single-character"));
+        }
+
+        @Test
+        @DisplayName("No single-character operand on either side does not warn")
+        void noSingleCharacterOperand_noWarning() {
+            var s = translateOk("(fix) FOLLOWEDBY{1} (rate)");
+            assertThat(s.warnings()).noneMatch(w -> w.contains("single-character"));
+        }
+
+        @Test
+        @DisplayName("A genuine single-letter word used deliberately still compiles (a known, accepted "
+                + "false-positive risk of this heuristic — warned, never rejected)")
+        void genuineSingleLetterWord_stillCompiles() {
+            var s = translateOk("(a) FOLLOWEDBY{1} (boy)");
+            assertThat(s).isNotNull(); // must not throw / must not be rejected
         }
     }
 
@@ -642,7 +832,7 @@ class TermSyntaxTranslatorTest {
         @DisplayName("Term 3: prefix-wildcard German words compile with wildcard correctly expanded")
         void term3_prefixWildcardOnGermanWords() {
             var s = translateOk("(gemobbt OR eingeschüchtert) NEAR{2} (broker OR *händler OR *haendler)");
-            assertThat(s.hsPatterns().get(1)).contains("\\S*h\u00e4ndler").contains("\\S*haendler");
+            assertThat(s.hsPatterns().getFirst()).contains("\\S*h\u00e4ndler").contains("\\S*haendler");
         }
 
         @Test
@@ -714,8 +904,8 @@ class TermSyntaxTranslatorTest {
 
         @Test
         @DisplayName("THE REPORTED FAILING TERM: nested FOLLOWEDBY with wide OR/wildcard operands "
-                + "SPLITS into independent leaves — unconditionally now, not as a complexity-driven "
-                + "fallback — with an explicit warning")
+                + "SPLITS into independent leaves — over the complexity budget (nesting penalty), so "
+                + "the single gap-embedded pattern isn't even attempted — with an explicit warning")
         void reportedFailingTerm_decomposesWithWarning() {
             String term = "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) FOLLOWEDBY{4} "
                     + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
@@ -797,34 +987,30 @@ class TermSyntaxTranslatorTest {
         }
 
         @Test
-        @DisplayName("Any NEAR/FOLLOWEDBY structure always splits now, regardless of OR-branch width or "
-                + "nesting depth — this used to differ (a wide single-level NEAR stayed a single pattern; "
-                + "only a narrower-but-nested FOLLOWEDBY chain decomposed), since decomposition used to be "
-                + "a complexity-heuristic-triggered fallback. It is now unconditional, so both split, for "
-                + "the same reason: NEAR/FOLLOWEDBY gaps are never compiled into regex any more, period.")
-        void anyProximityStructureAlwaysSplits_regardlessOfWidthOrNesting() {
+        @DisplayName("Nesting depth, not OR-branch width, is what actually drives whether a proximity term "
+                + "must decompose — a wide single-level NEAR merges into ONE pattern (comfortably under "
+                + "budget, and real Hyperscan compiles it fine); a narrower but NESTED FOLLOWEDBY chain "
+                + "still decomposes, exactly matching PatternComplexityAnalyzer's own calibration")
+        void wideSingleLevelMerges_narrowerNestedStillDecomposes() {
             // Real, un-simplified example from production: single-level NEAR over an
-            // 18-alternative and an 8-alternative OR group (no nesting) — previously
-            // compiled as ONE pattern since it was comfortably under the old complexity
-            // budget; now splits into 2 leaves (one per NEAR operand) like any other NEAR.
+            // 18-alternative and an 8-alternative OR group (no nesting) — comfortably under
+            // the complexity budget (no nesting penalty), so it merges into ONE pattern.
             String wideSingleLevelTerm =
                     "(Steuer* OR Gesetz* OR Richtlinie OR Police OR Polizei OR Genehmigung OR Approval OR "
                             + "Compliance OR Kontrolle OR Behörde OR Behoerde OR Bafin OR Regulierung OR Regulation OR "
                             + "Regulator OR Regulatoren OR Regelung OR Strafe) NEAR{2} (vermied* OR vermied* OR umgeh* OR "
                             + "umgangen OR umging OR entgeh* OR ausweichen OR ausgewichen)";
 
-            // Two nested FOLLOWEDBY operators over much narrower 4-alternative OR groups —
-            // previously rejected by real Hyperscan as a single pattern and required the
-            // complexity heuristic to trigger decomposition up front; now splits the same
-            // way regardless.
+            // Two nested FOLLOWEDBY operators over much narrower 4-alternative OR groups — the
+            // nesting penalty pushes this over budget despite the narrower branches, so it still
+            // decomposes into 3 independent leaves, with a warning.
             String nestedNarrowerTerm =
                     "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) FOLLOWEDBY{4} "
                             + "(wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
                             + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
 
             var wideSuccess = translateOk(wideSingleLevelTerm);
-            assertThat(wideSuccess.hsPatterns()).hasSize(2);
-            assertThat(wideSuccess.warnings()).isNotEmpty();
+            assertThat(wideSuccess.hsPatterns()).hasSize(1);
 
             var nestedSuccess = translateOk(nestedNarrowerTerm);
             assertThat(nestedSuccess.hsPatterns()).hasSize(3);
@@ -1041,7 +1227,9 @@ class TermSyntaxTranslatorTest {
             var s = translateOk("apple AND (NOT (apple NEAR{10} banana))");
             assertThat(s.requiresExclusionCheck()).isTrue();
             assertThat(s.hsPatterns()).containsExactly("apple");
-            assertThat(s.exclusionRegexs()).containsExactly("apple", "banana");
+            // Excluded side's NEAR is simple/safe, so it merges into ONE gap-embedded pattern.
+            assertThat(s.exclusionRegexs()).hasSize(1);
+            assertThat(s.exclusionRegexs().getFirst()).contains("apple").contains("banana");
             assertThat(s.resolvedPattern()).isEqualTo("apple AND NOT (apple NEAR{10} banana)");
         }
 

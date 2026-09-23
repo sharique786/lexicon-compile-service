@@ -138,7 +138,8 @@ public class LexiconCompileService {
                 yield TermCompilationResult.pass(
                         term, success.hsPatterns(), success.hsFlags(),
                         success.requiresExclusionCheck(), success.exclusionRegexs(),
-                        success.resolvedPattern());
+                        success.resolvedPattern(),
+                        success.patternFormulaTemplate(), success.exclusionFormulaTemplate());
             }
         };
     }

@@ -170,11 +170,15 @@ public class LexiconCompileController {
      * <p>Zip contents (on a 200 response):
      * <ul>
      *   <li>{@code {ruleName}-compile-results.json} — always present</li>
-     *   <li>{@code {ruleName}.hdb} — present when at least one term passed
-     *       and the combined multi-pattern compile succeeded</li>
+     *   <li>{@code {ruleName}.hdb} — present ONLY when EVERY term in the
+     *       request reached PASS and the combined multi-pattern compile
+     *       succeeded</li>
      *   <li>{@code NO_DATABASE.txt} — present instead of the {@code .hdb}
-     *       file when zero terms reached PASS (already fully explained by
-     *       each term's own FAILED status in the JSON)</li>
+     *       file when at least one term did not reach PASS — including when
+     *       every OTHER term passed — or when zero terms reached PASS
+     *       (already fully explained by each term's own compilationStatus
+     *       in the JSON; a combined database is never built at all in
+     *       either case)</li>
      * </ul>
      *
      * <p><b>500 instead of a zip: every term PASSED but the combined build itself failed</b>

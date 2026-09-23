@@ -44,15 +44,28 @@ import java.util.List;
  * methods; a word containing BOTH a wildcard AND a non-ASCII character (e.g.
  * German {@code verschwör*}) hit the wrong branch first and lost its
  * wildcard expansion. {@link #encodeWord} replaces all three with one
- * codepoint-by-codepoint scan that handles wildcard, literal {@code ?},
- * emoji, non-ASCII, and PCRE metacharacter escaping uniformly, in one place.
+ * codepoint-by-codepoint scan that handles both wildcards ({@code *} and
+ * {@code ?}), emoji, non-ASCII, and PCRE metacharacter escaping uniformly,
+ * in one place.
  *
- * <p><b>{@code ?} is always literal; quoted phrases escape {@code *} and {@code ?} too</b>
- * <p>A bare {@code ?} (e.g. {@code he?d}) is escaped to {@code \?} — literal
- * text, never the PCRE "optional" quantifier. {@link #encodeQuotedPhrase} is
- * deliberately stricter than {@link #encodeWord}: quotes mean "match this
- * exactly", so {@code *} inside a quoted phrase is a literal asterisk, not
- * a wildcard.
+ * <p><b>{@code ?} is a single-character wildcard, like {@code *} but for
+ * exactly one character; quoted phrases still escape both as literal</b>
+ * <p>A bare {@code ?} (e.g. {@code he?d}) becomes {@code \S} — "exactly one
+ * non-whitespace character" — never a literal question mark and never the
+ * PCRE "optional" quantifier (which would require an escape to use safely
+ * anyway). This mirrors {@code *}'s own {@code \S*} expansion exactly, just
+ * bounded to one character instead of zero-or-more — e.g. {@code I?ll}
+ * becomes {@code I\Sll}, matching "I'll", "I,ll", etc. Confirmed-fixed
+ * regression: an earlier revision escaped {@code ?} to a literal {@code \?}
+ * unconditionally, so a term like {@code "I?ll kill you"} could never match
+ * real text containing an apostrophe in that position, even though the
+ * author clearly intended {@code ?} as a wildcard for the one substituted
+ * character (a common convention this operator language now honours, the
+ * same way most glob-style languages use {@code ?} for "any one character").
+ * {@link #encodeQuotedPhrase} is deliberately stricter than
+ * {@link #encodeWord} and unaffected by this change: quotes mean "match
+ * this exactly", so {@code *} and {@code ?} inside a quoted phrase are still
+ * literal characters, never wildcards.
  */
 final class PatternCodeGenerator {
 
@@ -239,8 +252,9 @@ final class PatternCodeGenerator {
     /**
      * Multiple bare words that appeared together inside one set of parens
      * with no operator between them, e.g. {@code (bomb this place)}. Each
-     * word is independently wildcard/emoji/literal-? aware; words are joined
-     * with a single literal space, matching the existing quoted-phrase
+     * word is independently wildcard (both {@code *} and {@code ?}) and
+     * emoji aware; words are joined with a single literal space, matching
+     * the existing quoted-phrase
      * whitespace convention (exact single-space match, not a flexible
      * {@code \s+} gap — this is deliberately a phrase, not a proximity operator).
      */
@@ -267,9 +281,10 @@ final class PatternCodeGenerator {
             if (codePoint == '*') {
                 patternBuilder.append("\\S*");
             } else if (codePoint == '?') {
-                // Always literal — never a live PCRE quantifier (requirement:
-                // '?' between words in a Natural Language term is literal text).
-                patternBuilder.append("\\?");
+                // Single-character wildcard — "exactly one non-whitespace character" —
+                // never a literal question mark and never a live PCRE quantifier. See
+                // class Javadoc for why this replaces the earlier always-literal escaping.
+                patternBuilder.append("\\S");
             } else if (isEmojiCodePoint(codePoint)) {
                 patternBuilder.append(String.format("\\x{%X}", codePoint));
                 ctx.setNeedsUtf8();

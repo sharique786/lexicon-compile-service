@@ -51,7 +51,8 @@ class HyperscanCombinationHandlerTest {
                 regexPattern, null, null,
                 1, requiresExclusionCheck, exclusionRegex,
                 null,
-                null, null, null, null);
+                null, null, null, null,
+                null, null);
     }
 
     @Nested
@@ -213,7 +214,8 @@ class HyperscanCombinationHandlerTest {
                     List.of("\\x{1F600}", "\\x{1F601}"), null, null,
                     97, false, null, // CASELESS(1) | UTF8(32) | UCP(64) = 97
                     null,
-                    null, null, null, null);
+                    null, null, null, null,
+                    null, null);
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 3, new HyperscanCombinationHandler.HyperscanIdAllocator(4), out);
 
@@ -323,7 +325,8 @@ class HyperscanCombinationHandlerTest {
                     List.of("\\x{1F6AB}"), null, null,
                     97, true, List.of("\\x{1F4B0}"), // CASELESS(1) | UTF8(32) | UCP(64) = 97
                     null,
-                    null, null, null, null);
+                    null, null, null, null,
+                    null, null);
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
 
@@ -475,7 +478,8 @@ class HyperscanCombinationHandlerTest {
                     List.of("내부자"), null, null,
                     97, false, null, // CASELESS(1) | UTF8(32) | UCP(64) = 97
                     null,
-                    null, null, null, null);
+                    null, null, null, null,
+                    null, null);
             List<Expression> out = new ArrayList<>();
             handler.addExpressions(result, 1, new HyperscanCombinationHandler.HyperscanIdAllocator(2), out);
 

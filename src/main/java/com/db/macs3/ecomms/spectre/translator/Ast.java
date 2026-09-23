@@ -91,7 +91,8 @@ sealed interface Ast {
     }
 
     /**
-     * A single unquoted word — may contain a {@code *} wildcard and/or a literal {@code ?}.
+     * A single unquoted word — may contain a {@code *} wildcard (zero or more
+     * characters) and/or a {@code ?} wildcard (exactly one character).
      */
     record Word(String text) implements Ast {
     }

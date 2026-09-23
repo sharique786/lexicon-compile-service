@@ -96,6 +96,14 @@ public sealed interface TranslationResult
      *                               byte-identical to the corresponding {@code hsPatterns}/
      *                               {@code exclusionRegexs} entry — see {@code PatternDecomposer} class
      *                               Javadoc for exactly how this is built.
+     * @param patternFormulaTemplate {@code hsPatterns}' own boolean-AND grouping structure, using
+     *                               {@code {i}} leaf-index placeholders — see
+     *                               {@code PatternDecomposer.Result#formulaTemplate()}. Not part of the
+     *                               public JSON contract; consumed only by {@code HyperscanCombinationHandler}
+     *                               at {@code /compile/bundle} time to build a {@code patternMapping}/native
+     *                               combination formula that reflects the term's actual authored nesting.
+     * @param exclusionFormulaTemplate the same, for {@code exclusionRegexs}' own grouping — null (not just
+     *                               empty) when {@code requiresExclusionCheck} is false.
      */
     record Success(
             List<String> hsPatterns,
@@ -103,7 +111,9 @@ public sealed interface TranslationResult
             boolean requiresExclusionCheck,
             List<String> exclusionRegexs,
             List<String> warnings,
-            String resolvedPattern
+            String resolvedPattern,
+            String patternFormulaTemplate,
+            String exclusionFormulaTemplate
     ) implements TranslationResult {
 
         public Success {
@@ -120,6 +130,10 @@ public sealed interface TranslationResult
             }
             if (resolvedPattern == null || resolvedPattern.isBlank()) {
                 throw new IllegalArgumentException("resolvedPattern must not be null or blank");
+            }
+            if (!requiresExclusionCheck && exclusionFormulaTemplate != null) {
+                throw new IllegalArgumentException(
+                        "exclusionFormulaTemplate must be null when requiresExclusionCheck is false");
             }
         }
 
@@ -152,7 +166,7 @@ public sealed interface TranslationResult
      * Factory: successful translation with no AND-NOT exclusion, no warnings.
      */
     static TranslationResult success(List<String> patterns, int flags, String resolvedPattern) {
-        return new Success(patterns, flags, false, null, List.of(), resolvedPattern);
+        return new Success(patterns, flags, false, null, List.of(), resolvedPattern, null, null);
     }
 
     /**
@@ -160,7 +174,7 @@ public sealed interface TranslationResult
      */
     static TranslationResult successWithWarnings(
             List<String> patterns, int flags, List<String> warnings, String resolvedPattern) {
-        return new Success(patterns, flags, false, null, List.copyOf(warnings), resolvedPattern);
+        return new Success(patterns, flags, false, null, List.copyOf(warnings), resolvedPattern, null, null);
     }
 
     /**
@@ -168,7 +182,7 @@ public sealed interface TranslationResult
      */
     static TranslationResult successWithExclusion(
             List<String> patterns, int flags, List<String> exclusionRegexs, String resolvedPattern) {
-        return new Success(patterns, flags, true, exclusionRegexs, List.of(), resolvedPattern);
+        return new Success(patterns, flags, true, exclusionRegexs, List.of(), resolvedPattern, null, null);
     }
 
     /**
@@ -177,7 +191,7 @@ public sealed interface TranslationResult
     static TranslationResult successWithExclusionAndWarnings(
             List<String> patterns, int flags, List<String> exclusionRegexs, List<String> warnings,
             String resolvedPattern) {
-        return new Success(patterns, flags, true, exclusionRegexs, List.copyOf(warnings), resolvedPattern);
+        return new Success(patterns, flags, true, exclusionRegexs, List.copyOf(warnings), resolvedPattern, null, null);
     }
 
     /**

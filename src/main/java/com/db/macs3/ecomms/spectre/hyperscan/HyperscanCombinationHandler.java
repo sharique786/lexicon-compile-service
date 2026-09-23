@@ -7,6 +7,8 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -214,7 +216,9 @@ public class HyperscanCombinationHandler {
             // Every pattern (both sides) is its own plain, individually-reportable expression.
             List<Integer> requiredIds = addPlainSide(requiredPatterns, termResult.hyperscanFlags(), idAllocator, expressionsOut);
             List<Integer> excludedIds = addPlainSide(termResult.exclusionRegex(), termResult.hyperscanFlags(), idAllocator, expressionsOut);
-            String patternMapping = buildAndNotFormula(requiredIds, excludedIds);
+            String patternMapping = buildAndNotFormula(
+                    requiredIds, termResult.patternFormulaTemplate(),
+                    excludedIds, termResult.exclusionFormulaTemplate());
             return new ExpressionAssignment(null, requiredIds, excludedIds, patternMapping);
         }
 
@@ -231,7 +235,7 @@ public class HyperscanCombinationHandler {
         // negation involved) — see class Javadoc for why this path is unaffected by the AND
         // NOT fix, and now fires unconditionally rather than only when over budget.
         List<Integer> leafIds = addQuietSide(requiredPatterns, termResult.hyperscanFlags(), idAllocator, expressionsOut);
-        String combinationFormula = "(" + joinWithAnd(leafIds) + ")";
+        String combinationFormula = "(" + applyFormulaTemplate(termResult.patternFormulaTemplate(), leafIds) + ")";
         expressionsOut.add(new Expression(combinationFormula, compiler.toCombinationExpressionFlags(), termNumber));
         return new ExpressionAssignment(termNumber, null, null, combinationFormula);
     }
@@ -287,26 +291,59 @@ public class HyperscanCombinationHandler {
 
     /**
      * Builds the AND NOT logical formula for {@code TermCompilationResult.patternMapping}
-     * — {@code "(<required>&!<excluded>)"}, where each side is {@link #joinFormula}'d
+     * — {@code "(<required>&!<excluded>)"}, where each side is {@link #sideFormula}'d
      * independently (bare id if that side has exactly one; parenthesised
-     * {@code (id1&id2&...)} AND-join if it was decomposed into several — same
-     * "AND convention" documented on {@code requiredExpressionIds}/{@code excludedExpressionIds}).
+     * AND-join if it was decomposed into several — same "AND convention"
+     * documented on {@code requiredExpressionIds}/{@code excludedExpressionIds}).
      * This is the ONLY place this formula is recorded — never written into the
      * {@code .hdb} itself as a native {@code COMBINATION}, since that combination
      * shape is confirmed unsafe for AND NOT (see class Javadoc).
      */
-    private static String buildAndNotFormula(List<Integer> requiredIds, List<Integer> excludedIds) {
-        return "(" + joinFormula(requiredIds) + "&!" + joinFormula(excludedIds) + ")";
+    private static String buildAndNotFormula(List<Integer> requiredIds, String requiredFormulaTemplate,
+                                             List<Integer> excludedIds, String excludedFormulaTemplate) {
+        return "(" + sideFormula(requiredIds, requiredFormulaTemplate)
+                + "&!" + sideFormula(excludedIds, excludedFormulaTemplate) + ")";
     }
 
     /**
      * One side's AND-join sub-formula: a bare id when {@code ids} has exactly
-     * one entry, or a parenthesised {@code (id1&id2&...)} when it was
-     * decomposed into several.
+     * one entry, or a parenthesised AND-join when it was decomposed into
+     * several — {@code formulaTemplate}'s own grouping (see
+     * {@code PatternDecomposer.Result#formulaTemplate()}) when one is
+     * available, mirroring the term's actual authored nesting, or a flat
+     * {@code (id1&id2&...)} AND-join when it is not (e.g. a
+     * {@code TermCompilationResult} built directly rather than via the real
+     * translator pipeline).
      */
-    private static String joinFormula(List<Integer> ids) {
-        return ids.size() == 1 ? String.valueOf(ids.getFirst()) : "(" + joinWithAnd(ids) + ")";
+    private static String sideFormula(List<Integer> ids, String formulaTemplate) {
+        if (ids.size() == 1) {
+            return String.valueOf(ids.getFirst());
+        }
+        return "(" + applyFormulaTemplate(formulaTemplate, ids) + ")";
     }
+
+    /**
+     * Substitutes every {@code {i}} leaf-index placeholder in {@code formulaTemplate}
+     * with {@code ids.get(i)} — see {@code PatternDecomposer.Result#formulaTemplate()}.
+     * Falls back to a flat {@code id1&id2&...} AND-join, in leaf order, when no
+     * template is available (null) — the shape every caller got before this
+     * template existed, still correct (if not tree-shaped) for a term whose
+     * leaves have no further grouping to convey.
+     */
+    private static String applyFormulaTemplate(String formulaTemplate, List<Integer> ids) {
+        if (formulaTemplate == null) {
+            return joinWithAnd(ids);
+        }
+        Matcher matcher = FORMULA_PLACEHOLDER.matcher(formulaTemplate);
+        StringBuilder substituted = new StringBuilder();
+        while (matcher.find()) {
+            matcher.appendReplacement(substituted, String.valueOf(ids.get(Integer.parseInt(matcher.group(1)))));
+        }
+        matcher.appendTail(substituted);
+        return substituted.toString();
+    }
+
+    private static final Pattern FORMULA_PLACEHOLDER = Pattern.compile("\\{(\\d+)}");
 
     private static String joinWithAnd(List<Integer> ids) {
         return ids.stream().map(String::valueOf).collect(Collectors.joining("&"));

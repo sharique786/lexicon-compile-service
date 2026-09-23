@@ -41,18 +41,23 @@ import java.util.regex.Pattern;
  *       Korean or Arabic regex) get the correct UTF8/UCP flags.</li>
  * </ul>
  *
- * <p>After every term is resolved to PASS or FAILED, all PASS terms'
- * expressions (built by {@link HyperscanCombinationHandler} — see that
- * class for the QUIET/COMBINATION mechanism and the id scheme, including why
- * AND NOT terms deliberately do NOT use native Hyperscan COMBINATION) are
- * compiled into <b>one combined multi-pattern Hyperscan database</b> via
- * {@link HyperscanCompiler#compileCombinedDatabase}. The JSON summary
- * returned by {@link #buildBundle} is the same {@link CompileResponse}
- * / {@link TermCompilationResult} shape that {@code /compile} returns, with
- * additions specific to this endpoint: a non-AND-NOT term gets
- * {@code hyperscanExpressionId} (always its own term number); an AND NOT
- * term gets {@code requiredExpressionIds}/{@code excludedExpressionIds}
- * instead — see {@link TermCompilationResult} class Javadoc.
+ * <p>After every term is resolved to PASS or FAILED, IF AND ONLY IF every
+ * single term in the request reached PASS, all of their expressions (built
+ * by {@link HyperscanCombinationHandler} — see that class for the
+ * QUIET/COMBINATION mechanism and the id scheme, including why AND NOT terms
+ * deliberately do NOT use native Hyperscan COMBINATION) are compiled into
+ * <b>one combined multi-pattern Hyperscan database</b> via
+ * {@link HyperscanCompiler#compileCombinedDatabase}. <b>A single FAILED term
+ * anywhere in the request means NO combined database is built at all</b> —
+ * see {@link #buildDatabasePortion} — even though every OTHER term may have
+ * passed; a caller must not receive a {@code .hdb} that silently omits one
+ * term's intended coverage. The JSON summary returned by {@link #buildBundle}
+ * is the same {@link CompileResponse} / {@link TermCompilationResult} shape
+ * that {@code /compile} returns, with additions specific to this endpoint: a
+ * non-AND-NOT term gets {@code hyperscanExpressionId} (always its own term
+ * number); an AND NOT term gets {@code requiredExpressionIds}/
+ * {@code excludedExpressionIds} instead — see {@link TermCompilationResult}
+ * class Javadoc.
  *
  * <p><b>Hyperscan expression id scheme</b>
  * <p>Every {@code termId} in this platform follows the convention
@@ -95,7 +100,8 @@ public class LexiconCompileBundleService {
 
     /**
      * Compiles every term in the request and builds the combined Hyperscan
-     * database from the PASS subset.
+     * database — but ONLY when every term in the request reached PASS; see
+     * {@link #buildDatabasePortion}.
      *
      * @param request validated typed-compile request
      * @return {@link CompileBundleResult} — JSON summary + optional database bytes
@@ -157,7 +163,7 @@ public class LexiconCompileBundleService {
                 termResults,
                 elapsedMs);
 
-        return buildDatabasePortion(jsonResponse, passingExpressions);
+        return buildDatabasePortion(jsonResponse, termResults, passingExpressions);
     }
 
     // ── Term id validation ───────────────────────────────────────────────────────
@@ -253,7 +259,32 @@ public class LexiconCompileBundleService {
     // ── Combined database ────────────────────────────────────────────────────
 
     private CompileBundleResult buildDatabasePortion(CompileResponse jsonResponse,
+                                                     List<TermCompilationResult> termResults,
                                                      List<Expression> passingExpressions) {
+        // No combined database at all when ANY term in this request failed to compile — even
+        // when other terms passed and would otherwise have produced a usable set of expressions.
+        // A caller that only inspects the zip for a ".hdb" file (not every term's own
+        // compilationStatus in the JSON) must never receive a database that is silently missing
+        // the failed term's intended coverage. This is deliberately the same "HTTP 200,
+        // NO_DATABASE.txt instead of a .hdb" shape as the zero-PASS-terms case below (not an
+        // HTTP 500/databaseError) — the combined build was never even ATTEMPTED, so this isn't
+        // the "build/serialisation itself failed" case that databaseBuildFailed represents.
+        List<String> failedTermIds = termResults.stream()
+                .filter(TermCompilationResult::isFailed)
+                .map(TermCompilationResult::termId)
+                .toList();
+        if (!failedTermIds.isEmpty()) {
+            log.warn("No combined database built for rule '{}' — {} of {} term(s) did not reach PASS: {}",
+                    jsonResponse.lexiconRuleName(), failedTermIds.size(), termResults.size(), failedTermIds);
+            return new CompileBundleResult(jsonResponse, null,
+                    "No Hyperscan database file was produced because " + failedTermIds.size() + " of "
+                            + termResults.size() + " term(s) in this request did not reach PASS status: "
+                            + failedTermIds + ". A combined database is only built when every term in the "
+                            + "request compiles successfully. See the JSON results for each term's "
+                            + "compilationStatus and errorLog/translationError details.",
+                    false);
+        }
+
         if (passingExpressions.isEmpty()) {
             log.warn("No PASS terms for rule '{}' — no combined database will be built",
                     jsonResponse.lexiconRuleName());
@@ -332,14 +363,16 @@ public class LexiconCompileBundleService {
      *                               {@code null} when no database could be built
      * @param databaseNote           human-readable explanation for why no database was built;
      *                               null when a database was built successfully
-     * @param databaseBuildFailed    {@code true} only when at least one term reached PASS
-     *                               (so a combined build was actually attempted) and the
+     * @param databaseBuildFailed    {@code true} only when EVERY term in the request reached
+     *                               PASS (so a combined build was actually attempted) and the
      *                               combined Hyperscan compile/serialisation itself then
      *                               failed — a genuine system-level failure, as opposed to
-     *                               the "zero PASS terms" case ({@code false} here), which is
-     *                               already fully explained by each term's own FAILED status.
-     *                               The controller uses this to decide whether the response
-     *                               is an HTTP error (bundle unusable despite PASS terms) or
+     *                               either the "at least one term FAILED" case or the "zero
+     *                               PASS terms" case (both {@code false} here), which are
+     *                               already fully explained by each term's own compilationStatus
+     *                               — no combined build is even ATTEMPTED for those. The
+     *                               controller uses this to decide whether the response is an
+     *                               HTTP error (bundle unusable despite every term passing) or
      *                               an ordinary 200 zip with a {@code NO_DATABASE.txt} note.
      */
     public record CompileBundleResult(

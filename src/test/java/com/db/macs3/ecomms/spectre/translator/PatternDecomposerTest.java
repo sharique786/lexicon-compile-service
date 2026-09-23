@@ -40,19 +40,23 @@ class PatternDecomposerTest {
     }
 
     @Test
-    @DisplayName("AND with one plain operand and one NEAR operand flattens into 3 independent, "
-            + "gap-less leaves — not a single self-contained AND permutation pattern")
-    void andWithNestedNear_flattensIntoThreeLeaves() {
+    @DisplayName("AND with one plain operand and one NEAR operand: simple/safe, so "
+            + "TermSyntaxTranslator#resolveSide merges it into ONE gap-embedded pattern rather than "
+            + "using PatternDecomposer's flattened leaves directly — resolvedPatterns still conveys "
+            + "the full AND/NEAR structure as literal keyword text either way")
+    void andWithNestedNear_mergesIntoOnePattern() {
         var s = translateOk("price AND (insider NEAR{5} trading)");
-        assertThat(s.hsPatterns()).containsExactly("price", "insider", "trading");
+        assertThat(s.hsPatterns()).hasSize(1);
+        assertThat(s.hsPatterns().getFirst()).contains("price").contains("insider").contains("trading");
         assertThat(s.resolvedPattern()).isEqualTo("price AND insider NEAR{5} trading");
     }
 
     @Test
-    @DisplayName("AND with one plain operand and one FOLLOWEDBY operand flattens the same way")
-    void andWithNestedFollowedBy_flattens() {
+    @DisplayName("AND with one plain operand and one FOLLOWEDBY operand merges the same way")
+    void andWithNestedFollowedBy_mergesIntoOnePattern() {
         var s = translateOk("price AND (insider FOLLOWEDBY{3} trading)");
-        assertThat(s.hsPatterns()).containsExactly("price", "insider", "trading");
+        assertThat(s.hsPatterns()).hasSize(1);
+        assertThat(s.hsPatterns().getFirst()).contains("price").contains("insider").contains("trading");
         assertThat(s.resolvedPattern()).isEqualTo("price AND insider FOLLOWEDBY{3} trading");
     }
 
@@ -66,10 +70,12 @@ class PatternDecomposerTest {
     }
 
     @Test
-    @DisplayName("AND flattening recurses through nested AND, not just one level deep")
+    @DisplayName("AND flattening's resolvedPatterns recurses through nested AND, not just one level "
+            + "deep — merged into ONE pattern for hsPatterns since this simple case is safe to compile")
     void andFlattening_recursesThroughNestedAnd() {
         var s = translateOk("a AND (b AND (c NEAR{2} d))");
-        assertThat(s.hsPatterns()).containsExactly("a", "b", "c", "d");
+        assertThat(s.hsPatterns()).hasSize(1);
+        assertThat(s.hsPatterns().getFirst()).contains("a").contains("b").contains("c").contains("d");
         assertThat(s.resolvedPattern()).isEqualTo("a AND b AND c NEAR{2} d");
     }
 
@@ -84,5 +90,22 @@ class PatternDecomposerTest {
         assertThat(s.hsPatterns()).hasSize(1); // self-contained AND permutation of 2 operands
         assertThat(s.hsPatterns().getFirst()).contains("b").contains("c").contains("d");
         assertThat(s.resolvedPattern()).isEqualTo(s.hsPatterns().getFirst());
+    }
+
+    @Test
+    @DisplayName("AND flattening still falls back to independent leaves — the historical behavior — "
+            + "when the nested proximity operand is genuinely too complex to merge into one pattern")
+    void andWithOverBudgetNestedProximity_stillFlattensIntoLeaves() {
+        // Same wide-OR, nested-FOLLOWEDBY shape confirmed over budget / rejected as a single
+        // pattern elsewhere in this suite (see TermSyntaxTranslatorTest's "Pattern complexity
+        // validation" nested class) — wrapping it as an AND operand alongside "price" exercises
+        // decomposeAnd's flattening specifically for the case resolveSide can't merge away.
+        String overBudgetNestedFollowedBy = "(((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) "
+                + "FOLLOWEDBY{4} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) FOLLOWEDBY{4} "
+                + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
+        var s = translateOk("price AND " + overBudgetNestedFollowedBy);
+        assertThat(s.hsPatterns()).hasSize(4); // "price" + the 3 leaves the nested chain decomposes into
+        assertThat(s.hsPatterns().getFirst()).isEqualTo("price");
+        assertThat(s.resolvedPattern()).startsWith("price AND ");
     }
 }

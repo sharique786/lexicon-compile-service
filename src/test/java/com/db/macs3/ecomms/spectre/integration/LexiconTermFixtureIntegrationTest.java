@@ -151,7 +151,10 @@ class LexiconTermFixtureIntegrationTest {
         // 6 valid terms + 1 deliberately meaningless ("#@$#%$")
         assertThat(response.passCount()).isEqualTo(6);
         assertThat(response.failedCount()).isEqualTo(1);
-        assertThat(bundle.hasDatabase()).isTrue(); // built from the 6 PASS terms
+        // No combined database at all — one term (nl::7) FAILED, so no .hdb is built even
+        // though the other 6 terms passed (see LexiconCompileBundleService#buildDatabasePortion).
+        assertThat(bundle.hasDatabase()).isFalse();
+        assertThat(bundle.databaseNote()).contains("did not reach PASS status");
 
         assertPass(response, "nl::1");
         assertPass(response, "nl::2"); // unwrapped multi-word phrase
@@ -180,6 +183,9 @@ class LexiconTermFixtureIntegrationTest {
         // 3 valid regex patterns + 1 deliberately unclosed group
         assertThat(response.passCount()).isEqualTo(3);
         assertThat(response.failedCount()).isEqualTo(1);
+        // One term FAILED (regex::4) — no combined database is built at all, even though 3
+        // other terms passed.
+        assertThat(bundle.hasDatabase()).isFalse();
 
         // Verbatim compilation — no operator-language translation should have occurred.
         var literalRegex = findResult(response, "regex::1");

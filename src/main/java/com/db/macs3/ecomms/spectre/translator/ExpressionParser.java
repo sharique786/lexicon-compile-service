@@ -81,6 +81,45 @@ import java.util.List;
  * shape is identical to explicit nesting, this can still trigger
  * {@code PatternComplexityAnalyzer}'s rejection (or now, decomposition — see
  * {@code PatternDecomposer}) exactly as explicit nesting would.
+ *
+ * <p><b>NEAR/FOLLOWEDBY sandwiched between OR alternatives: rejected, not
+ * warned</b> — unlike chained proximity above, a NEAR/FOLLOWEDBY operator
+ * sitting as one {@code OR} alternative with OTHER alternatives on BOTH
+ * sides of it (e.g. {@code "(a) OR (b) FOLLOWEDBY{3} (c) OR (d)"}) is a hard
+ * {@link TranslationException}, not a warning — see {@link #rejectSandwichedProximity}.
+ * The two situations look superficially similar ("an operator combined with
+ * OR without extra parentheses") but are not: a chained proximity operator's
+ * flat rendering is exactly what left-associative nesting already looks like
+ * (no information is lost either way), whereas a sandwiched proximity
+ * alternative silently discards the relationship between the proximity pair
+ * and every OTHER OR alternative around it — a term that compiles but almost
+ * never means what its author intended, so this new term is rejected
+ * up front, with existing/legacy compatibility not a concern the way it is
+ * for chaining (a NEAR/FOLLOWEDBY alternative at either EDGE of an OR list —
+ * the one documented, currently-used exception — is unaffected either way).
+ *
+ * <p><b>NEAR{1}/FOLLOWEDBY{1} with a single-character operand: warned, not
+ * rejected — the visible signature of an impossible intra-word split</b>
+ * <p>Reported via the Lexicon Scan Engine: a term shaped
+ * {@code "(F) FOLLOWEDBY{1} (((me) OR (cking) OR (d) OR (ing) OR (up)))"}
+ * compiles successfully but can NEVER match its evident target ("Fucking" as
+ * one word) — NEAR/FOLLOWEDBY are word-DISTANCE operators by design (see
+ * {@code MultiLanguagePatternBuilder} class Javadoc), so two fragments
+ * landing inside the SAME word have no measurable word-gap between them at
+ * all, however small the requested distance. This is a term-authoring
+ * mistake, not a bug in this translator's proximity logic — the fix is to
+ * express the target word directly (a literal word/phrase, or a Regex-type
+ * infix/wildcard pattern), never a word-proximity chain. {@link #warnPossibleIntraWordSplit}
+ * flags the heuristic signature of this mistake — {@code NEAR{1}}/
+ * {@code FOLLOWEDBY{1}} (the only distance small enough to plausibly be
+ * confused with "glued together, no gap at all", which this grammar can't
+ * even express — the minimum allowed distance is 1, not 0) with a bare,
+ * single-character word as one operand (the visible shape of a split-off
+ * prefix/suffix) — with a non-fatal warning, never a {@link TranslationException}:
+ * this is necessarily a fuzzy heuristic (it can both under- and
+ * over-trigger — see that method's Javadoc), and a genuine single-letter
+ * word used deliberately (e.g. {@code "(a) FOLLOWEDBY{1} (boy)"}) must keep
+ * compiling exactly as before.
  */
 final class ExpressionParser {
 
@@ -147,7 +186,56 @@ final class ExpressionParser {
         for (Ast alternative : alternatives) {
             rejectBareNot(alternative, "as an OR alternative");
         }
+        rejectSandwichedProximity(alternatives);
         return new Ast.Or(alternatives);
+    }
+
+    /**
+     * Rejects a NEAR/FOLLOWEDBY operator sitting as one alternative of an OR
+     * with OTHER OR alternatives on BOTH sides of it — e.g.
+     * {@code "(I) OR (you) OR (them) FOLLOWEDBY{3} (sin bin) OR (penalty box)"}.
+     * This parses successfully today (each {@code proximityExpr} already
+     * scopes correctly between {@code OR} boundaries on its own — no grammar
+     * ambiguity), but the RESULT is a term that combines "(them) FOLLOWEDBY{3}
+     * (sin bin)" as ONE alternative with "(I)", "(you)", ..., "(penalty box)"
+     * as unrelated OTHER alternatives — almost never what an author actually
+     * intends when they write a long list of OR'd terms with one proximity
+     * operator buried in the middle. This is confirmed to compile "successfully"
+     * while producing a materially different, surprising result downstream
+     * (only the two operands immediately adjacent to the proximity operator
+     * are ever related by it; every other alternative on both sides is
+     * simply ignored by that relationship, silently).
+     *
+     * <p><b>A NEAR/FOLLOWEDBY alternative at either EDGE of the OR list (no
+     * sibling before it, or no sibling after it) is NOT rejected</b> — e.g.
+     * {@code "(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"}. This is
+     * confirmed real, currently-used functionality (see
+     * {@code PatternDecomposer} class Javadoc "the one exception") and is
+     * unambiguous: with nothing left over on the side where the proximity
+     * clause sits, there is no OTHER alternative the author could plausibly
+     * have meant to also include in its scope.
+     *
+     * @throws TranslationException naming the ambiguous shape and how to fix it,
+     * if a sandwiched NEAR/FOLLOWEDBY alternative is found
+     */
+    private void rejectSandwichedProximity(List<Ast> alternatives) {
+        for (int i = 1; i < alternatives.size() - 1; i++) {
+            Ast alternative = alternatives.get(i);
+            if (alternative instanceof Ast.Near || alternative instanceof Ast.FollowedBy) {
+                throw new TranslationException(
+                        "A NEAR/FOLLOWEDBY operator was found combined with OR at the same level, with OTHER OR"
+                        + " alternatives on BOTH sides of it, in term: '" + originalTerm + "'. This is ambiguous"
+                        + " — it is unclear whether the proximity operator should apply only to its own two"
+                        + " immediate operands (as currently written, with every other OR alternative unrelated"
+                        + " to it), or to a wider group including some of the surrounding OR alternatives too."
+                        + " Add explicit parentheses to make the intended grouping unambiguous — e.g. group every"
+                        + " alternative meant to be on the SAME side of the proximity operator together, such as"
+                        + " '((alt1) OR (alt2) OR ...) NEAR{n} ((altX) OR (altY) OR ...)'; or, if the proximity"
+                        + " clause really is meant to be its own independent OR alternative with no relation to"
+                        + " the others, restructure the term so it sits at an EDGE of its OR list instead of in"
+                        + " the middle, e.g. '(alt1) OR (alt2) OR (altZ) OR ((altX) NEAR{n} (altY))'.");
+            }
+        }
     }
 
     private Ast parseAndNot() {
@@ -321,9 +409,85 @@ final class ExpressionParser {
         Token proximityToken = advance();
         Ast rightOperand = parseAtom();
         rejectBareNot(rightOperand, "as a NEAR/FOLLOWEDBY operand");
-        return (proximityToken instanceof Token.Near(int distance))
+
+        boolean isNear = proximityToken instanceof Token.Near;
+        int distance = isNear
+                ? ((Token.Near) proximityToken).distance()
+                : ((Token.FollowedBy) proximityToken).distance();
+        String keyword = isNear ? LexiconOperatorKeyword.NEAR : LexiconOperatorKeyword.FOLLOWEDBY;
+        warnPossibleIntraWordSplit(leftOperand, rightOperand, keyword, distance);
+
+        return isNear
                 ? new Ast.Near(leftOperand, rightOperand, distance)
-                : new Ast.FollowedBy(leftOperand, rightOperand, ((Token.FollowedBy) proximityToken).distance());
+                : new Ast.FollowedBy(leftOperand, rightOperand, distance);
+    }
+
+    /**
+     * Records a non-fatal warning when a {@code NEAR{1}}/{@code FOLLOWEDBY{1}}
+     * node has a single-character bare word as one of its two operands — the
+     * hallmark of an author trying to express an INTRA-word split (gluing one
+     * letter directly onto a suffix/prefix to spell one target word, e.g.
+     * {@code (F) FOLLOWEDBY{1} (cking)} intending to catch "Fucking") as if it
+     * were ordinary word-to-word proximity.
+     *
+     * <p><b>Confirmed real, not hypothetical</b> — reported via the Lexicon
+     * Scan Engine: {@code "(F) FOLLOWEDBY{1} (((me) OR (cking) OR (d) OR (ing) OR (up)))"}
+     * (intended to catch "Fucking"/"F'd"/"Fing" as ONE word, alongside the
+     * genuinely-separate-word phrases "F me"/"F up") compiles successfully —
+     * there is nothing syntactically wrong with it — but can NEVER match its
+     * evident target, because {@code NEAR}/{@code FOLLOWEDBY} are word-distance
+     * based BY DESIGN (see {@code PatternDecomposer}/{@code MultiLanguagePatternBuilder}
+     * class Javadoc): two fragments landing inside the SAME word have no
+     * measurable word-gap between them at all, so they can never satisfy any
+     * proximity distance, however small. This is not a bug in this
+     * translator's proximity logic — it is a term-authoring shape that
+     * structurally cannot work with word-distance operators, however written.
+     *
+     * <p><b>Necessarily a heuristic, not a proof</b> — distance {@code 1} is
+     * the only distance small enough to plausibly be confused with "glued
+     * together, no gap at all" (which the grammar cannot even express — the
+     * minimum allowed distance is 1, not 0), and a bare, single-character word
+     * operand is the visible signature of a split-off prefix/suffix. This can
+     * both under-trigger (an intra-word split using longer fragments on both
+     * sides is not flagged) and over-trigger (a genuine single-letter word
+     * used deliberately, e.g. {@code "(a) FOLLOWEDBY{1} (boy)"}, is
+     * indistinguishable from this shape and gets flagged too) — a WARNING,
+     * never a {@link TranslationException}, is the only responsible response
+     * to a heuristic this fuzzy; existing terms using either shape must keep
+     * compiling exactly as before.
+     */
+    private void warnPossibleIntraWordSplit(Ast leftOperand, Ast rightOperand, String keyword, int distance) {
+        if (distance != 1) {
+            return;
+        }
+        if (!isSingleCharacterWord(leftOperand) && !isSingleCharacterWord(rightOperand)) {
+            return;
+        }
+        warnings.add(
+                keyword + "{1} was used with a single-character operand in term: '" + originalTerm + "'."
+                        + " This shape often means the author intended to spell out ONE word by gluing a"
+                        + " leading/trailing letter directly onto a fragment (e.g. '(F) " + keyword
+                        + "{1} (cking)' intending to catch \"Fucking\") — but " + keyword + " measures WHOLE-WORD"
+                        + " distance, and two fragments that land inside the SAME word have no measurable"
+                        + " word-gap between them at all, so this can NEVER match, however small the distance."
+                        + " If this term needs to match a specific WORD (not two separate words), express it"
+                        + " directly as a literal word/phrase, or as a Regex-type term with an infix/wildcard"
+                        + " pattern for the word itself — not as a word-proximity chain. (If the operands really"
+                        + " are two separate words, e.g. \"F up\"/\"F me\", this term is fine as written and this"
+                        + " warning can be ignored.)");
+    }
+
+    /**
+     * True when {@code ast} is a bare, single-character {@link Ast.Word} —
+     * e.g. {@code F} in {@code (F) FOLLOWEDBY{1} (cking)} — the visible
+     * signature {@link #warnPossibleIntraWordSplit} looks for. Deliberately
+     * NOT true for an {@link Ast.Or}/{@link Ast.Phrase} even when one of
+     * their own alternatives/words is single-character — this heuristic
+     * targets the DIRECT operand shape reported, not every AST it could
+     * theoretically be generalised to.
+     */
+    private static boolean isSingleCharacterWord(Ast ast) {
+        return ast instanceof Ast.Word word && word.text().length() == 1;
     }
 
     /**

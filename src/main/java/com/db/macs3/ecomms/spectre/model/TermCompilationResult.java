@@ -328,7 +328,31 @@ public record TermCompilationResult(
          * outside {@code /compile/bundle}.
          */
         @JsonProperty("patternMapping")
-        String patternMapping
+        String patternMapping,
+
+        /*
+         * Not part of the response JSON ({@code @JsonIgnore}) — regexPattern's
+         * own boolean-AND grouping structure, using {@code {i}} leaf-index
+         * placeholders (see {@code PatternDecomposer.Result#formulaTemplate()}
+         * / {@code TranslationResult.Success#patternFormulaTemplate()}). Kept
+         * only so {@code HyperscanCombinationHandler} can, at
+         * {@code /compile/bundle} time, substitute each placeholder with that
+         * leaf's allocated Hyperscan expression id and build a
+         * {@code patternMapping}/native-combination formula that reflects the
+         * term's actual authored nesting (e.g. {@code "(54&(55&56))"}) instead
+         * of a flat AND-join of every leaf. Null for a simple (non-decomposed)
+         * term, a FAILED term, or a Regex-type term — anything
+         * {@code HyperscanCombinationHandler} falls back to a flat AND-join for.
+         */
+        @JsonIgnore
+        String patternFormulaTemplate,
+
+        /*
+         * Not part of the response JSON — the same, for exclusionRegex's own
+         * grouping. Null unless {@code requiresExclusionCheck} is true.
+         */
+        @JsonIgnore
+        String exclusionFormulaTemplate
 
 ) {
     // ── Factory methods ───────────────────────────────────────────────────────
@@ -347,14 +371,17 @@ public record TermCompilationResult(
                                              int hyperscanFlags,
                                              boolean requiresExclusionCheck,
                                              List<String> exclusionRegex,
-                                             String resolvedPatterns) {
+                                             String resolvedPatterns,
+                                             String patternFormulaTemplate,
+                                             String exclusionFormulaTemplate) {
         return new TermCompilationResult(
                 input.termId(), input.termDescription(),
                 CompilationStatus.PASS,
                 regexPattern, null, null,
                 hyperscanFlags, requiresExclusionCheck, exclusionRegex,
                 resolvedPatterns,
-                null, null, null, null);
+                null, null, null, null,
+                patternFormulaTemplate, exclusionFormulaTemplate);
     }
 
     /**
@@ -365,7 +392,7 @@ public record TermCompilationResult(
     public static TermCompilationResult pass(TypedCompileRequest.TermInput input,
                                              List<String> regexPattern,
                                              int hyperscanFlags) {
-        return pass(input, regexPattern, hyperscanFlags, false, null, null);
+        return pass(input, regexPattern, hyperscanFlags, false, null, null, null, null);
     }
 
     /**
@@ -386,7 +413,8 @@ public record TermCompilationResult(
                 regexPattern, errorLog, null,
                 hyperscanFlags, false, null,
                 null,
-                null, null, null, null);
+                null, null, null, null,
+                null, null);
     }
 
     /**
@@ -403,7 +431,8 @@ public record TermCompilationResult(
                 null, null, translationError,
                 0, false, null,
                 null,
-                null, null, null, null);
+                null, null, null, null,
+                null, null);
     }
 
     /**
@@ -423,7 +452,8 @@ public record TermCompilationResult(
                 regexPattern, errorLog, translationError,
                 hyperscanFlags, requiresExclusionCheck, exclusionRegex,
                 resolvedPatterns,
-                id, null, null, patternMapping);
+                id, null, null, patternMapping,
+                patternFormulaTemplate, exclusionFormulaTemplate);
     }
 
     /**
@@ -448,7 +478,8 @@ public record TermCompilationResult(
                 regexPattern, errorLog, translationError,
                 hyperscanFlags, requiresExclusionCheck, exclusionRegex,
                 resolvedPatterns,
-                null, requiredExpressionIds, excludedExpressionIds, patternMapping);
+                null, requiredExpressionIds, excludedExpressionIds, patternMapping,
+                patternFormulaTemplate, exclusionFormulaTemplate);
     }
 
     /**

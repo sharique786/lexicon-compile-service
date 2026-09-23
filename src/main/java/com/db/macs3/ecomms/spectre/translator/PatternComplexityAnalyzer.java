@@ -9,19 +9,26 @@ import com.db.macs3.ecomms.spectre.util.ScriptDetector;
  * {@link PatternCodeGenerator} even runs — with a specific, actionable error
  * instead of letting Hyperscan fail opaquely at compile time.
  *
- * <p><b>Unused/dormant as of the {@code resolvedPatterns} change — no live
- * caller</b>
- * <p>{@link TermSyntaxTranslator} no longer consults {@link #isOverBudget}/
- * {@link #estimate} to decide anything: NEAR/FOLLOWEDBY structure now always
- * splits unconditionally, via {@link PatternDecomposer}, regardless of
- * complexity — see that class's own Javadoc. The specific problem this
- * class was built to predict — a gap-embedded pattern too large for
- * Hyperscan to compile — can no longer occur for that unconditional path at
- * all, since the gap is never compiled into a regex fragment any more. This
- * class is kept in the codebase (not deleted) purely for reference/possible
- * future reuse; do not wire it back into {@link TermSyntaxTranslator}
- * without re-reading {@code PatternDecomposer}'s and
- * {@code TermCompilationResult.resolvedPatterns}' Javadoc first.
+ * <p><b>Live again — the pre-check gate for {@code TermSyntaxTranslator#resolveSide}</b>
+ * <p>Between the original design and the {@code resolvedPatterns} change,
+ * this class went fully dormant for one release: NEAR/FOLLOWEDBY structure
+ * split unconditionally via {@link PatternDecomposer}, regardless of
+ * complexity, and a single gap-embedded pattern was only ever reachable via
+ * the OR-nested-proximity exception. That turned out to be the wrong default
+ * for the common case: a "very simple, straightforward" proximity term (the
+ * overwhelming majority) doesn't need decomposition's AND-only precision
+ * trade-off at all — it compiles to one safe, self-contained gap-embedded
+ * pattern just fine, letting Hyperscan enforce the actual distance/order
+ * natively. {@link TermSyntaxTranslator#resolveSide} now calls
+ * {@link #isOverBudget} again, exactly as originally: a cheap pre-check,
+ * BEFORE attempting to generate and real-Hyperscan-validate the single
+ * pattern, to skip that attempt for a structure already predicted too large
+ * — decomposition into independent leaves is the FALLBACK now (used when
+ * this heuristic says no, or when it says yes but real Hyperscan rejects the
+ * single pattern anyway), not the unconditional default. {@code resolvedPatterns}
+ * itself is unaffected by any of this — {@link PatternDecomposer#decompose}
+ * still runs unconditionally to supply it (and the fallback leaves), whether
+ * or not this class ends up gating anything for a given term.
  *
  * <p><b>Why string length isn't the right signal</b>
  * <p>The reported failure case compiles to a 190-character pattern — nowhere

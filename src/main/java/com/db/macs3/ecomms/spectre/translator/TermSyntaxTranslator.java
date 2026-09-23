@@ -189,7 +189,17 @@ public final class TermSyntaxTranslator {
             Ast ast = parseResult.ast();
             List<String> warnings = new ArrayList<>(parseResult.warnings());
 
-            ParseContext ctx = new ParseContext();
+            // Whole-word matching (\b) is decided once, for the whole term, up front: a term with
+            // any non-ASCII text gets UCP, which Hyperscan rejects \b under — so it keeps plain
+            // substring matching, and says so.
+            boolean wordBoundaries = !PatternCodeGenerator.containsNonAscii(ast);
+            if (!wordBoundaries && PatternCodeGenerator.hasBoundaryCandidate(ast)) {
+                warnings.add("Whole-word matching was not applied: this term contains non-ASCII "
+                        + "characters (Unicode mode), where Hyperscan does not support word boundaries, "
+                        + "so its words also match inside longer words. Use only ASCII text in a term "
+                        + "if whole-word matching is required.");
+            }
+            ParseContext ctx = new ParseContext(wordBoundaries);
 
             if (ast instanceof Ast.AndNot andNot) {
                 // AND NOT is only handled at the ROOT of the term's AST — see
@@ -219,10 +229,10 @@ public final class TermSyntaxTranslator {
                 int flags = ctx.computeFlags();
 
                 SideResult required
-                        = resolveSide(andNot.required(), requiredResult, flags,
+                        = resolveSide(andNot.required(), requiredResult, flags, wordBoundaries,
                         preprocessed, "required", warnings);
                 SideResult excluded
-                        = resolveSide(excludedCombined, excludedResult, flags,
+                        = resolveSide(excludedCombined, excludedResult, flags, wordBoundaries,
                         preprocessed, "excluded (AND NOT)", warnings);
                 warnings.addAll(ctx.getWarnings());
 
@@ -245,17 +255,38 @@ public final class TermSyntaxTranslator {
             // then discarded entirely, since this branch always sets requiresExclusionCheck=false.
             rejectNestedAndNot(ast, preprocessed);
 
-            PatternDecomposer.Result result = PatternDecomposer.decompose(ast, ctx);
+            PatternDecomposer.Result fullResult = PatternDecomposer.decompose(ast, ctx);
+            PatternDecomposer.Result result = fullResult;
+            if (wordBoundaries && fullResult.leaves().size() > 1) {
+                // These leaves become sub-expressions of a native COMBINATION if the single merged
+                // pattern turns out not to be safe — and Hyperscan rejects a combination whose
+                // sub-expression ends in \b ("Have unordered match in sub-expressions"). So the
+                // fallback leaves are regenerated with a LEADING boundary only; the full-boundary
+                // decomposition above is kept for the merged single pattern's resolvedPatterns text.
+                result = PatternDecomposer.decompose(ast, new ParseContext(true, false));
+            }
             int flags = ctx.computeFlags();
-            SideResult required = resolveSide(ast, result, flags, preprocessed, "term", warnings);
+            SideResult required = resolveSide(ast, result, flags, wordBoundaries, preprocessed, "term", warnings);
             warnings.addAll(ctx.getWarnings());
+
+            String resolvedPattern = fullResult.resolvedText();
+            if (required.isDecomposed()) {
+                // resolvedPatterns must stay byte-identical to the leaves actually used.
+                resolvedPattern = result.resolvedText();
+                if (wordBoundaries && PatternCodeGenerator.hasBoundaryCandidate(ast)) {
+                    warnings.add("Whole-word matching is start-of-word only for this term: it was split "
+                            + "into independent leaves combined natively by Hyperscan, which cannot "
+                            + "express an end-of-word boundary, so a word may still match as the "
+                            + "prefix of a longer word (e.g. 'pd' in 'pdf', but not in 'updates').");
+                }
+            }
 
             log.debug("Translated: '{}' -> {} flags={} warnings={}",
                     rawExpression, required, flags, warnings.size());
 
             return new TranslationResult.Success(
                     required.patterns(), flags, false, null,
-                    List.copyOf(warnings), result.resolvedText(),
+                    List.copyOf(warnings), resolvedPattern,
                     required.formulaTemplate(), null);
 
         } catch (TranslationException te) {
@@ -408,12 +439,14 @@ public final class TermSyntaxTranslator {
      *                     the fallback leaves AND (always) the {@code resolvedText}
      *                     the caller reads separately, regardless of which path wins
      * @param flags        the term's final, complete Hyperscan flag bitmask
+     * @param wordBoundaries whether the term's literals get word-boundary edges — must match
+     *                     what {@code decomposed} was generated with
      * @param originalTerm the original term text, for error/warning messages
      * @param sideLabel    "term", "required", or "excluded (AND NOT)" — for error/warning messages
      * @param warnings     mutable list this method appends to
      */
     private SideResult resolveSide(Ast sideAst, PatternDecomposer.Result decomposed, int flags,
-                                    String originalTerm, String sideLabel, List<String> warnings) {
+                                    boolean wordBoundaries, String originalTerm, String sideLabel, List<String> warnings) {
         if (decomposed.leaves().size() > 1 && !PatternComplexityAnalyzer.isOverBudget(sideAst)) {
             // Fresh, scratch context: this attempt's own flag/warning discoveries are
             // only real if this path is actually used — discarding them on rejection
@@ -421,7 +454,7 @@ public final class TermSyntaxTranslator {
             // was never returned to the caller. The single pattern's operand text is
             // the same content decomposed's leaves already accounted for, so reusing
             // the already-computed `flags` for validation is correct either way.
-            ParseContext trialCtx = new ParseContext();
+            ParseContext trialCtx = new ParseContext(wordBoundaries);
             String singlePattern = PatternCodeGenerator.generate(sideAst, trialCtx);
             HyperscanCompiler.ValidationResult validation = compiler.validate(singlePattern, flags);
             if (validation.isPass()) {

@@ -215,7 +215,7 @@ class LexiconCompileBundleServiceTest {
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
         assertThat(result.regexPattern()).hasSize(1);
         assertThat(result.regexPattern().getFirst()).contains("manipulate").contains("price");
-        assertThat(result.resolvedPatterns()).isEqualTo("manipulate NEAR{5} price");
+        assertThat(result.resolvedPatterns()).isEqualTo("\\bmanipulate\\b NEAR{5} \\bprice\\b");
     }
 
     @Test
@@ -459,7 +459,7 @@ class LexiconCompileBundleServiceTest {
         assertThat(result.compilationStatus()).isEqualTo(CompilationStatus.PASS);
         assertThat(result.requiresExclusionCheck()).isTrue();
         assertThat(result.regexPattern()).hasSize(1);
-        assertThat(result.regexPattern().getFirst()).isEqualTo("don't forward");
+        assertThat(result.regexPattern().getFirst()).isEqualTo("\\bdon't forward\\b");
         assertThat(result.exclusionRegex()).hasSize(1);
         assertThat(result.exclusionRegex().getFirst()).contains("compliance").contains("legal");
 
@@ -671,9 +671,9 @@ class LexiconCompileBundleServiceTest {
 
         assertThat(result.isPass()).isTrue();
         assertThat(result.regexPattern()).containsExactly(
-                "(?:manipulate|front run)", "(?:price|spread)", "stock");
+                "(?:\\bmanipulate|\\bfront run)", "(?:\\bprice|\\bspread)", "\\bstock");
         assertThat(result.resolvedPatterns()).isEqualTo(
-                "(?:manipulate|front run) NEAR{5} ((?:price|spread) NEAR{5} stock)");
+                "(?:\\bmanipulate|\\bfront run) NEAR{5} ((?:\\bprice|\\bspread) NEAR{5} \\bstock)");
         assertThat(result.hyperscanExpressionId()).isEqualTo(53);
         assertThat(result.patternMapping()).isEqualTo("(54&(55&56))");
     }
@@ -900,7 +900,7 @@ class LexiconCompileBundleServiceTest {
 
         assertThat(result.regexPattern()).hasSize(1);
         assertThat(result.exclusionRegex()).hasSize(1);
-        assertThat(result.exclusionRegex().getFirst()).isEqualTo("(?:compliance|legal)");
+        assertThat(result.exclusionRegex().getFirst()).isEqualTo("(?:\\bcompliance\\b|\\blegal\\b)");
     }
 
     // ── HyperscanCombinationHandler-specific: the COMBINATION/QUIET flag constraint ──

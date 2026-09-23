@@ -101,10 +101,96 @@ final class PatternCodeGenerator {
             case Ast.Not ignored -> throw new IllegalStateException(
                     "unreachable — every Ast.Not is folded into Ast.AndNot (or rejected) by "
                     + "ExpressionParser.parseAnd() before an Ast is ever returned; see Ast.Not Javadoc");
-            case Ast.Word w -> encodeWord(w.text(), ctx);
-            case Ast.Phrase p -> generatePhrase(p, ctx);
-            case Ast.QuotedPhrase q -> encodeQuotedPhrase(q.text(), ctx);
+            case Ast.Word w -> withWordBoundaries(encodeWord(w.text(), ctx), w.text(), ctx);
+            case Ast.Phrase p -> withWordBoundaries(generatePhrase(p, ctx), String.join(" ", p.words()), ctx);
+            case Ast.QuotedPhrase q -> withWordBoundaries(encodeQuotedPhrase(q.text(), ctx), q.text(), ctx);
         };
+    }
+
+    // ── Whole-word matching ──────────────────────────────────────────────────
+
+    /**
+     * Wraps a literal leaf in {@code \b} on each edge whose FIRST/LAST source
+     * character is an ASCII word character, so {@code pd} matches the word
+     * "pd" but not the "pd" inside "updates". Confirmed-fixed bug: leaves used
+     * to be emitted as bare literals, i.e. plain substring search.
+     *
+     * <p>Decided per edge, on the raw (pre-encoding) text:
+     * <ul>
+     *   <li>an edge that is a wildcard ({@code *}/{@code ?} in a bare word) or
+     *       any non-word character ({@code $100}, {@code u.s.}, {@code #tag})
+     *       gets NO boundary — {@code \b} between two non-word characters
+     *       would demand a word character that isn't there. The wildcard is
+     *       therefore the author's explicit substring opt-in: {@code bomb*}
+     *       matches "bombing", {@code *pd*} matches "updates".</li>
+     *   <li>nothing is added at all when {@link ParseContext#isWordBoundaries()}
+     *       is false (term contains non-ASCII text — UCP mode rejects {@code \b}).</li>
+     *   <li>the END edge is skipped when {@link ParseContext#isTrailingBoundaries()} is
+     *       false — leaves feeding a native COMBINATION cannot end in an assertion.</li>
+     * </ul>
+     */
+    private static String withWordBoundaries(String encoded, String rawText, ParseContext ctx) {
+        if (!ctx.isWordBoundaries() || rawText.isEmpty()) {
+            return encoded;
+        }
+        String prefix = isAsciiWordChar(rawText.charAt(0)) ? "\\b" : "";
+        String suffix = ctx.isTrailingBoundaries() && isAsciiWordChar(rawText.charAt(rawText.length() - 1))
+                ? "\\b" : "";
+        return prefix + encoded + suffix;
+    }
+
+    private static boolean isAsciiWordChar(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    }
+
+    /**
+     * True when any literal in {@code ast} contains a non-ASCII character —
+     * exactly the condition under which {@link ParseContext#computeFlags()}
+     * will add UCP (via {@code setNeedsUtf8}), and so under which {@code \b}
+     * cannot be used. Computed up front from the AST so the decision is
+     * uniform across every leaf of the term.
+     */
+    static boolean containsNonAscii(Ast ast) {
+        return leafTexts(ast).stream().anyMatch(text -> text.chars().anyMatch(c -> c > 0x7F));
+    }
+
+    /**
+     * True when at least one literal in {@code ast} would receive a {@code \b}
+     * edge — used to warn only when skipping boundaries actually changes a
+     * term's behavior (a pure-CJK term never would have had any).
+     */
+    static boolean hasBoundaryCandidate(Ast ast) {
+        return leafTexts(ast).stream().anyMatch(text -> !text.isEmpty()
+                && (isAsciiWordChar(text.charAt(0)) || isAsciiWordChar(text.charAt(text.length() - 1))));
+    }
+
+    private static List<String> leafTexts(Ast ast) {
+        List<String> texts = new ArrayList<>();
+        collectLeafTexts(ast, texts);
+        return texts;
+    }
+
+    private static void collectLeafTexts(Ast ast, List<String> out) {
+        switch (ast) {
+            case Ast.Or or -> or.operands().forEach(child -> collectLeafTexts(child, out));
+            case Ast.And and -> and.operands().forEach(child -> collectLeafTexts(child, out));
+            case Ast.AndNot andNot -> {
+                collectLeafTexts(andNot.required(), out);
+                andNot.excluded().forEach(child -> collectLeafTexts(child, out));
+            }
+            case Ast.Near near -> {
+                collectLeafTexts(near.left(), out);
+                collectLeafTexts(near.right(), out);
+            }
+            case Ast.FollowedBy fb -> {
+                collectLeafTexts(fb.left(), out);
+                collectLeafTexts(fb.right(), out);
+            }
+            case Ast.Not not -> collectLeafTexts(not.operand(), out);
+            case Ast.Word w -> out.add(w.text());
+            case Ast.Phrase p -> out.add(String.join(" ", p.words()));
+            case Ast.QuotedPhrase q -> out.add(q.text());
+        }
     }
 
     // ── Operator code generation ─────────────────────────────────────────────

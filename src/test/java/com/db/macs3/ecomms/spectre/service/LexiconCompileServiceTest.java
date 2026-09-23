@@ -278,7 +278,7 @@ class LexiconCompileServiceTest {
         // splitting; resolvedPatterns still conveys the relationship as literal keyword text.
         assertThat(result.regexPattern()).hasSize(1);
         assertThat(result.regexPattern().getFirst()).contains("don't").contains("compliance");
-        assertThat(result.resolvedPatterns()).isEqualTo("don't FOLLOWEDBY{3} compliance");
+        assertThat(result.resolvedPatterns()).isEqualTo("\\bdon't\\b FOLLOWEDBY{3} \\bcompliance\\b");
     }
 
     // ── AND: corrected co-occurrence semantics ──────────────────────────────────

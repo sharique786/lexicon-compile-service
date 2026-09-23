@@ -59,8 +59,8 @@ class TermSyntaxTranslatorTest {
         void example1_orInsideNear() {
             var s = translateOk("(crap OR bad) NEAR{3} (bonus OR comp)");
             assertThat(s.hsPatterns()).hasSize(1);
-            assertThat(s.hsPatterns().getFirst()).contains("(?:crap|bad)").contains("(?:bonus|comp)");
-            assertThat(s.resolvedPattern()).isEqualTo("(?:crap|bad) NEAR{3} (?:bonus|comp)");
+            assertThat(s.hsPatterns().getFirst()).contains("(?:\\bcrap\\b|\\bbad\\b)").contains("(?:\\bbonus\\b|\\bcomp\\b)");
+            assertThat(s.resolvedPattern()).isEqualTo("(?:\\bcrap\\b|\\bbad\\b) NEAR{3} (?:\\bbonus\\b|\\bcomp\\b)");
         }
 
         @Test
@@ -69,8 +69,8 @@ class TermSyntaxTranslatorTest {
         void example2_deeplyRedundantWrapping() {
             var s = translateOk("(F) FOLLOWEDBY{1} (((me) OR (cking)))");
             assertThat(s.hsPatterns()).hasSize(1);
-            assertThat(s.hsPatterns().getFirst()).contains("F").contains("(?:me|cking)");
-            assertThat(s.resolvedPattern()).isEqualTo("F FOLLOWEDBY{1} (?:me|cking)");
+            assertThat(s.hsPatterns().getFirst()).contains("F").contains("(?:\\bme\\b|\\bcking\\b)");
+            assertThat(s.resolvedPattern()).isEqualTo("\\bF\\b FOLLOWEDBY{1} (?:\\bme\\b|\\bcking\\b)");
         }
 
         @ParameterizedTest(name = "[{index}] {0}")
@@ -111,14 +111,14 @@ class TermSyntaxTranslatorTest {
         @DisplayName("Properly wrapped multi-word OR alternatives succeed (unchanged)")
         void wrappedPhrasesSucceed() {
             var s = translateOk("(bomb this place) OR (blow this place up)");
-            assertThat(s.hsPatterns().getFirst()).contains("bomb this place").contains("blow this place up");
+            assertThat(s.hsPatterns().getFirst()).contains("\\bbomb this place\\b").contains("\\bblow this place up\\b");
         }
 
         @Test
         @DisplayName("Unwrapped multi-word phrase at top level is now ACCEPTED as an implicit phrase")
         void unwrappedTopLevelPhraseAccepted() {
             var s = translateOk("bomb this place OR blow this place up");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:bomb this place|blow this place up)");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:\\bbomb this place\\b|\\bblow this place up\\b)");
         }
 
         @Test
@@ -163,14 +163,14 @@ class TermSyntaxTranslatorTest {
                 + "live PCRE quantifier and never a literal question mark")
         void questionMarkIsSingleCharWildcard() {
             var s = translateOk("((he?d kill) OR (she?d kill))");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:he\\Sd kill|she\\Sd kill)");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:\\bhe\\Sd kill\\b|\\bshe\\Sd kill\\b)");
         }
 
         @Test
         @DisplayName("REPORTED: 'I?ll kill you' matches text where '?' stands in for an apostrophe")
         void questionMarkWildcard_matchesRealText() {
             var s = translateOk("I?ll kill you");
-            assertThat(s.hsPatterns()).containsExactly("I\\Sll kill you");
+            assertThat(s.hsPatterns()).containsExactly("\\bI\\Sll kill you\\b");
             boolean matched = java.util.regex.Pattern
                     .compile(s.hsPatterns().getFirst(), java.util.regex.Pattern.CASE_INSENSITIVE)
                     .matcher("I'll kill you before the term sheet went out, so please review it before the pricing call.")
@@ -183,7 +183,7 @@ class TermSyntaxTranslatorTest {
                 + "'match this exactly', unaffected by the bare-word wildcard change")
         void questionMarkInQuotesStaysLiteral() {
             var s = translateOk("\"he?d\"");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("he\\?d");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("\\bhe\\?d\\b");
         }
     }
 
@@ -199,14 +199,14 @@ class TermSyntaxTranslatorTest {
         @DisplayName("Suffix wildcard: chimp* -> chimp\\S*")
         void suffixWildcard() {
             var s = translateOk("(check her out) OR (chimp*)");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:check her out|chimp\\S*)");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:\\bcheck her out\\b|\\bchimp\\S*)");
         }
 
         @Test
         @DisplayName("Prefix wildcard: *handler -> \\S*handler")
         void prefixWildcard() {
             var s = translateOk("(*handler)");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("\\S*handler");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("\\S*handler\\b");
         }
 
         @Test
@@ -228,7 +228,7 @@ class TermSyntaxTranslatorTest {
         @DisplayName("Wildcard inside a quoted phrase is a LITERAL asterisk, not expanded")
         void wildcardInQuotesIsLiteral() {
             var s = translateOk("\"chimp*\"");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("chimp\\*");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("\\bchimp\\*");
         }
     }
 
@@ -305,12 +305,12 @@ class TermSyntaxTranslatorTest {
             var s = translateOk("((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)");
             // Required side's FOLLOWEDBY is simple/safe, so it merges into ONE gap-embedded pattern.
             assertThat(s.hsPatterns()).hasSize(1);
-            assertThat(s.hsPatterns().getFirst()).contains("(?:fix|rig)").contains("the rate");
+            assertThat(s.hsPatterns().getFirst()).contains("(?:\\bfix\\b|\\brig\\b)").contains("the rate");
             assertThat(s.hsPatterns()).noneMatch(p -> p.contains("fed rate move"));
             assertThat(s.hsPatterns()).noneMatch(p -> NO_LOOKAROUND_CHECK.matcher(p).find());
             assertThat(s.exclusionRegexs().getFirst()).contains("fed rate move");
             assertThat(s.resolvedPattern()).isEqualTo(
-                    "(?:fix|rig) FOLLOWEDBY{2} the rate AND NOT (fed rate move)");
+                    "(?:\\bfix\\b|\\brig\\b) FOLLOWEDBY{2} \\bthe rate\\b AND NOT (\\bfed rate move\\b)");
         }
 
         @Test
@@ -318,7 +318,7 @@ class TermSyntaxTranslatorTest {
         void andNotWithoutSpaceBeforeParen() {
             var s = translateOk("(hello) AND NOT(world)");
             assertThat(s.requiresExclusionCheck()).isTrue();
-            assertThat(s.exclusionRegexs().getFirst()).isEqualTo("world");
+            assertThat(s.exclusionRegexs().getFirst()).isEqualTo("\\bworld\\b");
         }
 
         @Test
@@ -327,9 +327,9 @@ class TermSyntaxTranslatorTest {
         void nestedFollowedByInsideAndNotExclusion() {
             var s = translateOk("(hello) AND NOT(((a OR b) FOLLOWEDBY{1} (c OR d)) FOLLOWEDBY{1} (e OR f))");
             assertThat(s.exclusionRegexs()).hasSize(1);
-            assertThat(s.exclusionRegexs().getFirst()).contains("(?:a|b)").contains("(?:c|d)").contains("(?:e|f)");
+            assertThat(s.exclusionRegexs().getFirst()).contains("(?:\\ba\\b|\\bb\\b)").contains("(?:\\bc\\b|\\bd\\b)").contains("(?:\\be\\b|\\bf\\b)");
             assertThat(s.resolvedPattern()).isEqualTo(
-                    "hello AND NOT ((?:a|b) FOLLOWEDBY{1} (?:c|d) FOLLOWEDBY{1} (?:e|f))");
+                    "\\bhello\\b AND NOT ((?:\\ba\\b|\\bb\\b) FOLLOWEDBY{1} (?:\\bc\\b|\\bd\\b) FOLLOWEDBY{1} (?:\\be\\b|\\bf\\b))");
         }
 
         @Test
@@ -364,7 +364,7 @@ class TermSyntaxTranslatorTest {
         @DisplayName("REPORTED: NOT as the first word of a phrase is literal text, not an operator")
         void notStartingAPhraseIsLiteral() {
             var s = translateOk("(NOT LAUNCHING)");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("NOT LAUNCHING");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("\\bNOT LAUNCHING\\b");
         }
 
         @Test
@@ -373,7 +373,7 @@ class TermSyntaxTranslatorTest {
         void reportedOrGroupWithLeadingNotWords() {
             var s = translateOk("((disintermediate*) OR (NOT LAUNCHING) OR (NOT TO LAUNCH THE PRODUCT))");
             assertThat(s.hsPatterns().getFirst())
-                    .isEqualTo("(?:disintermediate\\S*|NOT LAUNCHING|NOT TO LAUNCH THE PRODUCT)");
+                    .isEqualTo("(?:\\bdisintermediate\\S*|\\bNOT LAUNCHING\\b|\\bNOT TO LAUNCH THE PRODUCT\\b)");
         }
 
         @Test
@@ -399,14 +399,14 @@ class TermSyntaxTranslatorTest {
                 + "there is no left-hand expression for it to negate")
         void leadingNotAtTermStartIsLiteral() {
             var s = translateOk("NOT confidential");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("NOT confidential");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("\\bNOT confidential\\b");
         }
 
         @Test
         @DisplayName("NOT is literal after OR too, when nothing else looks like an operator position")
         void notAfterOrIsLiteral() {
             var s = translateOk("A OR NOT B");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:A|NOT B)");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("(?:\\bA\\b|\\bNOT B\\b)");
         }
 
         @Test
@@ -506,33 +506,33 @@ class TermSyntaxTranslatorTest {
                 + "flattening it indistinguishably from a left-associative chain")
         void nearNestedAsRightOperand_resolvedPatternsRetainsGrouping() {
             var s = translateOk("(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)");
-            assertThat(s.hsPatterns()).containsExactly("(?:manipulate|front run)", "(?:price|spread)", "stock");
+            assertThat(s.hsPatterns()).containsExactly("(?:\\bmanipulate|\\bfront run)", "(?:\\bprice|\\bspread)", "\\bstock");
             assertThat(s.resolvedPattern()).isEqualTo(
-                    "(?:manipulate|front run) NEAR{5} ((?:price|spread) NEAR{5} stock)");
+                    "(?:\\bmanipulate|\\bfront run) NEAR{5} ((?:\\bprice|\\bspread) NEAR{5} \\bstock)");
         }
 
         @Test
         @DisplayName("Same shape with FOLLOWEDBY on both levels")
         void followedByNestedAsRightOperand_resolvedPatternsRetainsGrouping() {
             var s = translateOk("(a OR b) FOLLOWEDBY{5} ((c OR d) FOLLOWEDBY{3} e)");
-            assertThat(s.resolvedPattern()).isEqualTo("(?:a|b) FOLLOWEDBY{5} ((?:c|d) FOLLOWEDBY{3} e)");
+            assertThat(s.resolvedPattern()).isEqualTo("(?:\\ba\\b|\\bb\\b) FOLLOWEDBY{5} ((?:\\bc\\b|\\bd\\b) FOLLOWEDBY{3} \\be\\b)");
         }
 
         @Test
         @DisplayName("Left-nested chaining (implicit or explicit) is UNCHANGED — still flat, no extra parens")
         void leftNestedChain_staysFlat() {
             var chained = translateOk("(a) NEAR{5} (b) NEAR{5} (c)");
-            assertThat(chained.resolvedPattern()).isEqualTo("a NEAR{5} b NEAR{5} c");
+            assertThat(chained.resolvedPattern()).isEqualTo("\\ba\\b NEAR{5} \\bb\\b NEAR{5} \\bc\\b");
 
             var explicit = translateOk("((a) NEAR{5} (b)) NEAR{5} (c)");
-            assertThat(explicit.resolvedPattern()).isEqualTo("a NEAR{5} b NEAR{5} c");
+            assertThat(explicit.resolvedPattern()).isEqualTo("\\ba\\b NEAR{5} \\bb\\b NEAR{5} \\bc\\b");
         }
 
         @Test
         @DisplayName("Right-nesting three levels deep wraps each nested level in its own parentheses")
         void deeplyRightNested_wrapsEachLevel() {
             var s = translateOk("(a) NEAR{5} ((b) NEAR{4} ((c) NEAR{3} (d)))");
-            assertThat(s.resolvedPattern()).isEqualTo("a NEAR{5} (b NEAR{4} (c NEAR{3} d))");
+            assertThat(s.resolvedPattern()).isEqualTo("\\ba NEAR{5} (\\bb NEAR{4} (\\bc NEAR{3} \\bd))");
         }
     }
 
@@ -687,14 +687,14 @@ class TermSyntaxTranslatorTest {
         @DisplayName("lowercase 'or' is literal text, not the OR operator")
         void lowercaseOrIsLiteral() {
             var s = translateOk("(price or spread)");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("price or spread");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("\\bprice or spread\\b");
         }
 
         @Test
         @DisplayName("lowercase 'and' is literal text")
         void lowercaseAndIsLiteral() {
             var s = translateOk("(rock and roll)");
-            assertThat(s.hsPatterns().getFirst()).isEqualTo("rock and roll");
+            assertThat(s.hsPatterns().getFirst()).isEqualTo("\\brock and roll\\b");
         }
 
         @Test
@@ -1193,7 +1193,7 @@ class TermSyntaxTranslatorTest {
         void bondAndNotJamesBond_valid() {
             var s = translateOk("bond AND (NOT (james bond))");
             assertThat(s.requiresExclusionCheck()).isTrue();
-            assertThat(s.hsPatterns()).containsExactly("bond");
+            assertThat(s.hsPatterns()).containsExactly("\\bbond\\b");
             assertThat(s.exclusionRegexs().getFirst()).contains("james bond");
         }
 
@@ -1226,11 +1226,11 @@ class TermSyntaxTranslatorTest {
         void appleAndNotNearBanana_valid() {
             var s = translateOk("apple AND (NOT (apple NEAR{10} banana))");
             assertThat(s.requiresExclusionCheck()).isTrue();
-            assertThat(s.hsPatterns()).containsExactly("apple");
+            assertThat(s.hsPatterns()).containsExactly("\\bapple\\b");
             // Excluded side's NEAR is simple/safe, so it merges into ONE gap-embedded pattern.
             assertThat(s.exclusionRegexs()).hasSize(1);
-            assertThat(s.exclusionRegexs().getFirst()).contains("apple").contains("banana");
-            assertThat(s.resolvedPattern()).isEqualTo("apple AND NOT (apple NEAR{10} banana)");
+            assertThat(s.exclusionRegexs().getFirst()).contains("\\bapple\\b").contains("banana");
+            assertThat(s.resolvedPattern()).isEqualTo("\\bapple\\b AND NOT (\\bapple\\b NEAR{10} \\bbanana\\b)");
         }
 
         // ── Both spellings are equivalent ────────────────────────────────────────
@@ -1283,7 +1283,7 @@ class TermSyntaxTranslatorTest {
         @DisplayName("(NOT LAUNCHING) with no immediate '(' after NOT is still literal text, unaffected")
         void notAsLiteralWordUnaffected() {
             var s = translateOk("((disintermediate*) OR (NOT LAUNCHING) OR (NOT TO LAUNCH THE PRODUCT))");
-            assertThat(s.hsPatterns().getFirst()).contains("NOT LAUNCHING").contains("NOT TO LAUNCH THE PRODUCT");
+            assertThat(s.hsPatterns().getFirst()).contains("\\bNOT LAUNCHING\\b").contains("\\bNOT TO LAUNCH THE PRODUCT\\b");
         }
     }
 }

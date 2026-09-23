@@ -69,6 +69,55 @@ class ParseContext {
     private boolean needsUtf8 = false;
     private String exclusionRegex = null;
     private final List<String> warnings = new ArrayList<>();
+    private final boolean wordBoundaries;
+    private final boolean trailingBoundaries;
+
+    /**
+     * Whole-word matching enabled on both edges (the default) — see {@link #isWordBoundaries()}.
+     */
+    ParseContext() {
+        this(true, true);
+    }
+
+    ParseContext(boolean wordBoundaries) {
+        this(wordBoundaries, true);
+    }
+
+    /**
+     * @param wordBoundaries     whether {@link PatternCodeGenerator} wraps literal
+     *                           words/phrases in {@code \b...\b}. {@link TermSyntaxTranslator}
+     *                           passes {@code false} for a term containing any non-ASCII
+     *                           text, because that term's flags will include UCP, and
+     *                           Hyperscan rejects {@code \b} in UCP mode.
+     * @param trailingBoundaries whether the END edge of a literal gets its {@code \b}. Must be
+     *                           {@code false} for leaves that will be sub-expressions of a native
+     *                           {@code HS_FLAG_COMBINATION} (a decomposition-fallback term with no
+     *                           AND NOT): Hyperscan refuses a combination whose sub-expression ends
+     *                           in an assertion ("Have unordered match in sub-expressions" —
+     *                           verified for {@code \b}, {@code $} and {@code (?:\W|$)} alike),
+     *                           while a LEADING {@code \b} is accepted.
+     */
+    ParseContext(boolean wordBoundaries, boolean trailingBoundaries) {
+        this.wordBoundaries = wordBoundaries;
+        this.trailingBoundaries = trailingBoundaries;
+    }
+
+    /**
+     * @return true when the end edge of a literal may carry {@code \b} — see the constructor.
+     */
+    boolean isTrailingBoundaries() {
+        return trailingBoundaries;
+    }
+
+    /**
+     * @return true when literal words/phrases must match as whole words. The flag
+     * is decided once per term up front (not discovered during generation, like
+     * {@link #isNeedsUtf8()}) because a boundary already emitted into one leaf
+     * cannot be taken back once a LATER leaf turns out to need UCP.
+     */
+    boolean isWordBoundaries() {
+        return wordBoundaries;
+    }
 
     /**
      * Mark that a non-ASCII character was encountered.

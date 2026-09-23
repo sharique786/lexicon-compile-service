@@ -345,6 +345,50 @@ quotes mean "match this exactly," so `"he?d"` still matches only the literal
 text `he?d`, never a wildcard. Don't restore literal-`?` escaping for bare
 words as a "safety" cleanup — that is the bug this section describes fixing.
 
+### Literals match as WHOLE WORDS (`\b…\b`) — confirmed-fixed substring-match bug
+
+**Confirmed-fixed regression**: `PatternCodeGenerator` used to emit every word,
+phrase and quoted phrase as a bare literal, i.e. a plain substring search.
+`(righteous babe) OR (pd)` therefore matched "pd" inside "There are following
+**up**dates". `PatternCodeGenerator.withWordBoundaries` now wraps each
+`Word`/`Phrase`/`QuotedPhrase` leaf in `\b` on an edge **only when that edge's
+source character is an ASCII word character** (`[A-Za-z0-9_]`):
+
+- **A wildcard edge is the author's explicit substring opt-in** — `pd*` →
+  `\bpd\S*` (prefix), `*pd*` → `\S*pd\S*` (anywhere). A non-word edge
+  (`$100`, `u.s.`) also gets no `\b`, since `\b` between two non-word characters
+  would demand a word character that isn't there. Don't "fix" `bomb` no longer
+  matching "bombing" — that is the intended, requested behavior; `bomb*` is
+  how an author asks for it.
+- **Terms containing ANY non-ASCII text get no boundaries at all, plus a
+  non-fatal warning** (`TermSyntaxTranslator.translate`, decided once up front
+  via `PatternCodeGenerator.containsNonAscii`, carried as
+  `ParseContext.isWordBoundaries()`): non-ASCII text turns on UCP, and
+  Hyperscan rejects `\b` in UCP mode — the same constraint the
+  `toExpressionFlags` section below documents. Decided from the AST *before*
+  generation because a `\b` already emitted into one leaf can't be taken back
+  when a later leaf turns out to need UCP. A pure-CJK term has no ASCII edge,
+  so nothing is skipped and no warning is added.
+- **A TRAILING `\b` is rejected by Hyperscan inside a native `COMBINATION`**
+  ("Have unordered match in sub-expressions" — verified for `\b`, `$` and
+  `(?:\W|$)` alike; a LEADING `\b` is fine). So the decomposition-FALLBACK
+  leaves of a non-AND-NOT term — the only leaves that become COMBINATION
+  sub-expressions, here *and* in the Scanner Service — are generated with
+  `ParseContext.isTrailingBoundaries() == false`: start-of-word only, with a
+  warning saying so. Everything else (a single merged pattern, both sides of an
+  AND NOT) is a plain expression and gets both boundaries. `translate()` runs
+  `PatternDecomposer.decompose` twice for a non-AND-NOT term that splits: once
+  with full boundaries (supplies `resolvedPatterns` when the merged pattern is
+  used) and once combination-safe (the fallback leaves, and `resolvedPatterns`
+  when they're used — keeping the leaf byte-identity guarantee).
+
+**Cross-service impact**: `regexPattern`/`exclusionRegex`/`resolvedPatterns`
+now contain `\b`. Both downstream services compile these with their own
+Hyperscan/Java-regex, where `\b` is valid, but the Scanner Service must keep
+its own COMBINATION leaves free of trailing assertions if it ever generates
+leaves itself. `bomb` → `bombing` and similar substring hits stop matching for
+every existing lexicon term — a one-time behavior change to announce.
+
 ---
 
 ## The two confirmed Hyperscan bugs this codebase has already paid for

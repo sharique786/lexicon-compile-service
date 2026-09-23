@@ -48,7 +48,7 @@ class PatternDecomposerTest {
         var s = translateOk("price AND (insider NEAR{5} trading)");
         assertThat(s.hsPatterns()).hasSize(1);
         assertThat(s.hsPatterns().getFirst()).contains("price").contains("insider").contains("trading");
-        assertThat(s.resolvedPattern()).isEqualTo("price AND insider NEAR{5} trading");
+        assertThat(s.resolvedPattern()).isEqualTo("\\bprice\\b AND \\binsider\\b NEAR{5} \\btrading\\b");
     }
 
     @Test
@@ -57,7 +57,7 @@ class PatternDecomposerTest {
         var s = translateOk("price AND (insider FOLLOWEDBY{3} trading)");
         assertThat(s.hsPatterns()).hasSize(1);
         assertThat(s.hsPatterns().getFirst()).contains("price").contains("insider").contains("trading");
-        assertThat(s.resolvedPattern()).isEqualTo("price AND insider FOLLOWEDBY{3} trading");
+        assertThat(s.resolvedPattern()).isEqualTo("\\bprice\\b AND \\binsider\\b FOLLOWEDBY{3} \\btrading\\b");
     }
 
     @Test
@@ -76,7 +76,7 @@ class PatternDecomposerTest {
         var s = translateOk("a AND (b AND (c NEAR{2} d))");
         assertThat(s.hsPatterns()).hasSize(1);
         assertThat(s.hsPatterns().getFirst()).contains("a").contains("b").contains("c").contains("d");
-        assertThat(s.resolvedPattern()).isEqualTo("a AND b AND c NEAR{2} d");
+        assertThat(s.resolvedPattern()).isEqualTo("\\ba\\b AND \\bb\\b AND \\bc\\b NEAR{2} \\bd\\b");
     }
 
     @Test
@@ -105,7 +105,7 @@ class PatternDecomposerTest {
                 + "(wordO* OR wordP* wordQ OR wordR* wordS OR wordT))";
         var s = translateOk("price AND " + overBudgetNestedFollowedBy);
         assertThat(s.hsPatterns()).hasSize(4); // "price" + the 3 leaves the nested chain decomposes into
-        assertThat(s.hsPatterns().getFirst()).isEqualTo("price");
-        assertThat(s.resolvedPattern()).startsWith("price AND ");
+        assertThat(s.hsPatterns().getFirst()).isEqualTo("\\bprice");
+        assertThat(s.resolvedPattern()).startsWith("\\bprice AND ");
     }
 }

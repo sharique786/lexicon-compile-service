@@ -180,6 +180,16 @@ public final class TermSyntaxTranslator {
         if (rawExpression == null || rawExpression.isBlank()) {
             return TranslationResult.error("Term description is null or blank");
         }
+        if (rawExpression.indexOf('�') >= 0) {
+            // U+FFFD is what a UTF-8 decoder substitutes for bytes it could not decode — the term
+            // was already corrupted before it reached this service (e.g. a client or CSV saved in
+            // a legacy code page, so 'ü' arrived as '?'-like garbage). It would compile to PASS
+            // but can never match real text, so fail loudly instead of silently missing words.
+            return TranslationResult.error("Term contains the Unicode replacement character U+FFFD, "
+                    + "meaning it was mis-encoded before reaching this service. Re-send the request as "
+                    + "UTF-8 (JSON body with 'Content-Type: application/json; charset=UTF-8', CSV saved "
+                    + "as UTF-8). Term: '" + rawExpression + "'");
+        }
         try {
             String preprocessed = preprocess(rawExpression);
             log.debug("Translating: '{}'", preprocessed);

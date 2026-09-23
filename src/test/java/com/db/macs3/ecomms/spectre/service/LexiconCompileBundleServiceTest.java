@@ -405,6 +405,56 @@ class LexiconCompileBundleServiceTest {
     // ── Combined database integrity (round-trip load + scan) ───────────────────
 
     @Test
+    @Order(59)
+    @DisplayName("REPORTED: suffix wildcard 'contraba*' hits 'contraban' in the real serialized .hdb, "
+            + "alongside other terms, and still respects the whole-word start boundary")
+    void suffixWildcard_hitsInRealDatabase() throws IOException {
+        var req = request("wildcard_test", TermType.NATURAL_LANGUAGE,
+                term("pd"), term("contraba*"));
+        var bundle = bundleService.buildBundle(req);
+        var wildcard = bundle.jsonResponse().results().get(1);
+
+        assertThat(wildcard.isPass()).isTrue();
+        assertThat(bundle.hasDatabase()).isTrue();
+
+        try (Database db = Database.load(new ByteArrayInputStream(bundle.hyperscanDatabaseBytes()))) {
+            int id = wildcard.hyperscanExpressionId();
+            assertThat(scanMatchesIds(db, "Please review the contraban before the term sheet went out")).contains(id);
+            assertThat(scanMatchesIds(db, "CONTRABAND")).contains(id);
+            assertThat(scanMatchesIds(db, "anticontraband")).doesNotContain(id); // \b start boundary
+        }
+    }
+
+    @Test
+    @Order(59)
+    @DisplayName("REPORTED: an ASCII term ('launder') still hits Hebrew/CJK-mixed message text when the "
+            + "same combined .hdb also holds UCP-mode non-Latin terms, and those terms carry no \\b")
+    void mixedLanguageLexicon_asciiTermStillHits() throws IOException {
+        var req = request("mixed_lang", TermType.NATURAL_LANGUAGE,
+                term("launder"), term("股票"), term("שוק"), term("übergeh*"));
+        var bundle = bundleService.buildBundle(req);
+        var results = bundle.jsonResponse().results();
+
+        assertThat(results).allSatisfy(r -> assertThat(r.isPass()).isTrue());
+        assertThat(results.get(0).regexPattern()).containsExactly("\\blaunder\\b");
+        // non-ASCII terms: no \b (UCP rejects it) — a wrapped one would silently never hit
+        assertThat(results.get(1).regexPattern()).containsExactly("股票");
+        assertThat(results.get(2).regexPattern()).containsExactly("שוק");
+        assertThat(results.get(3).regexPattern()).containsExactly("übergeh\\S*");
+        assertThat(bundle.hasDatabase()).isTrue();
+
+        String message = "מניפולציה בשוק יכולה להניב רווחים גדולים. אנחנו יכולים להשתמש בזה לפני ההכרזה."
+                + "יש לי מידע על מסחר פנים שיכול להיות שימושי.\n"
+                + " Second line review retained launder while the order book 股票操纵市场";
+        try (Database db = Database.load(new ByteArrayInputStream(bundle.hyperscanDatabaseBytes()))) {
+            List<Integer> ids = scanMatchesIds(db, message);
+            assertThat(ids).contains(results.get(0).hyperscanExpressionId());  // launder
+            assertThat(ids).contains(results.get(1).hyperscanExpressionId());  // 股票
+            assertThat(ids).contains(results.get(2).hyperscanExpressionId());  // שוק (inside בשוק)
+        }
+    }
+
+    @Test
     @Order(60)
     @DisplayName("Combined DB round-trip: save() then load() reconstructs a working multi-pattern database")
     void combinedDatabaseRoundTrip() throws IOException {

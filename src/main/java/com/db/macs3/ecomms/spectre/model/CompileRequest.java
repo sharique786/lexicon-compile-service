@@ -9,6 +9,10 @@ import jakarta.validation.constraints.NotEmpty;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Legacy per-term request shape (with {@code riskDriverName}). No endpoint uses it any more — every
+ * endpoint takes {@link TypedCompileRequest}.
+ */
 public class CompileRequest {
 
     @NotBlank(message = "lexiconRuleName must not be blank")

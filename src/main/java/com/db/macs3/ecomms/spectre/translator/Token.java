@@ -1,22 +1,13 @@
 package com.db.macs3.ecomms.spectre.translator;
 
 /**
- * A single lexical token produced by {@link Tokenizer}.
+ * A lexical token produced by {@link Tokenizer}. {@link ExpressionParser} works only with this
+ * validated token stream, never with raw string indexes, so quote and parenthesis handling
+ * lives in exactly one place.
  *
- * <p>Using a real token stream (rather than repeated raw-index string
- * scanning) is the structural fix for a whole class of bugs the previous
- * ad-hoc implementation had: every place that needed to "find the next
- * operator respecting parens and quotes" re-implemented that scan from
- * scratch with its own depth-counter and its own off-by-one risk. Here it
- * is done exactly once, in {@link Tokenizer}, and everything downstream
- * — {@link ExpressionParser} — works with validated, bounds-safe tokens.
- *
- * <p><b>Case sensitivity</b>
- * <p>{@link #OR}, {@link #AND}, {@link #AND_NOT}, {@link #NOT},
- * {@link #NEAR}, and {@link #FOLLOWEDBY} are recognised ONLY in exact
- * upper-case form, per the reserved-keyword requirement. {@code or}, {@code and},
- * {@code near}, {@code not}, {@code followedby} in any other case are tokenised
- * as ordinary {@link #WORD} text, not as operators.
+ * <p><b>Case sensitivity.</b> The reserved keywords {@code OR}, {@code AND}, {@code NOT},
+ * {@code NEAR} and {@code FOLLOWEDBY} are recognised only in exact upper case; {@code or},
+ * {@code and}, {@code near}, {@code not}, {@code followedby} are ordinary {@link Word} text.
  */
 public sealed interface Token {
 
@@ -39,19 +30,22 @@ public sealed interface Token {
     }
 
     /**
-     * The literal keyword {@code AND} (exact case) — NOT immediately followed by {@code NOT}.
+     * The keyword {@code AND} (exact case) not followed by {@code NOT}.
      */
     record And() implements Token {
     }
 
     /**
-     * The two-word literal keyword {@code AND NOT} (exact case), tokenised as a single unit.
+     * The two-word keyword {@code AND NOT} (exact case), tokenised as one unit. What follows
+     * {@code NOT} is irrelevant to recognising it, so {@code AND NOT(} and {@code AND NOT (} are
+     * the same.
      */
     record AndNot() implements Token {
     }
 
     /**
-     * The literal keyword {@code NOT} (exact case), or a leading {@code !}.
+     * The keyword {@code NOT} (exact case) standing on its own. {@link ExpressionParser} treats
+     * {@code NOT '('} as the unary exclusion group and any other position as literal text or an error.
      */
     record Not() implements Token {
     }

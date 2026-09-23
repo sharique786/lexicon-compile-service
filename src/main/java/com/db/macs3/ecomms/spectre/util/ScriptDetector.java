@@ -7,42 +7,34 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Detects the dominant Unicode script family in a text string and maps
- * it to a {@link ScriptType} that drives NEAR/FOLLOWEDBY gap-strategy
- * selection in the pattern builder.
+ * Detects the dominant Unicode script family of a text and maps it to a {@link ScriptType},
+ * which drives NEAR/FOLLOWEDBY gap selection in {@code MultiLanguagePatternBuilder}.
  *
- * <p><b>Detection mechanism</b>
- * <p>Uses ICU4J {@link UScript#getScript(int)} (already a project dependency
- * via {@code com.ibm.icu:icu4j}) rather than Java's built-in
- * {@link Character.UnicodeScript#of(int)}.  ICU4J covers more Unicode scripts,
- * handles supplementary-plane code points correctly, and is already used in
- * the codebase ({@code Normalizer2} in {@code TermSyntaxTranslator}).
+ * <p><b>Detection.</b> ICU4J {@link UScript#getScript(int)} classifies each code point. It covers
+ * more scripts than {@link Character.UnicodeScript} and handles supplementary-plane code points.
+ * Script detection is used rather than language identification because a statistical language
+ * model is unreliable on short lexicon terms and cannot separate Hangul from Han any better than
+ * code-point inspection does.
  *
- * <p><b>Priority resolution (most restrictive wins)</b>
+ * <p><b>Resolution — a single script family is checked before mixtures:</b>
  * <ol>
- *   <li><b>Pure single-script</b> — checked first so that "내부자" → HANGUL
- *       and "内幕" → CJK, not MIXED_CJK.</li>
- *   <li><b>Mixed space-free</b> — any CJK / Kana / Hangul / Thai forces
- *       MIXED_CJK (char-based gap) because the space-free side of the pair
- *       cannot rely on whitespace separators.</li>
- *   <li><b>Mixed RTL + space-delimited</b> → MIXED_RTL (word-based + UCP).</li>
- *   <li><b>Pure RTL</b> → ARABIC or HEBREW.</li>
- *   <li><b>Pure Latin / Indic / fallback</b> → LATIN / DEVANAGARI / MIXED.</li>
+ *   <li><b>Pure single script</b> — {@code 내부자} → HANGUL, {@code 内幕} → CJK, {@code ราคา} → THAI,
+ *       {@code السعر} → ARABIC, {@code מידע} → HEBREW, Indic → DEVANAGARI, plain Latin → LATIN.</li>
+ *   <li><b>Mixed, any space-free script</b> (CJK, Kana, Hangul, Thai) → {@link ScriptType#MIXED_CJK},
+ *       character gap: the space-free side cannot rely on whitespace.</li>
+ *   <li><b>Mixed RTL with Latin/Indic</b> → {@link ScriptType#MIXED_RTL}, word gap.</li>
+ *   <li><b>Any other mixture</b> (for example Arabic + Hebrew, or Latin + Indic) →
+ *       {@link ScriptType#MIXED}, the conservative character gap.</li>
  * </ol>
+ * Greek, Cyrillic, Armenian and Georgian are grouped with Latin; Tibetan is grouped with the
+ * Indic scripts, since it separates words with spaces. Other RTL scripts (Thaana, N'Ko, Samaritan,
+ * Mandaic) count as Arabic.
  *
- * <p><b>ASCII and regex metacharacters</b>
- * <p>Code points ≤ U+007F are skipped entirely so that regex fragments
- * such as {@code \\s+} or {@code \\x{4E00}} embedded in pattern strings
- * do not affect script classification.
- *
- * <p><b>Why not Apache Tika?</b>
- * <p>Tika's {@code LanguageDetector} identifies the <em>language</em>
- * (e.g. "zh", "ja", "ar") using statistical n-gram models.  It is unreliable
- * for short strings (fewer than ~20 characters) and cannot distinguish scripts
- * (e.g. Hangul vs. CJK) better than Unicode code-point inspection.  For our
- * gap-strategy selection Unicode script detection is the correct tool.
- * See {@link TikaLanguageSupport} for an optional complement that adds
- * language-level disambiguation (Chinese vs. Japanese) after script detection.
+ * <p><b>What is ignored.</b> Non-letter ASCII (digits, whitespace, punctuation, regex
+ * metacharacters) is skipped so regex fragments such as {@code \s+} in a generated pattern do not
+ * affect classification; ASCII letters count as LATIN, so {@code detectCombined("insider", "내부자")}
+ * is MIXED_CJK rather than HANGUL. Combining marks, zero-width joiners, directional marks and the
+ * BOM are skipped. Emoji, symbols and historic scripts are ignored.
  */
 public final class ScriptDetector {
 
@@ -156,25 +148,8 @@ public final class ScriptDetector {
     // ── Private: category scanning ─────────────────────────────────────────
 
     /**
-     * Walks every Unicode code point, maps each to a {@link Category}, and
-     * returns the set of distinct categories found.
-     *
-     * <p><b>ASCII handling — root cause of the "Latin + Korean → HANGUL" bug</b>
-     * <p>ASCII code points (≤ U+007F) fall into two groups:
-     * <ul>
-     *   <li><b>ASCII letters (a–z, A–Z)</b> — genuine Latin-script content.
-     *       Words like {@code "insider"} or {@code "price"} must register as
-     *       {@link Category#LATIN} so that
-     *       {@code detectCombined("insider", "내부자")} produces
-     *       {@code {LATIN, HANGUL}} → {@code MIXED_CJK}, not just
-     *       {@code {HANGUL}} → {@code HANGUL}.</li>
-     *   <li><b>Everything else ASCII</b> — digits, whitespace, punctuation,
-     *       and regex metacharacters ({@code ( ) ? : | + * . \ { }}) — are
-     *       ignored so they cannot pollute script detection.</li>
-     * </ul>
-     *
-     * <p>Non-ASCII combining marks (Mn, Mc) and zero-width control characters
-     * are also skipped so they do not pollute the result.
+     * Walks every code point, maps it to a {@link Category}, and returns the distinct categories found
+     * (see the class Javadoc for what is skipped).
      */
     private static Set<Category> scanCategories(String text) {
         Set<Category> found = EnumSet.noneOf(Category.class);
@@ -270,21 +245,10 @@ public final class ScriptDetector {
     }
 
     /**
-     * Maps the accumulated category set to the most appropriate
-     * {@link ScriptType} for gap-strategy selection.
-     *
-     * <p><b>KEY INVARIANT — pure cases are checked BEFORE mixed cases</b>
-     * <p>Previously the code returned {@code MIXED_CJK} for ALL inputs that
-     * contained any space-free script (CJK/Kana/Hangul/Thai), making the
-     * per-script cases permanently unreachable.  The fix is to test for
-     * a <em>single</em> script family before testing for mixtures — here,
-     * "single script family" is exactly "the {@link #toPrimaryScripts}
-     * signal set has exactly one member".
-     *
-     * <p><b>Why INDIC does not count as space-free</b>
-     * <p>Devanagari, Tamil, Bengali, etc. use whitespace between words.
-     * They are handled like Latin for gap-strategy purposes (word-based gap)
-     * and must not trigger the char-based MIXED_CJK path.
+     * Maps the categories found to a {@link ScriptType}. An empty set is LATIN. A set that reduces to
+     * exactly one {@link PrimaryScript} is a pure script ({@link #pureScriptTypeFor}); anything else is
+     * a mixture ({@link #resolveMixedType}). Indic scripts are word-delimited, so they never trigger
+     * the character-gap path on their own.
      */
     private static ScriptType resolveType(Set<Category> found) {
         if (found.isEmpty()) {
@@ -351,15 +315,10 @@ public final class ScriptDetector {
     }
 
     /**
-     * The {@link ScriptType} for a text whose {@link #toPrimaryScripts}
-     * signal set has two or more members — a genuinely mixed-script text.
-     *
-     * <p>When a space-free script (CJK/Kana/Hangul/Thai) is present alongside
-     * anything else, char-based gap is mandatory (the space-free side cannot
-     * rely on whitespace). Otherwise, RTL mixed with a space-delimited script
-     * (Latin/Indic) still gets a word-based gap, just with UTF8+UCP required.
-     * Every remaining mixed combination (multiple RTL scripts, or Latin+Indic)
-     * falls back to the conservative word-based {@link ScriptType#MIXED}.
+     * The {@link ScriptType} for a text with two or more primary scripts: {@code MIXED_CJK} when any
+     * space-free script is present; else {@code MIXED_RTL} for RTL with Latin/Indic; else
+     * {@code MIXED} (for example two RTL scripts, or Latin + Indic). {@code MIXED_CJK} and
+     * {@code MIXED} use a character gap; {@code MIXED_RTL} uses a word gap.
      */
     private static ScriptType resolveMixedType(Set<PrimaryScript> signals) {
         boolean hasSpaceFree = signals.contains(PrimaryScript.CJK)
@@ -406,7 +365,7 @@ public final class ScriptDetector {
         return hasAnyRtl && !hasNonRtl;
     }
 
-    /*
+    /**
      * Returns {@code true} for Unicode code points that should be ignored
      * during script detection:
      * <ul>

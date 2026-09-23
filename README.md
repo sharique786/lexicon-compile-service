@@ -1,752 +1,108 @@
 # Lexicon Compile Service
 
 Translates compliance lexicon terms — written in a custom, human-authored
-operator language, or supplied as raw regex — into Hyperscan-validated PCRE
-patterns, and (via `/compile/bundle`) into a single combined Hyperscan
-database ready for the Lexicon Scan Engine to load and scan against
-directly.
+operator language, or supplied as raw regular expressions — into
+Hyperscan-validated PCRE patterns, and (through one endpoint) into a single
+combined, serialised Hyperscan database that the Lexicon Scan Engine loads and
+scans against directly.
 
-Base package: `com.db.macs3.ecomms.spectre`
-Stack: Spring Boot 4.0.6, Jakarta EE 10, **JDK 21** (virtual threads for
-request handling), Intel Hyperscan 5.4.0-2.0.0 via `com.gliwka.hyperscan`,
-ICU4J 73.2 for Unicode script detection.
+|                |                                                                                      |
+|----------------|--------------------------------------------------------------------------------------|
+| Base package   | `com.db.macs3.ecomms.spectre`                                                        |
+| Stack          | JDK 21 (virtual threads), Spring Boot 4 (parent `4.1.0` in `pom.xml`), Jakarta EE     |
+| Regex engine   | Intel Hyperscan via `com.gliwka.hyperscan` **5.4.0-2.0.0** (native library bundled)   |
+| Script support | ICU4J 73.2 for Unicode script detection and NFC normalisation                          |
+| Deployed on    | GCP Cloud Run (`Dockerfile`, profile `cloud-run`)                                     |
 
-This is the **upstream-most** of three services in this platform — the
-Lexicon Scanner Service and Lexicon Scan Engine both consume this service's
-output and never feed back into it.
+This is the **upstream-most** of three services. The Lexicon Scanner Service
+(consumes `/compile` and `/compile/csv`, JSON only) and the Lexicon Scan Engine
+(consumes `/compile/bundle`, both the `.hdb` and the JSON) read this service's
+output and never feed back into it. The three are separate Maven projects with
+no shared code, so a change to the response shape or to how terms are split
+needs a matching check in both — see [Consuming the output](#consuming-the-output).
 
 ---
 
 ## Table of contents
 
-1. [Architecture — the translation pipeline](#architecture--the-translation-pipeline)
-2. [The operator language](#the-operator-language)
-3. [Character-based vs. word-based lexicon terms](#character-based-vs-word-based-lexicon-terms)
-4. [Complex terms: decomposition, not rejection](#complex-terms-decomposition-not-rejection)
-5. [Hyperscan flags](#hyperscan-flags)
-6. [The expression id scheme (`/compile/bundle`)](#the-expression-id-scheme-compilebundle)
-7. [Regex-type terms](#regex-type-terms)
-8. [Validation rules and error catalog](#validation-rules-and-error-catalog)
-9. [API reference](#api-reference)
-10. [Configuration reference](#configuration-reference)
-11. [Build & test](#build--test)
-12. [Known limitations](#known-limitations)
+1. [Quick start](#quick-start)
+2. [Endpoints at a glance](#endpoints-at-a-glance)
+3. [Request format](#request-format)
+4. [The operator language](#the-operator-language)
+5. [How a term is compiled](#how-a-term-is-compiled)
+6. [Character-based vs. token-based (word-based) terms](#character-based-vs-token-based-word-based-terms)
+7. [Language and text handling](#language-and-text-handling)
+8. [Hyperscan flags](#hyperscan-flags)
+9. [Response format](#response-format)
+10. [Consuming the output](#consuming-the-output)
+11. [Endpoint reference](#endpoint-reference)
+12. [Regex-type terms](#regex-type-terms)
+13. [Validation rules and error catalog](#validation-rules-and-error-catalog)
+14. [Warnings (log-only)](#warnings-log-only)
+15. [Configuration](#configuration)
+16. [Build, test and run](#build-test-and-run)
+17. [Known limitations and gotchas](#known-limitations-and-gotchas)
 
 ---
 
-## Architecture — the translation pipeline
+## Quick start
 
-```
-term description (raw text)
-  → Tokenizer               lexical analysis → List<Token>
-  → ExpressionParser        recursive-descent parser → Ast (sealed interface,
-                             8 node types: Or, And, AndNot, Near, FollowedBy,
-                             Word, Phrase, QuotedPhrase)
-  → PatternComplexityAnalyzer   estimates Hyperscan compiled-state cost
-                                 BEFORE Hyperscan ever sees the pattern
-  → PatternDecomposer        (only if over budget) splits into independent
-                             leaf patterns rather than rejecting the term
-  → PatternCodeGenerator     emits Hyperscan-compatible PCRE, delegating
-                             NEAR/FOLLOWEDBY gap construction to
-                             MultiLanguagePatternBuilder (script-aware)
-  → HyperscanCompiler.validate()   the REAL Hyperscan compiler has final say
+```bash
+mvn clean package
+java -jar target/lexicon-compile-service-*.jar          # profile "local", port 8080
 ```
 
-**Regex-type terms** (`requestType: "Regex"`) skip everything before the
-last step — the caller-supplied pattern is validated directly against
-Hyperscan, with flags still derived automatically from the pattern's own
-script content.
+Compile two terms:
 
-**Design principle, load-bearing throughout this codebase**: no stage ever
-hands a caller a pattern the real Hyperscan compiler hasn't validated. A
-term is `PASS` only because Hyperscan itself accepted the final pattern
-text — never because the AST "looked fine" or a heuristic said so.
-`TermSyntaxTranslator` is the class that owns this whole pipeline; every
-other translator class is a focused, independently-testable stage it calls.
+```bash
+curl -s -X POST http://localhost:8080/api/lexicon/compile \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "request_id": "550e8400-e29b-41d4-a716-446655440000",
+        "lexiconRuleName": "lexicon_research_1",
+        "requestType": "Natural Language",
+        "terms": [
+          { "termId": "lexicon_research_1::1", "termDescription": "(righteous babe) OR (pd)" },
+          { "termId": "lexicon_research_1::2", "termDescription": "(manipulate) NEAR{5} ((price) OR (spread))" }
+        ]
+      }'
+```
 
-| Stage | Class | Responsibility |
-|---|---|---|
-| Lexing | `Tokenizer` | Raw text → token stream; rejects malformed `NEAR{n}`/`FOLLOWEDBY{n}`, unbalanced parens/quotes, meaningless input |
-| Parsing | `ExpressionParser` | Tokens → `Ast`; enforces grammar (operator precedence, AND operand ceiling, `NOT` only immediately followed by a parenthesised group and only as a later operand of `AND` — never standalone, though it's fine as an ordinary literal word) |
-| Complexity estimate | `PatternComplexityAnalyzer` | Pre-Hyperscan heuristic score deciding whether to attempt decomposition |
-| Decomposition | `PatternDecomposer` | Splits an over-budget NEAR/FOLLOWEDBY tree into independent leaves |
-| Code generation | `PatternCodeGenerator` | `Ast` → PCRE string(s), delegating proximity gaps to `MultiLanguagePatternBuilder` |
-| Script detection | `ScriptDetector` | ICU4J-based Unicode script classification driving gap strategy + Hyperscan flags |
-| Gap/flag construction | `MultiLanguagePatternBuilder` | NEAR/FOLLOWEDBY gap patterns, adaptively narrowed against real Hyperscan when needed |
-| Validation | `HyperscanCompiler` | Real Hyperscan compile of every candidate pattern; also builds the combined `/compile/bundle` database |
-| Combination logic | `HyperscanCombinationHandler` | Decides QUIET/COMBINATION vs. plain-expression handling per term, for `/compile/bundle` only |
-| Orchestration | `TermSyntaxTranslator` | Owns the whole pipeline for one term; the only class allowed to trigger decomposition fallback |
+Build the scan-ready database (returns a zip):
+
+```bash
+curl -s -X POST http://localhost:8080/api/lexicon/compile/bundle \
+  -H 'Content-Type: application/json' -d @request.json -o lexicon_research_1-compile-bundle.zip
+```
+
+Health: `GET /api/lexicon/health` (static info) and `GET /actuator/health` (compiles a probe
+pattern to prove the native library works).
 
 ---
 
-## The operator language
+## Endpoints at a glance
 
-Every Natural Language term description passes through the pipeline above.
-
-### Operators
-
-| Operator | Meaning | Example |
-|---|---|---|
-| `OR` | Any operand matches | `price OR spread` |
-| `AND` | All operands co-occur anywhere in the message, in any order, unbounded distance | `insider AND announcement AND price` |
-| `AND NOT` | Required side matches AND the excluded side(s) do not — see below | `insider AND NOT (disclosed)` or `insider AND (NOT (disclosed))` |
-| `NEAR{n}` | Operands within `n` words/characters of each other, **either order** | `(crap OR bad) NEAR{3} (bonus OR comp)` |
-| `FOLLOWEDBY{n}` | Left operand, then right operand, within `n` words/characters, **left-to-right order only** | `don't FOLLOWEDBY{3} compliance` |
-| `*` (suffix/prefix) | Wildcard — `chimp*` → `chimp\S*`, `*handler` → `\S*handler` | |
-| `?` | Always a literal character, never a live regex quantifier — `he?d kill` matches the literal text `he?d kill` | |
-| `"..."` | Quoted phrase — content taken literally, including any `*`/`?` inside (never wildcard-expanded) | `"do not share"` |
-
-`n` in `NEAR{n}`/`FOLLOWEDBY{n}` must be a **whole number from 1 to 50**,
-written with no leading zero and no comma-separated range, immediately
-after the keyword with **no whitespace** before the `{`
-(`Tokenizer.validateProximityDistance`, `MAX_PROXIMITY_DISTANCE = 50`).
-Every rejected form gets a specific, actionable error — see
-[Validation rules](#validation-rules-and-error-catalog).
-
-Reserved keywords (`OR`, `AND`, `NOT`, `NEAR`, `FOLLOWEDBY`) are recognised
-**only in exact upper case** — `near` or `Or` are ordinary literal text.
-
-### Bracket resolution and phrase wrapping
-
-Brackets resolve innermost-first, at any nesting depth, including
-redundant wrapping (`(((me) OR (cking)))` resolves the same as `me OR cking`)
-— this falls out of `ExpressionParser`'s ordinary recursive descent, not a
-separate "strip outer parens" pass. A multi-word phrase does **not**
-strictly require explicit parentheses — an unwrapped phrase like
-`insider trading OR market manipulation` is accepted as an implicit phrase
-group (`bomb this place` → one literal `Ast.Phrase`) — but wrapping is
-still recommended for clarity beyond the simplest case.
-
-### `AND`: corrected co-occurrence semantics
-
-`A AND B AND C` compiles directly into **one** self-contained pattern
-covering every ordering permutation of the operands, joined by an
-unbounded gap (`[\s\S]*`) — the same bidirectional-alternation technique
-`NEAR` uses for a *bounded* gap, just unbounded. `price AND rigging`
-compiles to `(?:price[\s\S]*rigging|rigging[\s\S]*price)`, which matches
-"price... rigging" or "rigging... price" anywhere apart, but never matches
-a message containing only one of the two. No lookaround (Hyperscan has
-none), no post-filter, no scan-time cooperation needed. `requiresExclusionCheck`
-is always `false` for a plain `AND` term — it needs no exclusion side.
-
-A single `AND`/`AND NOT`-required level is capped at **5 operands**
-(`ParseContext.MAX_AND_OPERANDS`) — `generateAnd` enumerates every
-ordering (`N!` permutations), so operand count directly controls pattern
-size; beyond 5 that's already 120 permutations, reliably too large for
-Hyperscan. Exceeding this is a translation-time rejection, not a
-Hyperscan-time surprise.
-
-### `AND NOT`: a two-list contract, not a single regex
-
-Hyperscan supports no negative lookaround, so "A but not B" cannot be one
-pattern. `AND NOT` always produces **two** independently Hyperscan-valid
-pattern lists:
-
-- `regexPattern` — the required side (A)
-- `exclusionRegex` — the excluded side (B), non-null only when
-  `requiresExclusionCheck` is `true`
-
-Chained exclusions (`A AND NOT B AND NOT C`) are combined into **one**
-excluded side (`B OR C`) before translation — one exclusion check, not a
-chain of them.
-
-**What a caller does with the two lists differs by endpoint — read this
-carefully, the behavior changed from an earlier design:**
-
-- **`/compile` and `/compile/csv`** — the caller (e.g. the Lexicon Scanner
-  Service) compiles every pattern in both lists itself and combines the
-  boolean results in application code: matched iff every entry of
-  `regexPattern` matches, AND the excluded condition (every entry of
-  `exclusionRegex` found — same AND convention as the required side) is
-  **not** fully satisfied.
-- **`/compile/bundle`** — **every required and excluded pattern compiles
-  as its own plain, individually-reportable Hyperscan expression** — never
-  QUIET, never a native `HS_FLAG_COMBINATION`. `hyperscanExpressionId` is
-  `null` for an AND NOT term; `requiredExpressionIds`/`excludedExpressionIds`
-  are populated instead (one id per pattern). The caller must evaluate the
-  boolean condition itself, **after the whole scan completes**, from the
-  complete matched-id set the scan returns.
-
-  **Why not native `HS_FLAG_COMBINATION` here, given it *is* used for
-  plain decomposition?** Confirmed unsafe via Hyperscan's own
-  documentation: a combination expression "raises matches at every offset
-  where one of its sub-expressions matches and the logical value of the
-  whole expression is true" — evaluated **eagerly and progressively**
-  during the scan, not once at the end. Hyperscan's changelog documents a
-  special end-of-data deferral for *purely negative* combinations only —
-  `R&!E` also needs the positive `R`, so it does not qualify. If `R`
-  matches before `E` has even been *reached* by the scan (not confirmed
-  absent — merely not yet seen), `!E` reads true at that instant and the
-  combination fires immediately and incorrectly, before `E` had any chance
-  to appear later in the same text. This was an earlier (now-replaced)
-  design of this service; the current one avoids it entirely for any term
-  where `requiresExclusionCheck` is true, regardless of whether either
-  side was decomposed. Pure decomposition (no AND NOT) has no such
-  ambiguity — no negation, so it's unaffected and still uses native
-  `COMBINATION`. See `HyperscanCombinationHandler` class Javadoc for the
-  full history.
-
-**Nested `AND NOT` is rejected, not silently mishandled.** `AND NOT`
-grammatically parses anywhere a parenthesised group is legal — e.g.
-`(A AND NOT B) NEAR{5} C`, or even `X OR Y AND NOT Z` with no parentheses
-at all. `TermSyntaxTranslator.rejectNestedAndNot()` walks the whole AST
-and throws a `TranslationException` naming the term for any `AndNot` found
-anywhere except the root. This is deliberate, not a missing feature —
-auto-hoisting a nested exclusion to the top level would silently change
-what the term means (an exclusion the author scoped to one operand of a
-`NEAR` would become term-wide instead). Rewrite the term with `AND NOT` at
-the outermost level, e.g. `(A NEAR{n} C) AND NOT B`.
-
----
-
-## `resolvedPatterns`: NEAR/FOLLOWEDBY/AND NOT are no longer compiled into regex
-
-**Read this before the two sections below** — they now describe historical
-behavior for one narrow residual case, not the general path.
-
-`NEAR{n}`/`FOLLOWEDBY{n}` used to be compiled into a single Hyperscan
-pattern with the gap embedded literally. This was fragile — CJK/Thai/Hangul
-terms multiplied the author's distance by a per-script `avgCharsPerWord`
-factor, frequently producing a gap Hyperscan couldn't compile ("Pattern is
-too large"). **Now, NEAR/FOLLOWEDBY splitting is unconditional** (not a
-complexity-triggered fallback), and the gap is never compiled into regex
-for the split case — not even as a leaf prefix. Instead, the relationship
-is conveyed as literal keyword text, using the author's raw distance, in a
-new response field: `resolvedPatterns`.
-
-```
-Input: "((bash)) FOLLOWEDBY{30} ((fuck) OR (fck))"
-  regexPattern:     ["bash", "(?:fuck|fck)"]
-  resolvedPatterns: "bash FOLLOWEDBY{30} (?:fuck|fck)"
-
-Input: "(insider AND NOT ((wordA word B OR wordC* wordD OR wordE* wordF OR wordG)
-         FOLLOWEDBY{2} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)
-         FOLLOWEDBY{2} (wordO* OR wordP* wordQ OR wordR* wordS OR wordT)))"
-  regexPattern:     ["insider"]
-  exclusionRegex:   ["(?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG)",
-                      "(?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN)",
-                      "(?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT)"]
-  resolvedPatterns: "insider AND NOT ((?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG)
-                      FOLLOWEDBY{2} (?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN)
-                      FOLLOWEDBY{2} (?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT))"
-
-Input: "(ihr Gespräch OR Gespraech OR *reden) NEAR{30} (threema OR threema messenger OR threema IM)"
-  regexPattern:     ["(?:ihr Gespräch|Gespraech|\\S*reden)", "(?:threema|threema messenger|threema IM)"]
-  resolvedPatterns: "(?:ihr Gespräch|Gespraech|\\S*reden) NEAR{30} (?:threema|threema messenger|threema IM)"
-```
-
-Always exactly **one string** per term (never a list, despite the plural
-name) — every leaf substring inside it is byte-identical to the
-corresponding `regexPattern`/`exclusionRegex` entry, in the same order.
-Populated across **all three endpoints** (unlike `hyperscanExpressionId`/
-`patternMapping`, which stay `/compile/bundle`-only). `patternMapping` is
-unchanged and stays additive alongside it — a caller that only needs
-presence/AND-NOT boolean logic keeps using `patternMapping`; a caller that
-needs the actual proximity relationship reads `resolvedPatterns`.
-
-A downstream Java-regex-based consumer (Lexicon Scan Engine / Lexicon
-Scanner Service — not part of this repo) tokenizes `resolvedPatterns` and
-re-applies the proximity/AND-NOT logic itself. See
-`src/test/java/.../ResolvedPatternMatcher.java` for a reference
-implementation of exactly that technique, and
-`ResolvedPatternMatchingIntegrationTest` for it proven end-to-end against
-real compile-service output — both are a required, intentional deliverable
-of this feature, a blueprint for the other two services, not incidental
-test coverage.
-
-**One case is deliberately excluded from unconditional splitting**: a
-NEAR/FOLLOWEDBY nested *inside* an `OR` (as one alternative sibling to
-others, e.g. `"(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"` — real,
-currently-used functionality) cannot be flattened into a flat AND'd leaf
-list without changing what `OR` means. This one case still compiles as a
-single gap-embedded pattern exactly as described in the next two sections
-— they remain live for it.
-
-`AND` is flattened (not left opaque) when one of its operands contains
-NEAR/FOLLOWEDBY structure — lossless, since `AND`'s own "all present, any
-order, unbounded distance" semantics is already equivalent to flat
-independent presence. A plain `AND` with no nested proximity is completely
-unaffected — still one self-contained permutation pattern.
-
----
-
-## Character-based vs. word-based lexicon terms — now only for OR-nested proximity
-
-The mechanism below still exists and is still correct, but as of
-`resolvedPatterns` (above) it is reachable **only** via the one excluded
-case — a NEAR/FOLLOWEDBY nested inside a multi-operand `OR`. For every
-other NEAR/FOLLOWEDBY, no gap is ever computed at all.
-
-`ScriptDetector` classifies the dominant Unicode script family of each
-operand (via ICU4J `UScript`, not Java's built-in `Character.UnicodeScript`,
-for broader coverage and correct supplementary-plane/emoji handling). This
-drives both the Hyperscan flags (below) and, for `NEAR`/`FOLLOWEDBY`, which
-of two fundamentally different gap strategies `MultiLanguagePatternBuilder`
-uses:
-
-| Gap strategy | Scripts | Pattern |
-|---|---|---|
-| **Word-based** | Latin, Arabic, Hebrew, Devanagari (and other space-delimited Indic scripts: Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala, Tibetan) | `(?:\s+\S+){0,n}\s+` — up to `n` intervening whitespace-delimited words |
-| **Character-based** | CJK (Chinese/Japanese Kanji), Kana, Hangul (Korean), Thai/Lao/Myanmar | `[\s\S]{0,N}` where `N = n × avgCharsPerWord` (CJK/Kana: ×3, Hangul: ×5, Thai: ×6) |
-| **Character-based (forced)** | Any mix that includes a space-free script (CJK/Kana/Hangul/Thai) alongside anything else | `[\s\S]{0,N}`, `N = n × 4` — forced even when only one operand is space-free |
-| **Word-based** | Mixed RTL (Arabic/Hebrew) + Latin/Indic | `(?:\s+\S+){0,n}\s+` with UTF8+UCP — both sides use spaces |
-
-Korean gets character-based gap even though *formal* Hangul writing does
-use spaces between *eojeol* units — informal chat/SNS text frequently
-omits them, so character-based gap handles both cases safely. Arabic and
-Hebrew are stored in Unicode **logical order** (typed/read order,
-independent of visual rendering), so `A FOLLOWEDBY B` correctly means "A
-at a lower byte index than B" for purely RTL text with no special
-handling needed. `MultiLanguagePatternBuilder.buildFollowedBy` warns (does
-not fail) when operands mix RTL and LTR script, since the "before"
-relationship may not match visual reading order in that case.
-
-### The static gap ceiling — and why it alone isn't enough
-
-Hyperscan rejects `[\s\S]{0,N}` (or the word-based equivalent) with
-**"Pattern is too large"** once `N` reaches the low-30s, regardless of
-script — confirmed empirically by bisection sweep against the real native
-library:
-
-| Constant | Class | Calibrated value | What it bounds |
+| Endpoint | Input | Output | Consumer |
 |---|---|---|---|
-| `MAX_CHAR_GAP` | `MultiLanguagePatternBuilder` | 30 | `[\s\S]{0,N}` — character-based gap |
-| `MAX_WORD_GAP` | `MultiLanguagePatternBuilder` | 29 | `(?:\s+\S+){0,N}\s+` — word-based gap |
+| `POST /api/lexicon/compile` | JSON `TypedCompileRequest` (plain or gzip) | JSON `CompileResponse` | Scanner Service |
+| `POST /api/lexicon/compile/csv` | multipart CSV upload | JSON `CompileResponse` (same shape) | Scanner Service |
+| `POST /api/lexicon/compile/bundle` | JSON `TypedCompileRequest` | `application/zip`: results JSON + `.hdb` (or `NO_DATABASE.txt`) | Scan Engine |
+| `GET /api/lexicon/health` | — | JSON engine/feature listing | — |
 
-This is the **same internal Hyperscan bounded-repeat state-count limit**
-in both cases — a property of `{0,N}` itself, not of what's inside the
-repeated group. When the raw formula width (`n × avgCharsPerWord + n` for
-char-based, or `n` itself for word-based) exceeds the ceiling, the gap is
-clamped and a warning is added describing the precision loss (matches
-requiring more intervening content than the clamped width will be missed).
+**HTTP 200 does not mean every term compiled.** A structurally valid request always gets 200;
+a term that fails is reported inside the response with `compilationStatus: "FAILED"`. Only a
+malformed *request* gets an error status — see [Validation rules](#validation-rules-and-error-catalog).
 
-**The static ceiling was calibrated against plain two-word operand
-pairs — a real lexicon term's operand is very often a wide `OR` group
-instead**, e.g. `((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR
-(记录))`. The extra alternation increases compiled automaton state count
-beyond what the two-word calibration covers — `[\s\S]{0,30}` sitting next
-to a wide alternation can still be rejected by real Hyperscan even though
-30 is safe for a plain pair.
-
-**When this happens, the gap is adaptively narrowed further — by actually
-test-compiling the term's real candidate pattern against the real
-Hyperscan native library, not just guessing.** Once the static ceiling
-would already apply (i.e. only in the regime that's actually at risk —
-see the performance note below), `MultiLanguagePatternBuilder` builds the
-*real* bidirectional NEAR / directional FOLLOWEDBY / decomposed-leaf shape
-at the clamped width, attempts a real Hyperscan compile, and if it fails,
-decrements the width and retries — down to a floor of 0 — until a width is
-found that compiles. The response's `warnings` entry reflects the actual
-final width used, not just the static clamp.
-
-**Performance note**: this adaptive trial-compile only triggers once the
-static formula width already exceeds the ceiling — an ordinary,
-comfortably-small-distance term (the overwhelming majority) pays for zero
-extra Hyperscan calls. Only a term whose raw requested distance is already
-large enough to need clamping pays for the extra compile(s), which is
-exactly the regime where "Pattern is too large" is actually a risk.
-
-### Language coverage
-
-Genuinely exercised: Korean, Japanese (Kanji + Kana), Chinese (Simplified
-+ Traditional), Arabic, Hebrew, Thai, German (umlauts), Turkish, Hindi/
-Devanagari, and emoji — including mixed-script terms in one operand (e.g.
-English + Korean + emoji). Script detection additionally recognises Greek,
-Cyrillic, Armenian, and Georgian (treated as Latin-family for gap
-strategy) and the other space-delimited Indic scripts listed above. Script
-classification only affects *gap strategy and flag selection* — any
-Unicode text (including scripts with no dedicated `ScriptType`) can appear
-in a term; unrecognised/symbol/emoji code points are simply excluded from
-script voting and the term falls back to Latin (word-based) treatment.
+Request bodies may be gzip-compressed (`Content-Encoding: gzip`, inflated by `GzipRequestFilter`);
+responses are gzip-compressed by Tomcat when the client sends `Accept-Encoding: gzip` and the body
+exceeds 1 KiB.
 
 ---
 
-## Complex terms: decomposition — now unconditional, not complexity-triggered
+## Request format
 
-`PatternDecomposer` is now the single, always-on path for ANY term
-containing NEAR/FOLLOWEDBY structure (except the OR-nested-proximity case
-above) — see the `resolvedPatterns` section at the top of this document.
-`PatternComplexityAnalyzer` no longer gates anything; it's kept in the
-codebase, unused/dormant, since the state-count reasoning below is still
-correct history and explains *why* Hyperscan's old gap-embedding approach
-was fragile in the first place.
-
-### Why "Pattern is too large" isn't about string length
-
-Hyperscan's "Pattern is too large" is a documented consequence of
-*compiled automaton state count*, not raw pattern string length — a
-190-character pattern can trigger it while much longer patterns compile
-fine. Empirically, the primary driver is **nesting depth**, not OR-branch
-width: a single-level `NEAR` over wide OR groups (18 and 8 alternatives,
-no nesting) compiled successfully, while a term with two *nested*
-`FOLLOWEDBY` operators over much narrower 4-alternative groups was
-rejected. One proximity operator whose operand is itself a proximity
-operator forces the automaton to track two independent gap-counters
-simultaneously — multiplicative, not additive.
-
-### `PatternComplexityAnalyzer` — dormant, no longer called
-
-Used to estimate this risk *before* Hyperscan ever sees the pattern and
-decide whether to pre-emptively decompose. As of `resolvedPatterns`
-(above), decomposition is unconditional, so nothing calls this class any
-more — kept in the repo for its historical reasoning, not deleted:
-
-- **Nesting penalty** — a NEAR/FOLLOWEDBY whose operand is itself a
-  NEAR/FOLLOWEDBY multiplies the expression's score by `(nestedDistance + 1)`.
-  A single-level proximity operator (neither operand nested) gets no
-  penalty.
-- **NEAR directionality factor (×2)** — NEAR generates both orderings;
-  FOLLOWEDBY only one.
-- **Wildcard weight** — a wildcard-containing word/phrase scores 2 instead
-  of 1 (its own unbounded internal branching compounds with surrounding
-  repetition).
-- **Char-gap penalty** — a proximity node under a character-based script
-  is additionally multiplied by its own effective gap width (the same
-  `effectiveGapWidth` `MultiLanguagePatternBuilder` uses), since a CJK
-  `NEAR{10}` compiles to an expensive `[\s\S]{0,N}` repeat that a plain
-  Latin `NEAR{10}` (cheap `(?:\s+\S+){0,10}\s+`) does not.
-
-`COMPLEXITY_BUDGET = 700` — calibrated against two known real Hyperscan
-outcomes (a PASS at raw score 480, a real FAILURE at 1470 once the nesting
-penalty applies). This is a heuristic, not a proof — see the Phase-2
-Hyperscan double-check below for how a wrong guess is still caught.
-
-### `PatternDecomposer`
-
-The single, unconditional path for any side containing NEAR/FOLLOWEDBY
-structure (except the OR-nested-proximity exception) — splits it into
-independent leaf patterns, in the SAME recursive pass that builds
-`resolvedPatterns`' literal-keyword text (so the two can never drift out of
-sync — see `resolvedPatterns` section above). A leaf is a maximal subtree
-that is not itself splittable further: an `Or`, a `Word`/`Phrase`/
-`QuotedPhrase`, or an `And` with no nested proximity of its own. `regexPattern`
-(or `exclusionRegex`, for the excluded side) then has multiple entries
-instead of one — there is no separate "was this split" boolean; a caller
-checks `regexPattern.size()`.
-
-**This is a real precision trade-off, always flagged in `warnings`, fully
-compensated by `resolvedPatterns`.** Split leaves are combined with pure
-boolean AND ("all of these appear somewhere in the message"), losing the
-NEAR/FOLLOWEDBY ordering/distance constraint *between* leaves — but unlike
-an earlier revision of this codebase, **no gap fragment is baked into any
-leaf's own pattern text any more, not even as a prefix**. The full
-relationship — including the author's raw, un-clamped distance — lives
-entirely in `resolvedPatterns` instead. For `(A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C`,
-splitting produces exactly `regexPattern = [A, B, C]` and
-`resolvedPatterns = "A FOLLOWEDBY{4} B FOLLOWEDBY{4} C"`.
-
-### Real Hyperscan still has final say
-
-Every leaf `PatternDecomposer` produces is validated against the real
-Hyperscan compiler before being accepted — this codebase's own long-standing
-principle that no stage ever hands Hyperscan a pattern the real compiler
-hasn't validated. A single leaf (no further NEAR/FOLLOWEDBY structure to
-split) that Hyperscan itself rejects — for any reason, including "too
-large" — is a hard translation failure: there's nothing further
-`PatternDecomposer` can do with it. A leaf naming a specific piece of text
-in its error message points the term's author at the exact part needing
-simplification (fewer OR-alternatives, less wildcard usage, or splitting
-into multiple lexicon terms).
-
----
-
-## Hyperscan flags
-
-Which `ExpressionFlag`s an expression gets is decided by which of **three
-mutually exclusive cases** it falls into (plus a fourth for the
-combination expression itself) — never by script content alone (content
-still narrows UTF8/UCP *within* case 3):
-
-| Case | Method | Flags |
-|---|---|---|
-| AND NOT — every required/excluded pattern, regardless of leaf count on either side | `HyperscanCompiler.toAndNotExpressionFlags()` | `CASELESS` only |
-| A leaf from a term with NEAR/FOLLOWEDBY structure, no AND NOT (feeds a native `COMBINATION`; unconditional now, not complexity-triggered — see `resolvedPatterns` above) | `HyperscanCompiler.toSubExpressionFlags()` | `CASELESS`, `QUIET` only |
-| Simple, single-pattern, non-AND-NOT PASS term (also the flag set `HyperscanCompiler.validate()` always uses for validation) | `HyperscanCompiler.toExpressionFlags(bitmask)` | `CASELESS`, `DOTALL`, `SOM_LEFTMOST` always; `UTF8`/`UCP` only when `bitmask` indicates non-Latin content |
-| The one combination expression per split (non-AND-NOT) term | `HyperscanCompiler.toCombinationExpressionFlags()` | `COMBINATION` only |
-
-`hyperscanFlags` in the JSON response is a narrower bitmask than the above
-— it only ever carries `1`=CASELESS, `32`=UTF8, `64`=UCP (e.g. `1` for a
-pure-Latin term, `97` for a CJK/Arabic/Hebrew term). `DOTALL`/`SOM_LEFTMOST`/
-`QUIET`/`COMBINATION` are structural — added at expression-construction
-time per the table above, never carried in this field.
-
-**UTF8/UCP stay conditional in the simple-term case only, on purpose —
-this was tried unconditionally first and reverted after two confirmed
-regressions:** (1) Hyperscan rejects `\b` (word boundary) when UCP is
-active, breaking any caller-supplied Regex-type term using it; (2) UCP
-mode measurably slows Hyperscan compilation even for plain-ASCII patterns
-(~15× in this project's own performance test). Without UCP, `\S+` only
-matches ASCII non-whitespace and silently skips Arabic/Hebrew/CJK — this
-is why any script needing UTF8 also needs UCP, never UTF8 alone. The AND
-NOT and pure-decomposition-leaf cases carry **no** conditional bits at all,
-even for non-Latin content — deliberate, not an oversight.
-
-**AND NOT deliberately does not get `SOM_LEFTMOST`**, even though it would
-be structurally *safe* there (AND NOT patterns are plain, never QUIET) —
-the case is scoped to `CASELESS` only regardless, a deliberate narrowing.
-
-**`SOM_LEFTMOST` + `QUIET` is a confirmed-incompatible combination** — hit
-as a real Hyperscan compile error early in this project's history. A
-plain simple-term expression (never QUIET) always safely gets
-`SOM_LEFTMOST`; a QUIET decomposition-leaf expression never does. There
-used to be a caller-facing `trackMatchPosition` request field letting a
-caller opt out of `SOM_LEFTMOST` — it was removed entirely, since which
-flags an expression may safely carry is a structural fact about its kind
-(one of the three cases above), never a per-request caller preference.
-
----
-
-## The expression id scheme (`/compile/bundle`)
-
-A **non-AND-NOT** PASS term's reportable Hyperscan expression id — whether
-it split into multiple leaves or not — is **always its own term number**,
-parsed from its `termId`'s `::<n>` suffix (`<lexicon_rule_name>::<term_number>`,
-e.g. `lexicon_research_1::1`). This is deliberate: a downstream consumer
-that already knows a term's number from the lexicon rule definition can
-predict its expression id **without reading the JSON response at all** —
-the `.hdb` file is self-sufficient for these terms. Note this scheme
-required **no code change** for the `resolvedPatterns` work — id allocation
-already discriminated purely on `regexPattern.size()`, never on *why*
-there was more than one entry, so it "just works" now that NEAR/FOLLOWEDBY
-splitting fires unconditionally instead of only when over budget.
-
-An **AND NOT** term has no single reportable id — `hyperscanExpressionId`
-is `null`; `requiredExpressionIds`/`excludedExpressionIds` are populated
-instead (one id per pattern in `regexPattern`/`exclusionRegex`
-respectively). Every QUIET sub-expression a split (non-AND-NOT) term's
-combination needs is assigned an id from a separate allocated range
-(`HyperscanCombinationHandler.computeIdOffset` = highest term number in
-the request + 1, handed out sequentially), which can never collide with a
-real term number.
-
-### `patternMapping` — the logical formula, whether or not the `.hdb` itself encodes it
-
-Populated only when a term needed **more than one** Hyperscan expression
-id (NEAR/FOLLOWEDBY structure, AND NOT, or both). A boolean formula over
-this term's expression ids, using the same `&`/`!` syntax Hyperscan's own
-`HS_FLAG_COMBINATION` formulas use. **Unchanged and additive alongside
-`resolvedPatterns`** (see above) — not superseded by it:
-
-| Case | `patternMapping` | Encoded natively in the `.hdb`? |
-|---|---|---|
-| Plain, single pattern, no AND NOT | *(null — nothing to map)* | — |
-| Split, no AND NOT | `(R1&R2&...&Rn)` | **Yes** — a real `COMBINATION` expression at `hyperscanExpressionId` (safe, no negation) |
-| AND NOT, neither side split | `(R&!E)` | **No** — every pattern is its own plain expression |
-| AND NOT, required side split | `(R1&R2&...&Rn&!E)` | **No** |
-| AND NOT, excluded side split | `(R&!(E1&E2&...&Em))` | **No** |
-| AND NOT, both sides split | `(R1&...&Rn&!(E1&...&Em))` | **No** |
-
-For an AND NOT term, `patternMapping` is the **only** place this formula
-is recorded — a consumer that loads just the `.hdb` (no JSON) cannot
-derive AND NOT semantics from the database alone; it must read
-`patternMapping` from this JSON and apply it itself, after the whole scan
-completes, against the complete matched-id set.
-
-Correctness for a decomposed excluded side requires De Morgan's law,
-applied explicitly: `NOT(E1 AND E2 AND ... AND Em) = (NOT E1) OR (NOT E2)
-OR ... OR (NOT Em)`. Decomposition combines leaves with AND ("all parts
-found"), so negating that condition is an OR of negations — otherwise a
-message missing only *one* of several decomposed exclusion leaves would
-incorrectly be treated as still excluded.
-
-### Term id validation — checked for the whole request before any term compiles
-
-Every `termId` in a `/compile/bundle` request must match `<rule>::<n>` for
-a non-negative integer `n`, and every `n` in one request must be unique —
-both validated up front (`LexiconCompileBundleService.validateTermIds`)
-before any term is compiled. A malformed or duplicate termId throws
-`InvalidTermIdException` (HTTP 400) naming every offending id — better
-than letting a silent Hyperscan id collision corrupt the combined
-database.
-
----
-
-## Regex-type terms
-
-`TypedCompileRequest.requestType` (`"Natural Language"` or `"Regex"`) is
-**request-level**, not per-term — a request can only submit one type of
-term; a mixed request must be split into two calls. A `Regex` term's
-`termDescription` is compiled **verbatim** — no operator-language
-translation runs at all. `NEAR{5}` in a Regex-type term is not
-translated; Hyperscan treats `{5}` as a literal PCRE repetition
-quantifier on whatever precedes it. Flags are still derived automatically
-via `ScriptDetector`, so a raw non-Latin regex gets correct UTF8/UCP
-without the caller needing to know Hyperscan's flag bitmask.
-`requiresExclusionCheck` is always `false` for Regex-type terms — `AND
-NOT` is part of the Natural Language operator language's own syntax; an
-arbitrary caller-supplied regex has no such two-pattern exclusion contract
-to participate in. `/compile` and `/compile/csv` also accept
-`requestType: "Regex"` (CSV terms are always Natural Language, since a CSV
-row has no `requestType` column).
-
----
-
-## Validation rules and error catalog
-
-Validation happens in layers — request shape, then lexical, then
-grammatical, then semantic/Hyperscan — and each layer fails with a
-specific, actionable message rather than an opaque downstream error.
-
-### 1. Request-shape validation (Jakarta Bean Validation, HTTP 400)
-
-| Field | Rule |
-|---|---|
-| `request_id` | must not be blank |
-| `lexiconRuleName` | must not be blank |
-| `requestType` | must be exactly `"Natural Language"` or `"Regex"` |
-| `terms` | must not be empty |
-| `terms[].termId` | must not be blank |
-| `terms[].termDescription` | must not be blank |
-
-A failure here never reaches term translation — see the error response
-shape under [API reference](#api-reference).
-
-### 2. Lexical validation (`Tokenizer`) — per term, translation-stage
-
-| Rule | Example rejected input |
-|---|---|
-| Term must contain at least one letter or digit (rejects pure-symbol input) | `#@$#%$`, `!!!`, `***` |
-| Parentheses must be balanced | `(fix NEAR{3} (rate)` / `fix NEAR{3} rate)` |
-| `()` empty parentheses not allowed | `()` |
-| Quoted phrase must be closed | `"unclosed phrase` |
-| `NEAR`/`FOLLOWEDBY` must be immediately followed by `{n}` with **no whitespace** | `NEAR {3}` |
-| `NEAR{n}`/`FOLLOWEDBY{n}`: `n` must be a **whole number from 1 to 50** | `NEAR{0}`, `NEAR{-1}`, `NEAR{51}`, `NEAR{05}`, `NEAR{abcd}`, `NEAR{3,6}` all rejected; `NEAR{1}` … `NEAR{50}` all accepted |
-
-### 3. Grammatical validation (`ExpressionParser`) — per term, translation-stage
-
-| Rule | Behavior |
-|---|---|
-| `NOT` not immediately followed by `(` (e.g. `apple NOT NEAR{10} banana`, `apple AND NOT NEAR{10} banana`, `apple AND NOT banana`) | Rejected — `NOT` must always be followed immediately by a parenthesised group |
-| `NOT (...)` with nothing preceding it at the same level (e.g. `NOT (james bond)` alone, or as the sole/first content of a parenthesised group with no other operand) | Rejected — `NOT` always needs a preceding required expression joined by `AND` |
-| `NOT (...)` used as an `OR` alternative, or as a `NEAR`/`FOLLOWEDBY` operand | Rejected — `NOT` is only ever valid as a later operand of `AND` |
-| `NOT (...)` as a later operand of `AND` (e.g. `bond AND (NOT (james bond))`, or the equivalent glued spelling `bond AND NOT (james bond)`) | **Accepted** — both spellings produce the identical required/excluded shape |
-| `NOT` starting a fresh atom, NOT immediately followed by `(` (the very first token of the term, or immediately after `(`, `OR`, `AND`, `AND NOT`, `NEAR{n}`, or `FOLLOWEDBY{n}`) | **Accepted** — treated as ordinary literal text, folded into whatever word/phrase run follows (e.g. `(NOT LAUNCHING)` → the literal phrase "NOT LAUNCHING") — see below |
-| AND operand ceiling | More than 5 operands at one `AND`/`AND NOT`-required level rejected |
-| Chained `NEAR`/`FOLLOWEDBY` without explicit parentheses (`A FOLLOWEDBY{5} B FOLLOWEDBY{6} C`) | **Accepted**, not rejected — parsed as left-associative nesting, with a warning recorded (kept for backward compatibility with existing lexicon terms) |
-| Malformed/unbalanced structure that doesn't match the grammar | Rejected with a generic "could not parse term" error naming the position |
-
-**`NOT` is always a unary prefix on a parenthesised group, and that group
-is always a later operand of `AND`** — never a standalone operator, never
-directly combinable with a proximity operator, and never usable on its own:
-
-```
-✓ bond AND (NOT (james bond))                — valid: NOT-group as an AND operand
-✓ apple AND (NOT (apple NEAR{10} banana))     — valid: NOT wraps an arbitrary sub-expression
-✓ apple AND NOT (banana)                      — valid: the "glued" spelling, same shape
-✗ NOT (james bond)                            — rejected: no preceding required expression
-✗ apple NOT NEAR{10} banana                   — rejected: NOT directly before a proximity operator
-✗ apple AND NOT NEAR{10} banana               — rejected: NOT not immediately followed by '('
-```
-
-**`NOT` as a word vs. `NOT` as an operator** — `NOT` starting a fresh atom
-with nothing immediately after it that looks like an operand it could
-negate (i.e. NOT immediately followed by `(`) is just literal text, folded
-into whatever word/phrase run follows:
-
-```
-((disintermediate*) OR (NOT LAUNCHING) OR (NOT TO LAUNCH THE PRODUCT))
-  → PASS: (?:disintermediate\S*|NOT LAUNCHING|NOT TO LAUNCH THE PRODUCT)
-    ("NOT" is literal in both OR-branches — it starts each phrase)
-
-price AND NOT (rigging OR change)
-  → required: price, excluded: (?:rigging|change)
-    ("NOT" immediately followed by '(', as a later AND operand — the operator form)
-```
-
-### 4. Semantic / Hyperscan-stage validation (`TermSyntaxTranslator`)
-
-| Rule | Behavior |
-|---|---|
-| Nested `AND NOT` anywhere except the term's AST root | Rejected — rewrite with `AND NOT` at the top level |
-| A side over budget with no NEAR/FOLLOWEDBY structure to decompose | Rejected — reduce OR-alternatives/wildcards or split into multiple terms |
-| A decomposed leaf still rejected by Hyperscan on its own | Rejected — that specific part needs simplifying |
-| A pattern Hyperscan rejects for a non-size reason (genuine syntax/semantic problem) | Rejected — Hyperscan's real error surfaced verbatim; decomposition is never attempted |
-| A pattern Hyperscan rejects as "too large" | **Not** rejected — falls back to decomposition automatically |
-
-### 5. `/compile/bundle`-specific validation
-
-| Rule | Behavior |
-|---|---|
-| Every `termId` must match `<rule>::<n>`, `n` a non-negative integer | `InvalidTermIdException` (HTTP 400) naming every malformed id |
-| Every `n` must be unique within the request | `InvalidTermIdException` (HTTP 400) naming the colliding term numbers |
-
-### 6. CSV-specific handling (`/compile/csv`) — lenient, not strict
-
-| Condition | Behavior |
-|---|---|
-| Header row (first column contains "term id", case-insensitive) | Auto-detected and skipped |
-| Blank line | Skipped silently |
-| Line starting with `#` | Skipped silently (comment) |
-| Row with fewer than 2 columns | Skipped, with a warning logged — **not** a request failure |
-| A 3rd+ column (e.g. legacy `Risk Driver Name`) | Ignored |
-| Empty uploaded file | HTTP 400, empty body |
-| Upload exceeds `lexicon.upload.max-file-size` (default 10MB) | HTTP 413 |
-
-### Error response shapes
-
-**Bean-validation failure** (missing/blank required field):
-
-```json
-{
-  "status": 400,
-  "error": "Validation failed",
-  "details": ["terms: terms list must not be empty"],
-  "timestamp": "2026-08-26T10:15:00.123Z"
-}
-```
-
-**Invalid termId(s) on `/compile/bundle`**:
-
-```json
-{
-  "status": 400,
-  "error": "termId must end with '::<n>' where n is a non-negative integer (the platform's term-number convention, e.g. 'lexicon_rule_name::1') — required for /compile/bundle's Hyperscan expression id scheme. Malformed termId(s): [lexicon_research_1::bad]",
-  "timestamp": "2026-08-26T10:15:00.123Z"
-}
-```
-
-**Upload too large**:
-
-```json
-{ "status": 413, "error": "Uploaded file exceeds maximum allowed size", "timestamp": "2026-08-26T10:15:00.123Z" }
-```
-
-**Unhandled server error**:
-
-```json
-{ "status": 500, "error": "Internal server error", "timestamp": "2026-08-26T10:15:00.123Z" }
-```
-
-> Two endpoint-specific edge cases return an **empty body** instead of the
-> structured shape above (not yet unified with `GlobalExceptionHandler`):
-> an empty CSV upload (`400`) and a CSV that fails to parse as valid CSV
-> syntax, or a zip-build I/O failure on `/compile/bundle` (`500`).
-
-**A term that fails translation or Hyperscan validation is NOT a request
-error** — the HTTP response is still `200 OK`; the failure is reported
-per-term via `compilationStatus: "FAILED"` alongside any terms that
-passed. See the worked examples below.
-
----
-
-## API reference
-
-| Endpoint | Input | Output |
-|---|---|---|
-| `POST /api/lexicon/compile` | JSON `TypedCompileRequest` | JSON `CompileResponse` |
-| `POST /api/lexicon/compile/csv` | Multipart CSV upload | JSON `CompileResponse` (same shape) |
-| `POST /api/lexicon/compile/bundle` | JSON `TypedCompileRequest` | `application/zip`: JSON results + `.hdb` (or `NO_DATABASE.txt`) |
-| `GET /api/lexicon/health` | — | Engine mode, Hyperscan version, supported operators/languages |
-
-Both request body compression (`Content-Encoding: gzip`, decompressed by
-`GzipRequestFilter`) and response compression (`Accept-Encoding: gzip`,
-handled by Tomcat) are supported. HTTP 200 is returned even when
-individual terms fail compilation — only structurally invalid *requests*
-get a non-200 status.
-
-### `POST /api/lexicon/compile`
-
-Request:
+`/compile` and `/compile/bundle` take the same body (`TypedCompileRequest`); `/compile/csv` builds
+the same object from the uploaded file.
 
 ```json
 {
@@ -754,275 +110,813 @@ Request:
   "lexiconRuleName": "lexicon_research_1",
   "requestType": "Natural Language",
   "terms": [
-    { "termId": "lexicon_research_1::1", "termDescription": "(manipulate*) NEAR{5} ((price) OR (spread) OR (stock))" },
-    { "termId": "lexicon_research_1::2", "termDescription": "tip* AND NOT (disclaimer)" },
-    { "termId": "lexicon_research_1::3", "termDescription": "((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR (记录))" },
-    { "termId": "lexicon_research_1::4", "termDescription": "insider AND NOT (compliance NEAR{5} approved)" }
+    { "termId": "lexicon_research_1::1", "termDescription": "insider AND trading" }
   ]
 }
 ```
 
-Response — one entry per term, showing a **simple PASS**, a **PASS with
-`AND NOT`**, a **PASS that needed decomposition** (note the multi-entry
-`regexPattern` and the `warnings` entry), and a **FAILED** term
-(nested `AND NOT` — rejected):
+| Field | Rule |
+|---|---|
+| `request_id` | required, non-blank; echoed back unchanged (a UUID is generated for CSV) |
+| `lexiconRuleName` | required, non-blank; used for the bundle's file names |
+| `requestType` | required; exactly `"Natural Language"` or `"Regex"` (case-sensitive) for **all** terms — mixed requests are not supported |
+| `terms` | required, non-empty. There is **no** per-request term-count limit (see [Configuration](#configuration)) |
+| `terms[].termId` | required, non-blank; echoed back. For `/compile/bundle` it must end in `::<n>` — see below |
+| `terms[].termDescription` | required, non-blank; the operator-language expression, or a raw PCRE pattern for `"Regex"` |
+
+Unknown JSON properties are ignored.
+
+**Normalisation applied to every term before validation**
+
+1. Runs of newline, carriage-return and tab characters in `termDescription` become **one space**
+   (so a description that is only such characters is rejected as blank, and a term pasted from a
+   multi-line source keeps its meaning).
+2. For Natural Language terms only: the text is trimmed, `""` is unescaped to `"` (CSV-style), and
+   the result is Unicode **NFC**-normalised.
+
+**Term ids for `/compile/bundle`.** Every `termId` must match `<anything>::<n>` where `n` is a
+non-negative integer (`lexicon_research_1::27`), and every `n` must be unique within the request.
+The number becomes the term's Hyperscan expression id; a malformed or duplicate id is rejected for
+the **whole** request before any term compiles (HTTP 400). `/compile` and `/compile/csv` accept any
+non-blank `termId`.
+
+**`requestType` is honoured only by `/compile/bundle`.** `/compile` validates the field but always
+translates every term as Natural Language; `/compile/csv` always builds a Natural Language request.
+A Regex-type request sent to `/compile` therefore fails per term (the regex is parsed as operator
+language) — use `/compile/bundle` for Regex-type terms.
+
+---
+
+## The operator language
+
+### Operators and precedence
+
+| Operator | Meaning | Example |
+|---|---|---|
+| `OR` | any operand matches | `price OR spread` |
+| `AND` | every operand present **anywhere** in the message, any order, any distance | `insider AND announcement` |
+| `AND NOT (…)` / `AND (NOT (…))` | required side matches **and** the excluded side does not | `price AND NOT (legitimate)` |
+| `NEAR{n}` | the two operands within `n` words/characters of each other, **either order** | `(crap OR bad) NEAR{3} (bonus OR comp)` |
+| `FOLLOWEDBY{n}` | left operand, then right operand, within `n` words/characters, **that order only** | `don't FOLLOWEDBY{3} compliance` |
+| `*` in a bare word | zero or more non-whitespace characters | `chimp*`, `*handler`, `*pd*` |
+| `?` in a bare word | **exactly one** non-whitespace character | `he?d` (matches "held", "he'd") |
+| `"…"` | quoted phrase, matched exactly; `*` and `?` inside are literal characters | `"do not share"` |
+| `( … )` | grouping, at any depth | `((a) OR (b)) NEAR{2} (c)` |
+
+Binding, tightest first: **atoms → `NEAR`/`FOLLOWEDBY` → `AND` → `AND NOT` → `OR`**. Use
+parentheses whenever the grouping is not obvious.
+
+Reserved keywords (`OR`, `AND`, `NOT`, `NEAR`, `FOLLOWEDBY`) are recognised **only in exact upper
+case**; `or`, `near`, `Not` are ordinary words. A reserved word can still be used as literal text by
+quoting it (`"NEAR"`).
+
+**`NEAR{n}` / `FOLLOWEDBY{n}` distance** — `n` is a whole number from **1 to 50**, written directly
+after the keyword with no whitespace and no leading zero (`NEAR{3}`; not `NEAR {3}`, `NEAR{03}`,
+`NEAR{0}`, `NEAR{3,6}`, `NEAR{51}`). For a word-based script `n` is the maximum number of words
+**between** the operands: adjacent operands (zero words between) always satisfy the operator. See
+[Character-based vs. token-based terms](#character-based-vs-token-based-word-based-terms) for how `n`
+is interpreted for other scripts.
+
+**Unwrapped phrases.** Consecutive bare words form one literal phrase, so
+`bomb this place OR blow this place up` works without parentheses; wrapping is still clearer. Words
+inside a phrase are joined by exactly **one space**, so `bomb this place` does not match text with
+two spaces or a line break between the words.
+
+**Chained proximity** — `A FOLLOWEDBY{5} B FOLLOWEDBY{6} C` without parentheses is accepted and read
+as `(A FOLLOWEDBY{5} B) FOLLOWEDBY{6} C`; a warning is logged. Prefer explicit parentheses.
+
+### `NOT`
+
+`NOT` is a unary operator that always takes a parenthesised group and is always paired with `AND`:
+
+```
+✓ bond AND (NOT (james bond))               NOT-group as an AND operand
+✓ apple AND NOT (banana)                    the glued spelling — identical meaning
+✓ apple AND (NOT (apple NEAR{10} banana))   NOT may wrap any sub-expression
+✗ NOT (james bond)                          nothing required precedes it
+✗ price AND NOT legitimate                  the excluded side must be a parenthesised group
+✗ apple AND NOT NEAR{10} banana             NOT must be immediately followed by '('
+✗ apple NOT (banana)                        NOT between two expressions has no meaning
+```
+
+`NOT` that does **not** start a group is plain text: `(NOT LAUNCHING)` is the literal phrase
+"NOT LAUNCHING".
+
+`A AND NOT (B) AND NOT (C)` excludes **B or C** (either one present excludes the message).
+
+### `AND NOT` must be the outermost operator
+
+`AND NOT` may appear only at the root of a term — `A AND NOT (B)` where `A` can itself be any
+expression. Anywhere else it is rejected with an explanation rather than silently ignored:
+`(X AND NOT (Y)) NEAR{3} Z` and `P OR Q AND NOT (R)` are errors; write `(X NEAR{3} Z) AND NOT (Y)`
+instead. Auto-hoisting the exclusion was deliberately rejected because it would change the term's
+meaning.
+
+### `AND` operand limit
+
+At most **5** operands at one `AND` level. `AND` is compiled by listing every ordering of its
+operands (`N!` alternatives); more than 5 reliably exceeds Hyperscan's size limit, so it is rejected
+with a message to split the term.
+
+### A `NEAR`/`FOLLOWEDBY` alternative inside `OR`
+
+`(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)` is accepted — the proximity clause sits at the
+**edge** of the `OR` list. A proximity clause with `OR` alternatives on **both** sides
+(`(a) OR (b) NEAR{2} (c) OR (d)`) is rejected as ambiguous; group the intended operands
+(`((a) OR (b)) NEAR{2} ((c) OR (d))`) or move the clause to the edge.
+
+### Wildcards, phrases and punctuation
+
+* Everything is **case-insensitive** (`CASELESS`).
+* Regex metacharacters in a term are escaped and matched literally (`u.s.`, `$100`, `a+b`).
+* Apostrophes, digits and punctuation are ordinary characters: `don't report`, `144 scam`, `stop!`.
+* Leet-speak is just literal text (`1ns1d3r`); there is no substitution table.
+
+### Whole-word matching
+
+A literal is wrapped in `\b…\b` on each edge whose first/last character is an ASCII letter, digit or
+underscore, so **`pd` matches the word "pd" but not the "pd" inside "updates"**:
+
+| Term | Pattern | Matches "updates"? | Matches "pdf"? |
+|---|---|---|---|
+| `pd` | `\bpd\b` | no | no |
+| `pd*` | `\bpd\S*` | no | yes |
+| `*pd*` | `\S*pd\S*` | yes | yes |
+| `u.s.` | `\bu\.s\.` | — | — |
+
+* A wildcard edge (`*`, `?`) or a non-word edge (`$100`, `u.s.`, `#tag`) gets no `\b` on that edge.
+  The wildcard is therefore how an author asks for a substring or prefix match.
+* **A term containing any non-ASCII text (accents, CJK, Arabic, Hebrew, emoji, …) gets no word
+  boundaries at all** — Hyperscan rejects `\b` in Unicode (UCP) mode, which such a term needs — and a
+  warning is logged. `café OR pd` is a plain substring search.
+* Leaves of a term that fell back to independent parts ([below](#how-a-term-is-compiled)) get a
+  **leading** `\b` only, because Hyperscan rejects a native-combination sub-expression that ends in an
+  assertion; such a term matches at the start of a word (`\bprice` also matches "pricey").
+
+### Worked examples
+
+Every pattern below is real service output (`\b` shown as emitted; JSON adds one more backslash).
+
+| Term | `regexPattern` |
+|---|---|
+| `launder` | `\blaunder\b` |
+| `price skimming` | `\bprice skimming\b` |
+| `"please don't forward"` | `\bplease don't forward\b` |
+| `(righteous babe) OR (pd)` | `(?:\brighteous babe\b\|\bpd\b)` |
+| `insider AND trading` | `(?:\binsider\b[\s\S]*\btrading\b\|\btrading\b[\s\S]*\binsider\b)` |
+| `contraba*` | `\bcontraba\S*` |
+| `he?d kill` | `\bhe\Sd kill\b` |
+| `*handler` | `\S*handler\b` |
+| `keep FOLLOWEDBY{3} mouth shut` | `\bkeep\b(?:\s+\S+){0,3}\s+\bmouth shut\b` |
+| `(manipulate) NEAR{5} ((price) OR (spread) OR (stock))` | `(?:\bmanipulate\b(?:\s+\S+){0,5}\s+(?:\bprice\b\|\bspread\b\|\bstock\b)\|(?:\bprice\b\|\bspread\b\|\bstock\b)(?:\s+\S+){0,5}\s+\bmanipulate\b)` |
+| `(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)` | `(?:\bplain phrase\b\|(?:\bEURIBOR FIXING\b(?:\s+\S+){0,2}\s+\bTENOR\b\|\bTENOR\b(?:\s+\S+){0,2}\s+\bEURIBOR FIXING\b))` |
+| `price AND NOT (legitimate)` | required `\bprice\b`, excluded `\blegitimate\b` |
+| `(💰) AND price` | `(?:\x{1F4B0}[\s\S]*price\|price[\s\S]*\x{1F4B0})` (non-ASCII → no `\b`) |
+
+---
+
+## How a term is compiled
+
+```
+termDescription (raw text)
+  → preprocess              trim, "" → ", Unicode NFC                          (TermSyntaxTranslator)
+  → Tokenizer               lexical checks → token stream
+  → ExpressionParser        grammar checks → Ast (Or, And, AndNot, Near, FollowedBy, Word, Phrase, QuotedPhrase)
+  → PatternDecomposer       ALWAYS: independent gap-less leaves + the literal-keyword text (resolvedPatterns)
+  → resolveSide()           chooses regexPattern:
+                              1. one self-contained pattern with the gap embedded   (preferred)
+                              2. else the decomposed leaves                         (fallback)
+  → PatternCodeGenerator    Ast → PCRE; proximity gaps via MultiLanguagePatternBuilder
+  → HyperscanCompiler       the real Hyperscan compiler has the final say
+```
+
+**Design principle:** no stage hands back a pattern the real Hyperscan compiler has not accepted. A
+term is `PASS` because Hyperscan compiled the final text, never because the AST "looked fine".
+
+### One pattern when safe, independent parts as the fallback
+
+For a side containing `NEAR`/`FOLLOWEDBY` the service first tries **one** pattern with the gap
+embedded, so Hyperscan itself enforces distance and order (this is the common case). It skips that
+attempt when `PatternComplexityAnalyzer` predicts the pattern too large (nested proximity over wide
+`OR` groups is the usual cause — compiled state count grows multiplicatively with nesting depth), and
+falls back whenever real Hyperscan rejects the single pattern for any reason.
+
+The fallback splits the side into independent, **gap-less** leaves:
+
+```
+(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)
+  regexPattern:     ["(?:\bmanipulate|\bfront run)", "(?:\bprice|\bspread)", "\bstock"]
+  resolvedPatterns: "(?:\bmanipulate|\bfront run) NEAR{5} ((?:\bprice|\bspread) NEAR{5} \bstock)"
+```
+
+The leaves match when **all** are present anywhere in the message. The distance and order between
+them are **not** encoded in the patterns — they survive only as literal `NEAR{n}` / `FOLLOWEDBY{n}`
+text in `resolvedPatterns`, with the author's raw distance. A consumer that needs exact proximity for
+such a term must read `resolvedPatterns` and apply it. Check `regexPattern.size()`: one entry means
+Hyperscan already enforced everything; several means the fallback was used.
+
+`resolvedPatterns` keeps the authored grouping: when the **right** operand of a proximity operator is
+itself a proximity expression it is wrapped in parentheses (`… NEAR{5} (… NEAR{5} …)`); the left side
+never is, so a plain chain renders flat (`A FOLLOWEDBY{4} B FOLLOWEDBY{4} C`).
+
+Two structural exceptions:
+
+* **`NEAR`/`FOLLOWEDBY` inside an `OR`** has no leaf form (flattening an `OR` alternative into
+  AND'd leaves would change its meaning), so it is always one gap-embedded pattern.
+* **`AND` containing proximity** is flattened into leaves (this is lossless: `AND` already means "all
+  present anywhere"). An `AND` with no proximity stays one pattern.
+
+### Size limits and narrowing
+
+Hyperscan's "Pattern is too large" is driven by compiled state count, not string length. The service
+handles it in layers: the complexity pre-check above; a **cap on the gap width**
+(`{0,29}` words, `{0,30}` characters — calibrated against the real library); **adaptive narrowing**
+that trial-compiles the actual pattern and reduces the width further for wide `OR` operands; and
+finally the decomposition fallback. Clamping loses precision (matches with more intervening words
+than the compiled width are missed) and logs a warning.
+
+---
+
+## Character-based vs. token-based (word-based) terms
+
+`NEAR{n}` / `FOLLOWEDBY{n}` mean "within `n` words", but "word" has no single meaning across scripts.
+The service picks one of two gap strategies **per proximity operator**, from the script of its two
+operands.
+
+### How the script is identified
+
+`ScriptDetector` reads every code point of the two operands with ICU4J `UScript` and reduces the
+text to a `ScriptType`:
+
+1. Non-letter ASCII (digits, spaces, punctuation, regex fragments) is ignored; ASCII letters count as
+   Latin. Combining marks, zero-width joiners, directional marks and the BOM are skipped; emoji and
+   symbols are ignored.
+2. Greek, Cyrillic, Armenian and Georgian count as Latin; Devanagari and the other Indic scripts and
+   Tibetan count as Indic; Thaana, N'Ko, Samaritan and Mandaic count as Arabic; Lao and Myanmar count
+   as Thai.
+3. **A single script family** is resolved first (`内幕` → CJK, `내부자` → Hangul, `ราคา` → Thai,
+   `السعر` → Arabic, `מידע` → Hebrew, Indic → Devanagari, plain Latin → Latin).
+4. Otherwise it is a **mixture**: any space-free script (CJK, Kana, Hangul, Thai) forces
+   `MIXED_CJK`; RTL with Latin/Indic is `MIXED_RTL`; anything else (Arabic + Hebrew, Latin + Indic,
+   …) is `MIXED`.
+
+### The two gaps
+
+| Strategy | Scripts | Gap pattern | Width |
+|---|---|---|---|
+| **Token (word) based** | Latin (incl. Greek/Cyrillic), Arabic, Hebrew, Devanagari and other Indic, mixed RTL + Latin/Indic | `(?:\s+\S+){0,n}\s+` | `n` words, at most **29** |
+| **Character based** | CJK (Han), Kana | `[\s\S]{0,N}` | `N = n × 3 + n` = **4n** |
+| | Hangul | `[\s\S]{0,N}` | `N = n × 5 + n` = **6n** |
+| | Thai, Lao, Myanmar | `[\s\S]{0,N}` | `N = n × 6 + n` = **7n** |
+| | any mixture containing a space-free script (`MIXED_CJK`) | `[\s\S]{0,N}` | `N = n × 4 + n` = **5n** |
+| | any other mixture (`MIXED`) | `[\s\S]{0,N}` | `N = n × 6 + n` = **7n** |
+
+* The token gap `(?:\s+\S+){0,n}\s+` needs whitespace between the operands, so it suits scripts that
+  separate words with spaces. `\S+` is a run of non-whitespace, so a word with attached punctuation
+  is one token. The final `\s+` means two fragments **inside one word can never match** (this is why
+  `(F) FOLLOWEDBY{1} (cking)` can never catch "Fucking" — the parser logs a warning for that shape).
+* The character gap `[\s\S]{0,N}` also matches whitespace, so it works whether or not the text has
+  spaces (Korean chat text often omits them). The `+ n` term is a buffer for punctuation and mixed
+  characters. The window is deliberately generous — slightly more false positives, fewer false
+  negatives.
+* `N` is capped at **30**, so the cap bites from `NEAR{8}` for CJK/Kana, `NEAR{6}` for Hangul,
+  `NEAR{5}` for Thai and `MIXED`, and `NEAR{7}` for `MIXED_CJK`. Above the cap the width is clamped
+  and a precision-loss warning is logged. A wide `OR` operand can force a still narrower width,
+  found by trial-compiling the real pattern.
+* **Arabic and Hebrew** are stored in logical order (typed/read order), and the engine works on
+  stored order, so `A FOLLOWEDBY B` means "A before B" for purely RTL text with no special handling.
+  For FOLLOWEDBY with *mixed* RTL and LTR operands the result matches stored order, which may differ
+  from the visual order; a warning is logged.
+
+Verified outputs:
+
+| Term | Script | Pattern |
+|---|---|---|
+| `keep FOLLOWEDBY{3} mouth shut` | Latin | `\bkeep\b(?:\s+\S+){0,3}\s+\bmouth shut\b` |
+| `מניפולציה NEAR{2} שוק` | Hebrew | `(?:מניפולציה(?:\s+\S+){0,2}\s+שוק\|שוק(?:\s+\S+){0,2}\s+מניפולציה)` |
+| `السعر FOLLOWEDBY{2} السوق` | Arabic | `السعر(?:\s+\S+){0,2}\s+السوق` |
+| `内幕 NEAR{3} 交易` | CJK | `(?:内幕[\s\S]{0,12}交易\|交易[\s\S]{0,12}内幕)` |
+| `내부자 NEAR{3} 거래` | Hangul | `(?:내부자[\s\S]{0,18}거래\|거래[\s\S]{0,18}내부자)` |
+| `ราคา NEAR{2} หุ้น` | Thai | `(?:ราคา[\s\S]{0,14}หุ้น\|หุ้น[\s\S]{0,14}ราคา)` |
+| `insider NEAR{3} 내부자` | mixed (`MIXED_CJK`) | `(?:insider[\s\S]{0,15}내부자\|내부자[\s\S]{0,15}insider)` |
+| `内幕 NEAR{10} 交易` | CJK, clamped | `(?:内幕[\s\S]{0,30}交易\|交易[\s\S]{0,30}内幕)` (raw 40 → 30) |
+| `a NEAR{50} b` | Latin, clamped | `(?:\ba\b(?:\s+\S+){0,29}\s+\bb\b\|\bb\b(?:\s+\S+){0,29}\s+\ba\b)` |
+
+### What the response tells you
+
+The response has **no field naming the gap strategy** — read it from the pattern shape (`\s+\S+`
+versus `[\s\S]{0,N}`). Clamping and narrowing warnings are log-only.
+
+In the **fallback** case there is no gap in the patterns at all; `resolvedPatterns` carries the
+author's raw `n`, un-multiplied and un-clamped, and the consumer decides how a "word" is measured (the
+reference matcher in the test tree counts whitespace-delimited tokens).
+
+---
+
+## Language and text handling
+
+| Aspect | Behaviour |
+|---|---|
+| Encoding | JSON bodies and CSV files are read as **UTF-8**; JSON and the results JSON inside the zip are written as UTF-8. Send `Content-Type: application/json; charset=UTF-8` |
+| Mis-encoded input | A Natural Language term containing U+FFFD (the decoder's replacement character, e.g. `übergeh*` saved in a legacy code page) is **rejected** (`FAILED`, with a message to re-send as UTF-8) instead of compiling to a pattern that can never match |
+| Unicode form | The term is NFC-normalised. Scanned text is not normalised by Hyperscan, so a consumer should NFC-normalise messages so precomposed and decomposed accents match |
+| Case | Always case-insensitive. With UCP (non-ASCII terms) folding follows Unicode properties; an ASCII-only term folds ASCII letters |
+| Scripts | Latin (incl. Greek, Cyrillic), Arabic, Hebrew, CJK, Kana, Hangul, Thai/Lao/Myanmar, Indic scripts, and mixtures. The `/health` list of languages is a human-readable summary; coverage follows `ScriptDetector` |
+| Emoji | Emitted as `\x{HEX}` and force UTF-8 mode. A term made only of emoji/symbols has "no meaningful content" and is rejected — combine it with a word (`(💰) AND price`) |
+| Non-ASCII words | Kept literally (`über…`, `café`); `*` and `?` still work (`verschwör*` → `verschwör\S*`); no `\b` (see [Whole-word matching](#whole-word-matching)) |
+| Wildcards under UCP | `\S` matches any non-whitespace code point, including Arabic, Hebrew and CJK characters |
+| Proximity | Word gap or character gap by script — [above](#character-based-vs-token-based-word-based-terms) |
+| Whitespace | `\s` in gaps and `[\s\S]` in `AND` match line breaks; multi-word phrases need exactly one space between words |
+
+---
+
+## Hyperscan flags
+
+Which flags an expression compiles with is decided by **what kind of expression it is**, never by a
+caller option:
+
+| Expression | Flags |
+|---|---|
+| Plain, single-pattern, non-AND-NOT term — also what every candidate pattern is validated under | `CASELESS`, `DOTALL`, `SOM_LEFTMOST` (+ `UTF8`, `UCP` when needed) |
+| Required or excluded pattern of an AND NOT term | `CASELESS` (+ `UTF8`, `UCP`) |
+| Decomposed leaf feeding a native COMBINATION (fallback term without AND NOT) | `CASELESS`, `QUIET` (+ `UTF8`, `UCP`) |
+| The COMBINATION formula expression | `COMBINATION` only |
+
+* **`UTF8` + `UCP` are added only when the term needs them** — any non-ASCII character or emoji.
+  The bitmask is `1` (CASELESS) for ASCII-only terms and `97` (CASELESS+UTF8+UCP) otherwise.
+* They must stay conditional: Hyperscan rejects `\b` in UCP mode (generated word boundaries and
+  Regex-type terms use it), and UCP compiles roughly 15× slower even for ASCII patterns. They cannot
+  be dropped either: non-ASCII text and `\x{XXXX}` escapes need UTF8 to compile, otherwise a pattern
+  could validate yet fail the combined build with "Hexadecimal value is greater than \xFF".
+* **`SOM_LEFTMOST` cannot be combined with `QUIET`** (a real Hyperscan compile error), so QUIET leaves
+  never have it; plain expressions do, which lets a consumer read match offsets. AND NOT patterns
+  omit it deliberately — only their presence matters.
+* A `COMBINATION` expression ignores every flag except `QUIET`/`SINGLEMATCH`.
+* The flag bitmask is **not** in the JSON response (`hyperscanFlags` is `@JsonIgnore`). A consumer
+  compiling the patterns itself should use `CASELESS`, add `UTF8|UCP` when a pattern contains a
+  non-ASCII character or a `\x{…}` escape, and use `DOTALL|SOM_LEFTMOST` for plain expressions.
+* Flags for **Regex-type** terms come from the script of the pattern: `CASELESS|DOTALL` (bitmask 3)
+  for a Latin pattern, plus `UTF8|UCP` (99) for any other script.
+
+### Native COMBINATION, and why AND NOT never uses it
+
+Hyperscan 5.0+ lets an expression be a boolean formula over other expressions' ids (`"(101&102)"`).
+It is used **only** for a decomposed term without AND NOT: a positive-only formula has no negation, so
+Hyperscan's eager evaluation is safe. AND NOT is never built that way: Hyperscan raises a combination
+match **progressively**, as soon as its condition is true, and only *purely negative* combinations
+are deferred to end of data. `R&!E` needs `R` too, so it can fire the moment `R` matches while `E`
+has merely not been reached yet — before `E` could appear later in the same text. Instead every AND NOT
+pattern is its own plain expression and the consumer evaluates the condition **after the whole scan**.
+
+---
+
+## Response format
+
+### `CompileResponse` (every endpoint)
+
+| Field | Present | Meaning |
+|---|---|---|
+| `request_id` | always | echoed (generated for CSV) |
+| `lexiconRuleName` | always | |
+| `requestType` | `/compile/bundle` only | `"Natural Language"` or `"Regex"` |
+| `totalTerms`, `passCount`, `failedCount` | always | |
+| `hasFailures` | always | `failedCount > 0` |
+| `engineMode` | always | `"HYPERSCAN_NATIVE"` (no fallback engine) |
+| `hyperscanVersion` | `/compile`, `/compile/csv` | `"5.4.0-2.0.0"`; absent from the bundle response |
+| `compiledAt` | always | ISO-8601 instant |
+| `processingTimeMs` | when non-zero | wall-clock time for the whole request |
+| `results` | always | one `TermCompilationResult` per term, in request order |
+| `databaseError` | `/compile/bundle`, only on a build failure | see [`/compile/bundle`](#post-apilexiconcompilebundle) |
+
+Null fields are omitted from the JSON.
+
+### `TermCompilationResult` (one per term)
+
+| Field | Meaning |
+|---|---|
+| `termId`, `termDescription` | echoed (the description after newline/tab normalisation) |
+| `compilationStatus` | `PASS` or `FAILED` |
+| `regexPattern` | the required side's pattern(s) — see below. Absent for a translation failure; holds the attempted pattern for a Regex-type Hyperscan failure |
+| `requiresExclusionCheck` | `true` for an AND NOT term, otherwise `false` (always present) |
+| `exclusionRegex` | the excluded side's pattern(s); present only when `requiresExclusionCheck` |
+| `resolvedPatterns` | the term as text with literal `NEAR{n}`/`FOLLOWEDBY{n}`/`AND NOT` — always exactly **one string** despite the plural name. Present for every PASS Natural Language term on all endpoints; absent for FAILED and Regex-type terms |
+| `translationError` | why an operator-language term could not be compiled (`FAILED` only) |
+| `errorLog` | Hyperscan's message for a rejected **Regex-type** pattern (`FAILED` only; at most one of `errorLog`/`translationError`) |
+| `hyperscanExpressionId` | `/compile/bundle` only, terms **without** AND NOT: the term's own number |
+| `requiredExpressionIds`, `excludedExpressionIds` | `/compile/bundle` only, **AND NOT** terms: one id per `regexPattern` / `exclusionRegex` entry |
+| `patternMapping` | `/compile/bundle` only, terms that needed more than one id: the boolean formula over the ids |
+
+`regexPattern` and `exclusionRegex` are always lists. **One entry** means a single self-contained
+pattern; **several** mean the fallback described [above](#one-pattern-when-safe-independent-parts-as-the-fallback).
+`hyperscanFlags` and the internal formula templates are not serialised, and translation
+[warnings](#warnings-log-only) are logged rather than returned.
+
+**`resolvedPatterns`** — for a side that fell back to leaves, every leaf appears in it byte-for-byte
+and in order, so a consumer can correlate a leaf's match with its position. When the side compiled as
+one pattern there is no such correspondence: `resolvedPatterns` still shows the structure, but
+Hyperscan already enforced it inside the single pattern.
+
+**Ids (`/compile/bundle`).** A term without AND NOT reports at **its own term number**, whether it is
+one plain expression or a native COMBINATION over QUIET leaves — so a consumer that knows the number
+can predict the id to watch for. Every other expression (leaves, AND NOT patterns) takes an
+auxiliary id from a range starting at `max(term number) + 1`, handed out in term order, so it never
+collides with a term number.
+
+**`patternMapping`** is a formula in Hyperscan's own syntax over the term's ids — `(6&(7&8))`,
+`(9&!10)`. Each side is a bare id or a parenthesised AND-join that follows the authored nesting.
+For several leaves without AND NOT it mirrors the COMBINATION inside the `.hdb`; **for AND NOT it is
+the only place the formula exists** — the `.hdb` never encodes it.
+
+### One example per variation
+
+`/compile/bundle` output for one request (ids shown are real: term numbers 1–5, so auxiliary ids
+start at 6):
+
+```json
+{ "termId": "doc_rule::1", "termDescription": "launder", "compilationStatus": "PASS",
+  "regexPattern": ["\\blaunder\\b"], "requiresExclusionCheck": false,
+  "resolvedPatterns": "\\blaunder\\b", "hyperscanExpressionId": 1 }
+```
+Simple term — one plain expression at its own number.
+
+```json
+{ "termId": "doc_rule::2", "termDescription": "(manipulate) NEAR{5} ((price) OR (spread))",
+  "compilationStatus": "PASS",
+  "regexPattern": ["(?:\\bmanipulate\\b(?:\\s+\\S+){0,5}\\s+(?:\\bprice\\b|\\bspread\\b)|(?:\\bprice\\b|\\bspread\\b)(?:\\s+\\S+){0,5}\\s+\\bmanipulate\\b)"],
+  "requiresExclusionCheck": false,
+  "resolvedPatterns": "\\bmanipulate\\b NEAR{5} (?:\\bprice\\b|\\bspread\\b)",
+  "hyperscanExpressionId": 2 }
+```
+Proximity merged into one pattern; no `patternMapping` because there is one expression.
+
+```json
+{ "termId": "doc_rule::3",
+  "termDescription": "(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)",
+  "compilationStatus": "PASS",
+  "regexPattern": ["(?:\\bmanipulate|\\bfront run)", "(?:\\bprice|\\bspread)", "\\bstock"],
+  "requiresExclusionCheck": false,
+  "resolvedPatterns": "(?:\\bmanipulate|\\bfront run) NEAR{5} ((?:\\bprice|\\bspread) NEAR{5} \\bstock)",
+  "hyperscanExpressionId": 3, "patternMapping": "(6&(7&8))" }
+```
+Fallback — three QUIET leaves (6, 7, 8) and a native COMBINATION at 3 evaluating `(6&(7&8))`.
+
+```json
+{ "termId": "doc_rule::4", "termDescription": "price AND NOT (legitimate)", "compilationStatus": "PASS",
+  "regexPattern": ["\\bprice\\b"], "requiresExclusionCheck": true,
+  "exclusionRegex": ["\\blegitimate\\b"],
+  "resolvedPatterns": "\\bprice\\b AND NOT (\\blegitimate\\b)",
+  "requiredExpressionIds": [9], "excludedExpressionIds": [10], "patternMapping": "(9&!10)" }
+```
+AND NOT — no `hyperscanExpressionId`; two plain expressions; the consumer applies `(9&!10)` after the scan.
+
+```json
+{ "termId": "doc_rule::5",
+  "termDescription": "insider AND NOT ((manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock))",
+  "compilationStatus": "PASS",
+  "regexPattern": ["\\binsider\\b"], "requiresExclusionCheck": true,
+  "exclusionRegex": ["(?:\\bmanipulate\\b|\\bfront run\\b)", "(?:\\bprice\\b|\\bspread\\b)", "\\bstock\\b"],
+  "resolvedPatterns": "\\binsider\\b AND NOT ((?:\\bmanipulate\\b|\\bfront run\\b) NEAR{5} ((?:\\bprice\\b|\\bspread\\b) NEAR{5} \\bstock\\b))",
+  "requiredExpressionIds": [11], "excludedExpressionIds": [12, 13, 14],
+  "patternMapping": "(11&!(12&(13&14)))" }
+```
+AND NOT with a decomposed excluded side — the exclusion holds only when **all** of ids 12–14 were found.
+
+A failed Natural Language term (HTTP 200):
+
+```json
+{ "termId": "doc_rule::2", "termDescription": "NEAR{0} x", "compilationStatus": "FAILED",
+  "translationError": "NEAR{0} is invalid in term: 'NEAR{0} x' — zero is not allowed. Expected NEAR{n} where n is a whole number from 1 to 50.",
+  "requiresExclusionCheck": false }
+```
+
+A failed Regex-type term (`/compile/bundle`):
+
+```json
+{ "termId": "doc_rule::3", "termDescription": "[a-z", "compilationStatus": "FAILED",
+  "regexPattern": ["[a-z"],
+  "errorLog": "Hyperscan compile error: Unterminated character class starting at index 0. [pattern: [a-z]",
+  "requiresExclusionCheck": false }
+```
+
+---
+
+## Consuming the output
+
+**`/compile`, `/compile/csv` (Scanner Service style)** — compile every pattern yourself. A term
+matches when **every** `regexPattern` entry matches **and** the excluded condition is *not* fully
+satisfied (every `exclusionRegex` entry found, the same AND convention as the required side). If
+`regexPattern` has several entries, also read `resolvedPatterns` to enforce distance and order between
+them; with one entry Hyperscan already did.
+
+**`/compile/bundle` (Scan Engine style)** — load the `.hdb` with `Database.load`, scan each message
+once, and collect the set of matched expression ids:
+
+| Term | Matched when |
+|---|---|
+| has `hyperscanExpressionId` | that id is in the matched set (single pattern, or the COMBINATION over leaves) |
+| has `requiredExpressionIds` / `excludedExpressionIds` | **after the whole scan**: every required id is present **and** not every excluded id is present |
+| several leaves, fallback | the COMBINATION id already encodes "all present"; apply `resolvedPatterns` if exact proximity between leaves matters |
+
+An AND NOT term is not resolvable from the `.hdb` alone — the JSON is required. Match **start** offsets
+are tracked only for plain single-pattern expressions (`SOM_LEFTMOST`); AND NOT patterns report presence
+only, and QUIET leaves report nothing.
+
+The reference implementation of the `resolvedPatterns` consumer logic is
+`src/test/java/.../ResolvedPatternMatcher.java`, proven end-to-end by
+`ResolvedPatternMatchingIntegrationTest` — a required blueprint for the other two services.
+
+**Contract stability.** `regexPattern` / `exclusionRegex` / `resolvedPatterns` now contain `\b`;
+consumers compiling or re-parsing them must accept it. A consumer must not assume every proximity term
+is multi-leaf: a simple term's `hyperscanExpressionId` normally points at one complete, natively
+enforced pattern, and the fallback applies only to terms too large to compile as one.
+
+---
+
+## Endpoint reference
+
+### `POST /api/lexicon/compile`
+
+Request and response as above. Always HTTP 200 for a valid request.
 
 ```json
 {
   "request_id": "550e8400-e29b-41d4-a716-446655440000",
   "lexiconRuleName": "lexicon_research_1",
-  "totalTerms": 4,
-  "passCount": 3,
-  "failedCount": 1,
-  "hasFailures": true,
-  "engineMode": "HYPERSCAN_NATIVE",
-  "hyperscanVersion": "5.4.0-2.0.0",
-  "compiledAt": "2026-08-26T10:15:00.500Z",
-  "processingTimeMs": 42,
+  "totalTerms": 2, "passCount": 2, "failedCount": 0, "hasFailures": false,
+  "engineMode": "HYPERSCAN_NATIVE", "hyperscanVersion": "5.4.0-2.0.0",
+  "compiledAt": "2026-09-23T18:59:38.274061300Z", "processingTimeMs": 206,
   "results": [
-    {
-      "termId": "lexicon_research_1::1",
-      "termDescription": "(manipulate*) NEAR{5} ((price) OR (spread) OR (stock))",
-      "compilationStatus": "PASS",
-      "regexPattern": ["manipulate\\S*", "(?:price|spread|stock)"],
-      "hyperscanFlags": 1,
-      "requiresExclusionCheck": false,
-      "warnings": [
-        "This term's term expression contains NEAR/FOLLOWEDBY structure and was split into 2 independent parts (each individually Hyperscan-validated) — see regexPattern in the response. ... see resolvedPatterns ..."
-      ],
-      "resolvedPatterns": "manipulate\\S* NEAR{5} (?:price|spread|stock)",
-      "compiledAt": "2026-08-26T10:15:00.410Z"
-    },
-    {
-      "termId": "lexicon_research_1::2",
-      "termDescription": "tip* AND NOT (disclaimer)",
-      "compilationStatus": "PASS",
-      "regexPattern": ["tip\\S*"],
-      "hyperscanFlags": 1,
-      "requiresExclusionCheck": true,
-      "exclusionRegex": ["(?:disclaimer)"],
-      "warnings": [],
-      "resolvedPatterns": "tip\\S* AND NOT (disclaimer)",
-      "compiledAt": "2026-08-26T10:15:00.420Z"
-    },
-    {
-      "termId": "lexicon_research_1::3",
-      "termDescription": "((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR (记录))",
-      "compilationStatus": "PASS",
-      "regexPattern": ["(?:内幕|正常|的|商业)", "(?:活动|记录)"],
-      "hyperscanFlags": 97,
-      "requiresExclusionCheck": false,
-      "warnings": [
-        "This term's term expression contains NEAR/FOLLOWEDBY structure and was split into 2 independent parts ... see resolvedPatterns ..."
-      ],
-      "resolvedPatterns": "(?:内幕|正常|的|商业) FOLLOWEDBY{10} (?:活动|记录)",
-      "compiledAt": "2026-08-26T10:15:00.430Z"
-    },
-    {
-      "termId": "lexicon_research_1::4",
-      "termDescription": "insider AND NOT (compliance NEAR{5} approved)",
-      "compilationStatus": "FAILED",
-      "translationError": "AND NOT may only appear at the top level of a term, combined with the whole term via OR/AND at most — it cannot be nested inside NEAR, FOLLOWEDBY, AND, OR, or another AND NOT (including inside parentheses) in term: 'insider AND NOT (compliance NEAR{5} approved)'. Rewrite this term with AND NOT at the outermost level instead — e.g. replace '(A AND NOT B) NEAR{n} C' with the equivalent top-level form '(A NEAR{n} C) AND NOT B' if the exclusion is meant to apply to the whole term.",
-      "hyperscanFlags": 0,
-      "requiresExclusionCheck": false,
-      "warnings": [],
-      "compiledAt": "2026-08-26T10:15:00.440Z"
-    }
+    { "termId": "lexicon_research_1::1", "termDescription": "(righteous babe) OR (pd)",
+      "compilationStatus": "PASS", "regexPattern": ["(?:\\brighteous babe\\b|\\bpd\\b)"],
+      "requiresExclusionCheck": false, "resolvedPatterns": "(?:\\brighteous babe\\b|\\bpd\\b)" },
+    { "termId": "lexicon_research_1::2", "termDescription": "(manipulate) NEAR{5} ((price) OR (spread))",
+      "compilationStatus": "PASS", "regexPattern": ["(?:\\bmanipulate\\b(?:\\s+\\S+){0,5}\\s+(?:\\bprice\\b|\\bspread\\b)|(?:\\bprice\\b|\\bspread\\b)(?:\\s+\\S+){0,5}\\s+\\bmanipulate\\b)"],
+      "requiresExclusionCheck": false, "resolvedPatterns": "\\bmanipulate\\b NEAR{5} (?:\\bprice\\b|\\bspread\\b)" }
   ]
 }
 ```
 
-A term that was structurally valid but rejected by real Hyperscan (rather
-than translation) instead carries `errorLog` (not `translationError`) —
-the two are mutually exclusive and both are `null`/absent for `PASS`.
-
-A term with NEAR/FOLLOWEDBY structure looks the same shape as above but
-with two or more entries in `regexPattern` (never with any gap fragment
-baked into any entry — the relationship lives only in `resolvedPatterns`), e.g.:
-
-```json
-"regexPattern": [
-  "(?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG)",
-  "(?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN)",
-  "(?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT)"
-],
-"resolvedPatterns": "(?:wordA word B|wordC\\S* wordD|wordE\\S* wordF|wordG) FOLLOWEDBY{4} (?:wordH\\S*|wordI wordJ\\S* wordK|wordL\\S* wordM|wordN) FOLLOWEDBY{4} (?:wordO\\S*|wordP\\S* wordQ|wordR\\S* wordS|wordT)"
-```
+Recommended headers: `Content-Type: application/json`; optionally `Content-Encoding: gzip` (compressed
+body) and `Accept-Encoding: gzip`.
 
 ### `POST /api/lexicon/compile/csv`
 
-Multipart form field `file` (2-column CSV, optional `ruleName` query/form
-param):
+Multipart form field `file` (a two-column CSV) and optional `ruleName` (defaults to the file name
+without its extension). A UUID `request_id` is generated. The response has the `/compile` shape with
+no `requestType`.
 
 ```
-Term ID,Term Description
-lexicon_research_1::1,"(manipulate*) NEAR{5} ((price) OR (spread))"
-lexicon_research_1::2,"((""please don't forward"") OR (""do not share""))"
+Term ID, Term Description
+# comment lines and blank lines are skipped
+lexicon_research_1::1, (manipulate*) NEAR{5} ((price) OR (spread))
+lexicon_research_1::2, "((""please don't forward"") OR (""do not share""))"
 ```
 
-Response is the identical `CompileResponse` shape shown above, with
-`request_id` auto-generated as a UUID (no `requestType` field — CSV terms
-are always Natural Language).
+| Condition | Behaviour |
+|---|---|
+| Header row (first cell contains "term id", any case) | detected and skipped |
+| Blank row; row whose first cell starts with `#` | skipped |
+| Row with fewer than 2 columns | skipped, logged — not a request failure |
+| Third and further columns | ignored |
+| Quoting | RFC 4180: `""` inside a quoted cell is a literal quote; cells are trimmed |
+| Encoding | UTF-8, with an optional BOM (stripped) |
+| Empty file | HTTP 400, empty body |
+| Header-only file | HTTP 200 with zero terms |
+| Larger than `spring.servlet.multipart.max-file-size` (10 MB) | HTTP 413 |
+
+Every row is Natural Language. Term ids are not required to follow `::<n>` here.
 
 ### `POST /api/lexicon/compile/bundle`
 
-Same request shape as `/compile`. Response is `application/zip`
-containing:
+Same request. Honours `requestType: "Regex"`. The response is `application/zip` named
+`{ruleName}-compile-bundle.zip` (rule name reduced to `[a-zA-Z0-9._-]`):
 
-- `{ruleName}-compile-results.json` — always present, same
-  `CompileResponse`/`TermCompilationResult` shape as `/compile` **plus**
-  `hyperscanExpressionId` / `requiredExpressionIds` / `excludedExpressionIds`
-  / `patternMapping` on PASS terms (`requestType` and `request_id` are
-  present here; `hyperscanVersion`/`processingTimeMs` are omitted).
-- `{ruleName}.hdb` — the combined, serialised Hyperscan database, present
-  when at least one term passed and the combined multi-pattern compile
-  itself succeeded.
-- `NO_DATABASE.txt` — present **instead of** the `.hdb`, when no database
-  could be built (zero PASS terms, or the combined compile failed);
-  explains why, and (when identifiable) names the specific term whose
-  expression caused the combined compile to fail.
+| Entry | Present |
+|---|---|
+| `{ruleName}-compile-results.json` | always — the `CompileResponse` shape, plus the id fields, minus `hyperscanVersion` |
+| `{ruleName}.hdb` | only when **every** term reached PASS and the combined build succeeded |
+| `NO_DATABASE.txt` | instead of the `.hdb` when any term did not reach PASS, or none did |
 
-Per-term id fields, for one bundle request with three terms — `::1`
-(simple), `::2` (`AND NOT`), `::3` (decomposed, 3 leaves). Auxiliary ids
-start at `4` (`highest term number (3) + 1`) and are handed out
-sequentially in term order:
+**A single FAILED term blocks the whole database** — even when every other term passed — so a caller
+can never receive a `.hdb` silently missing one term's coverage. `NO_DATABASE.txt` names the failed
+terms (HTTP still 200):
 
-```json
-{
-  "termId": "lexicon_research_1::1",
-  "compilationStatus": "PASS",
-  "regexPattern": ["manipulate\\S*"],
-  "hyperscanFlags": 1,
-  "requiresExclusionCheck": false,
-  "resolvedPatterns": "manipulate\\S*",
-  "hyperscanExpressionId": 1
-}
+```
+No Hyperscan database file was produced because 1 of 3 term(s) in this request did not reach PASS
+status: [doc_rule::3]. A combined database is only built when every term in the request compiles
+successfully. See the JSON results for each term's compilationStatus and errorLog/translationError details.
 ```
 
-```json
-{
-  "termId": "lexicon_research_1::2",
-  "compilationStatus": "PASS",
-  "regexPattern": ["tip\\S*"],
-  "hyperscanFlags": 1,
-  "requiresExclusionCheck": true,
-  "exclusionRegex": ["(?:disclaimer)"],
-  "resolvedPatterns": "tip\\S* AND NOT (disclaimer)",
-  "requiredExpressionIds": [4],
-  "excludedExpressionIds": [5],
-  "patternMapping": "(4&!5)"
-}
-```
+**HTTP 500 instead of a zip** when every term PASSED but the combined multi-pattern build itself
+failed (a flag or state-count interaction only visible when all expressions are compiled together):
+`Content-Type: application/json`, the results JSON with `databaseError` set, no zip. A consumer must
+not infer success from per-term `compilationStatus` alone.
 
-```json
-{
-  "termId": "lexicon_research_1::3",
-  "compilationStatus": "PASS",
-  "regexPattern": ["A", "B", "C"],
-  "hyperscanFlags": 1,
-  "requiresExclusionCheck": false,
-  "resolvedPatterns": "A FOLLOWEDBY{4} B FOLLOWEDBY{4} C",
-  "hyperscanExpressionId": 3,
-  "patternMapping": "(6&7&8)"
-}
-```
-
-For term `::1`, `hyperscanExpressionId` is the term's own number (`1`) —
-predictable with no JSON lookup. For the decomposed term `::3`, the
-`.hdb` genuinely contains a native `COMBINATION` expression at id `3`
-(the term's own number, same predictability as the simple case) evaluating
-`(6&7&8)`; ids 6–8 are the QUIET leaf expressions, drawn from the
-auxiliary range. For the AND NOT term `::2`, ids 4/5 (also from the
-auxiliary range — term `::2` has no `hyperscanExpressionId` of its own)
-are both **plain** expressions in the `.hdb` (never QUIET, no
-combination) — `patternMapping` is the only place `(4&!5)` is recorded;
-the `.hdb` itself has no expression that encodes this boolean condition.
+The `.hdb` is written by `Database.save` — expression metadata (id, pattern, flags) plus the
+serialised native database — so it loads directly with `Database.load(InputStream)` and needs no
+separate metadata file. It is **not portable** across CPU architectures with different
+instruction-set features; load it on a compatible platform.
 
 ### `GET /api/lexicon/health`
 
 ```json
-{
-  "status": "UP",
-  "engineMode": "HYPERSCAN_NATIVE",
-  "hyperscanLibrary": "com.gliwka.hyperscan",
-  "hyperscanVersion": "5.4.0-2.0.0",
-  "springBoot": "4.0.6",
-  "jdk": "21",
+{ "status": "UP", "engineMode": "HYPERSCAN_NATIVE", "hyperscanLibrary": "com.gliwka.hyperscan",
+  "hyperscanVersion": "5.4.0-2.0.0", "springBoot": "4.0.6", "jdk": "21",
   "compressionMode": "GZIP request + response",
   "supportedOperators": ["OR", "AND", "AND NOT", "NOT", "NEAR{n}", "FOLLOWEDBY{n}"],
   "supportedLanguages": ["English", "Korean", "Japanese", "Chinese", "Mandarin", "Arabic", "Hebrew", "German", "Turkish", "Emoji", "Leet-speak"],
-  "timestamp": "2026-08-26T10:15:00.500Z"
-}
+  "timestamp": "2026-09-23T18:59:39.686143800Z" }
 ```
 
-`supportedLanguages` here is a human-readable summary for API consumers —
-actual script coverage (via `ScriptDetector`) is broader; see
-[Language coverage](#language-coverage) above. `NOT` is listed as an
-operator but is only ever valid immediately after `AND`, never standalone.
+A static description (the version strings are literals). `GET /actuator/health` (with components
+shown) compiles a probe pattern to verify the native library.
 
 ---
 
-## Configuration reference
+## Regex-type terms
 
-Bound from `application.yml` (`local`/`prd`/`test` profiles layered on top):
+`requestType: "Regex"` (bundle endpoint) treats `termDescription` as a finished PCRE pattern:
+
+* compiled verbatim — no operator-language translation; `NEAR{5}` is just a PCRE repetition;
+* validated with real Hyperscan; a rejection is `FAILED` with Hyperscan's message in `errorLog`;
+* flags: `CASELESS|DOTALL|SOM_LEFTMOST` for a Latin pattern, plus `UTF8|UCP` for any other script — so a
+  Korean or Arabic regex works without the caller knowing flag values. **`\b` fails in a non-Latin
+  pattern** (Hyperscan rejects it under UCP);
+* always case-insensitive; `requiresExclusionCheck` is `false`; no `resolvedPatterns`; the term reports
+  at its own `hyperscanExpressionId`;
+* the U+FFFD guard, whole-word wrapping and normalisation apply to Natural Language terms only.
+
+---
+
+## Validation rules and error catalog
+
+Validation runs in layers, each failing with a specific message. Per-term failures are reported in the
+response (`FAILED`, HTTP 200); request-level failures are HTTP errors.
+
+### 1. Request shape (HTTP 400)
+
+Bean validation on `TypedCompileRequest`; the body is `{status, error, details[], timestamp}` with one
+`"field: message"` entry per violation:
+
+| Field | Message |
+|---|---|
+| `request_id` | `request_id must not be blank` |
+| `lexiconRuleName` | `lexiconRuleName must not be blank` |
+| `requestType` | `requestType must be exactly 'Natural Language' or 'Regex'` (when missing) |
+| `terms` | `terms list must not be empty` |
+| `terms[i].termId` / `terms[i].termDescription` | `… must not be blank` |
+
+```json
+{ "status": 400, "error": "Validation failed",
+  "details": ["terms: terms list must not be empty"], "timestamp": "2026-09-23T18:59:39.520650700Z" }
+```
+
+### 2. Term ids on `/compile/bundle` (HTTP 400)
+
+`termId must end with '::<n>' where n is a non-negative integer …  Malformed termId(s): [nonumber]`, or
+`Every termId's term number must be unique … Duplicate(s): [term number 1 used by [x::1, y::1]]`.
+Malformed ids are reported before duplicates.
+
+### 3. Term translation (per term → `FAILED` + `translationError`)
+
+| Rule | Example → message (abridged) |
+|---|---|
+| null/blank, or only symbols (needs a letter or digit) | `#@$#%$`, `💰` → `Lexicon term contains no meaningful content …` |
+| U+FFFD present | `und�geh*` → `Term contains the Unicode replacement character U+FFFD … Re-send the request as UTF-8` |
+| unbalanced parentheses / empty `()` | `(a NEAR{5}` → `Unmatched opening parenthesis '(' …` |
+| unclosed quote | `"unclosed` → `Unclosed quoted phrase starting at position 0 …` |
+| `NEAR`/`FOLLOWEDBY` shape | `NEAR {2}` → `must be immediately followed by '{n}' with no whitespace`; bare `NEAR` → `is missing its '{n}' distance value` |
+| distance not 1–50 | `NEAR{0}` → `zero is not allowed`; `NEAR{51}` → `only values from 1 to 50 are allowed`; also `NEAR{-1}`, `NEAR{03}`, `NEAR{3,6}`, `NEAR{x}` |
+| operator with a missing operand | `NEAR{2} (price)` → `Could not parse term … (expected a term, parenthesis, or quoted phrase)` |
+| `NOT` misuse | `NOT (james bond)` → `NOT must always be combined with a preceding required expression via AND`; `price AND NOT legitimate` / `apple AND NOT NEAR{10} banana` → `NOT must always be followed immediately by a parenthesised group`; `A NOT B` → `Standalone NOT is not supported as an operator` |
+| proximity sandwiched in `OR` | `(a) OR (b) NEAR{2} (c) OR (d)` → `… combined with OR at the same level, with OTHER OR alternatives on BOTH sides …` |
+| more than 5 `AND` operands | `Too many AND operands at the same level (6) …` |
+| `AND NOT` not at the root | `(x AND NOT (y)) NEAR{3} z` → `AND NOT may only appear at the top level of a term …` |
+| a pattern Hyperscan rejects for a non-size reason | Hyperscan's own message surfaced (`… translated to a pattern Hyperscan rejected: …`) |
+| a leaf with no proximity left to split that Hyperscan still rejects | `… one part ('…') was rejected by Hyperscan … reduce the number of OR-alternatives or wildcard usage` |
+
+A pattern Hyperscan rejects as **"too large"** is *not* an error when the side has proximity structure —
+it falls back to independent parts automatically.
+
+### 4. Regex-type terms (per term → `FAILED` + `errorLog`)
+
+Hyperscan's message, e.g. `Hyperscan compile error: Unterminated character class starting at index 0. [pattern: [a-z]`.
+
+### 5. Bundle-level outcomes
+
+See [`/compile/bundle`](#post-apilexiconcompilebundle): a FAILED term → no `.hdb` (200 + `NO_DATABASE.txt`); a
+failed combined build → 500 with `databaseError`.
+
+### HTTP status summary
+
+| Situation | Status | Body |
+|---|---|---|
+| valid request, any mix of PASS/FAILED terms | 200 | results |
+| bean-validation failure | 400 | `{status, error: "Validation failed", details[], timestamp}` |
+| invalid/duplicate `termId` on `/compile/bundle` | 400 | `{status, error: <message>, timestamp}` |
+| empty CSV upload | 400 | empty |
+| CSV larger than the multipart limit | 413 | `{status, error: "Uploaded file exceeds maximum allowed size", timestamp}` |
+| combined database build failure | 500 | results JSON with `databaseError` |
+| CSV parse or zip-build I/O failure | 500 | empty |
+| **malformed JSON, unsupported content type, or an unknown `requestType` value (e.g. `"Standard"`)** | **500** | `{status: 500, error: "Internal server error", timestamp}` |
+
+The last row is current behaviour, not a design choice: the catch-all `Exception` handler also receives
+the framework's own request-parsing failures, so these client errors surface as 500 instead of 400/415
+(see [Known limitations](#known-limitations-and-gotchas)).
+
+---
+
+## Warnings (log-only)
+
+The translator records non-fatal warnings; `LexiconCompileService` **logs them and does not return
+them** (the response has no `warnings` field). Watch the service log (`WARN`, logger
+`LexiconCompileService`) for:
+
+| Warning | Meaning |
+|---|---|
+| Fell back to independent parts | proximity between leaves lives only in `resolvedPatterns` |
+| Fallback leaves are start-of-word only | leaves are combination sub-expressions, so no trailing `\b` |
+| Whole-word matching not applied | the term contains non-ASCII text (UCP) |
+| Gap clamped or narrowed | requested distance exceeded the compiled width; long-distance matches are missed |
+| Mixed RTL + LTR `FOLLOWEDBY` | matches stored order, which may differ from visual order |
+| Chained `NEAR`/`FOLLOWEDBY` without parentheses | read as left-associative nesting |
+| `NEAR{1}`/`FOLLOWEDBY{1}` with a single-character operand | likely an attempt to split one word, which can never match |
+
+---
+
+## Configuration
+
+`application.yml`, with profile files layered on top. The default profile is `local`; the container
+sets `SPRING_PROFILES_ACTIVE=cloud-run` (`application-prd.yml` activates the `cloud-run` profile).
 
 | Key | Default | Effect |
 |---|---|---|
 | `server.port` | `8080` (`${PORT}` on Cloud Run) | HTTP port |
-| `server.compression.enabled` | `true` | Response GZIP for `application/json`/`text/plain` above `min-response-size` (1024 bytes) |
-| `spring.servlet.multipart.max-file-size` | `10MB` | Hard Spring-level cap on CSV upload size |
-| `lexicon.upload.max-file-size` | `10MB` | `LexiconProperties` mirror of the above (informational) |
-| `lexicon.compiler.max-terms-per-request` | `1000` | **Declared but not currently enforced** — no controller/service reads this value to reject an oversized request; large requests are limited only by JVM memory and per-term processing time |
-| `lexicon.hyperscan-version` | `5.4.0-2.0.0` | Reported in `/health` |
-| `management.endpoints.web.exposure.include` | `health, info, metrics` | Actuator endpoints exposed (includes a Hyperscan-probe health indicator, `LexiconCompileConfig.hyperscanHealthIndicator`) |
+| `server.compression.*` | enabled, min 1024 bytes, JSON/text | response gzip |
+| `server.tomcat.threads.max` / `min-spare` | 200 / 10 (20 on cloud-run) | request threads |
+| `spring.servlet.multipart.max-file-size` / `max-request-size` | `10MB` | **the** limit on CSV uploads |
+| `lexicon.compiler.max-terms-per-request` | 1000 (2000 on cloud-run) | bound to `LexiconProperties` but **not enforced** anywhere |
+| `lexicon.upload.max-file-size`, `lexicon.hyperscan-version` | `10MB`, `5.4.0-2.0.0` | bound but not read by any code |
+| `management.endpoints.web.exposure.include` | `health, info, metrics` | actuator; includes a native-library health indicator |
+| `logging.level.com.db.macs3.ecomms.spectre` | `INFO` (`DEBUG` on `local`/`test`) | translator and compile logs |
 
-CORS: `/api/**` allows any origin, `GET`/`POST`/`OPTIONS`, exposing
-`Content-Encoding`/`Content-Length` — intended for Cloud Run inter-service
-calls, not a public-internet-facing configuration.
+CORS: `/api/**` allows any origin for `GET`/`POST`/`OPTIONS` and exposes `Content-Encoding` and
+`Content-Length` — intended for Cloud Run service-to-service calls, not a public deployment.
+
+The native Hyperscan library ships inside the jar (linux-x86_64, linux-aarch64, osx-aarch64,
+windows-x86_64) and is extracted to `java.io.tmpdir`; the runtime image only needs `libstdc++6` and
+`libgomp1`. Startup fails fast if the library cannot load.
 
 ---
 
-## Build & test
+## Build, test and run
 
 ```bash
-mvn clean test        # JUnit 5, real Hyperscan native library, JDK 21 virtual threads
-mvn clean package      # Spring Boot 4 executable jar
+mvn clean test          # JUnit 5 with the real Hyperscan native library, JDK 21
+mvn clean package       # executable Spring Boot jar
+docker build -t lexicon-compile-service .
 ```
 
-Genuinely compiled and run — not merely reviewed — against the real
-Hyperscan native library (bundled for linux-x86_64/aarch64, osx-aarch64,
-and windows-x86_64). The one file needing full Spring Test infrastructure
-(`LexiconCompileControllerTest`, `MockMvc`) is reviewed by hand rather
-than exercised by the automated suite, consistent with the scoping
-decision made for the equivalent controller test in the other two
-services in this platform.
+The suite runs real Hyperscan end to end: it compiles terms, builds and reloads real `.hdb` files, and
+scans text against them. `WholeWordMatchingTest` covers whole-word behaviour (including scans of the
+reported "pd in updates" case), and `ResolvedPatternMatchingIntegrationTest` proves the `resolvedPatterns`
+consumer contract.
+
+Source layout:
+
+| Package | Role |
+|---|---|
+| `controller` | REST endpoints, error mapping |
+| `service` | `LexiconCompileService` (per-term pipeline), `LexiconCompileBundleService` (ids + combined database), `CsvCompileService` |
+| `translator` | `Tokenizer` → `ExpressionParser` → `PatternDecomposer` / `PatternComplexityAnalyzer` → `PatternCodeGenerator` / `MultiLanguagePatternBuilder`, owned by `TermSyntaxTranslator` |
+| `hyperscan` | `HyperscanCompiler` (validation, flags, combined database), `HyperscanCombinationHandler` (expression shapes and ids) |
+| `util`, `model` | `ScriptDetector`, `ScriptType`, request/response types |
+| `config` | gzip filter, CORS, health indicator, properties |
 
 ---
 
-## Known limitations
+## Known limitations and gotchas
 
-- **`lexicon.compiler.max-terms-per-request` is configured but not
-  enforced** — see [Configuration reference](#configuration-reference).
-- **Two error paths return an empty HTTP body instead of the standard
-  `{status, error, timestamp}` shape**: an empty CSV upload (400) and a
-  CSV/zip-build I/O failure (500) — see
-  [Error response shapes](#error-response-shapes).
-- **`CompileRequest.java` (the pre-`TypedCompileRequest` request model) is
-  dead code** — still present in `com.db.macs3.ecomms.spectre.model` but
-  referenced nowhere in `src/main`; every endpoint uses
-  `TypedCompileRequest` exclusively.
-- **Nested Hyperscan combinations are avoided by design, not because they
-  are confirmed unsupported** — `HyperscanCombinationHandler` builds at
-  most one combination expression per term, referencing only plain
-  (non-combination) ids, rather than relying on unverified nested-formula
-  support.
-- **Adaptive gap-width reduction cannot help a term whose OR-branch width
-  alone (independent of gap width) is already too large for Hyperscan** —
-  the reduction floors at a zero-width gap and, if still rejected,
-  surfaces Hyperscan's real error rather than pretending to have fixed it.
-- **Scanner Service and Scan Engine consuming the current
-  `regexPattern`/`exclusionRegex`/id-scheme shape is this
-  project's own concern only** — both are separate Maven projects with
-  their own, independent implementations of the AND-NOT-vs-decomposition
-  decision; a change here has no compile-time link to either and requires
-  a corresponding check on their side.
+* **Client errors return HTTP 500.** Malformed JSON, a wrong content type and an unknown `requestType`
+  value are caught by the catch-all exception handler and reported as `500 Internal server error`
+  instead of 400/415.
+* **`/compile` and `/compile/csv` ignore `requestType`.** Only `/compile/bundle` compiles Regex-type
+  terms; on the other endpoints a regex is parsed as operator language and normally fails.
+* **Translation warnings are not in the response** — they are logged only, so a consumer cannot tell
+  from the JSON that a gap was clamped or whole-word matching was skipped. A fallback is visible as a
+  multi-entry `regexPattern`.
+* **Fallback terms are start-of-word only** (`\bprice` matches "pricey"), and a term with any non-ASCII
+  text is a plain substring search.
+* **Multi-word phrases need exactly one space** between words in the scanned text.
+* **A wide gap loses precision**: word gaps are capped at 29 words, character gaps at 30 characters.
+* **Adaptive narrowing cannot help a term whose `OR` width alone is too large** for Hyperscan; that is
+  reported as a translation failure with Hyperscan's own message.
+* **`.hdb` files are architecture-specific** — build and load on compatible CPUs.
+* **`lexicon.compiler.max-terms-per-request` is not enforced**; very large requests are limited only by
+  memory and time.
+* **Unused code**: `CompileRequest` (the old per-term request model) and `ProximityMatch` are
+  referenced nowhere in `src/main`.
+* **Three services, no shared code.** The Scanner Service and Scan Engine each carry their own
+  decision logic for AND NOT and decomposition; a change to the response shape, the id scheme, or how
+  terms are split needs a matching change in both — there is no compile-time link and a mismatch fails
+  silently (a wrong hit/no-hit decision or a wrong `term_id`).

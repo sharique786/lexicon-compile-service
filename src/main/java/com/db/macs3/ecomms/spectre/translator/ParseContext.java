@@ -4,39 +4,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Mutable context passed through {@link PatternCodeGenerator} while walking
- * one term's {@link Ast}. Accumulates flags and the (at most one) AND-NOT
- * exclusion pattern discovered along the way.
+ * Mutable state carried through {@link PatternCodeGenerator} while it walks one term's {@link Ast}:
+ * whether the term needs UTF8/UCP, the (at most one) AND NOT exclusion pattern, warnings, and how
+ * literals are wrapped in word boundaries.
  *
- * <p><b>Why there is no more {@code hasAndOp} / required-operands tracking</b>
- * <p>The previous design treated {@code AND} the same way it treated
- * {@code AND NOT}: emit an OR pre-scan pattern, and rely on separately
- * tracked "required operand" metadata for a downstream post-filter to
- * enforce actual AND semantics. That metadata was never actually consumed
- * by any caller, so in practice {@code "price AND rigging"} behaved like
- * {@code "price OR rigging"} — matching a message containing only "price".
- * {@code AND} is now compiled DIRECTLY into a single correct Hyperscan
- * pattern by {@link PatternCodeGenerator#generateAnd} (every ordering of the
- * operands joined by an unbounded gap — see {@link Ast.And} class Javadoc),
- * so no post-filter or operand bookkeeping is needed for it at all.
+ * <p><b>Flags.</b> {@link #computeFlags()} gives {@code CASELESS}, plus {@code UTF8|UCP} once any
+ * non-ASCII character (including emoji) was encoded. {@code DOTALL} is not set because no generated
+ * gap uses a bare {@code .}; every gap is built from {@code \s}, {@code \S} or {@code [\s\S]}.
  *
- * <p><b>Why {@code exclusionRegex} still exists</b>
- * <p>{@code AND NOT} is different in kind, not just degree: "B does not
- * appear anywhere in this message" cannot be compiled into the same
- * Hyperscan expression as "A appears somewhere" without negative lookaround,
- * which Hyperscan does not support. {@link #exclusionRegex} carries B's
- * OWN independently Hyperscan-valid pattern, to be checked separately by the
- * caller — see {@link Ast.AndNot} class Javadoc for the full contract.
+ * <p><b>Exclusion.</b> {@code AND NOT} cannot be one Hyperscan expression, so {@link #exclusionRegex}
+ * carries the excluded side's own valid pattern for the caller to check separately
+ * ({@link Ast.AndNot}).
  *
- * <p><b>Why there is no more DOTALL flag-setting</b>
- * <p>DOTALL only changes what the {@code .} metacharacter matches. Every
- * gap this translator generates — NEAR/FOLLOWEDBY's bounded gap
- * ({@code (?:\s+\S+){0,n}\s+} or {@code [\s\S]{0,n}}) and AND's unbounded
- * gap ({@code [\s\S]*}) — is built from the {@code \s}/{@code \S}/
- * {@code [\s\S]} character classes, never from a bare {@code .}. DOTALL was
- * being set but had no effect on anything this translator actually produces;
- * removing it is a correctness cleanup discovered while fixing AND/AND-NOT,
- * not a behaviour change.
+ * <p><b>Word boundaries</b> ({@link #isWordBoundaries()}, {@link #isTrailingBoundaries()}) are fixed
+ * per term before generation; see those constructors and {@link PatternCodeGenerator}.
  */
 class ParseContext {
 
@@ -54,15 +35,10 @@ class ParseContext {
     static final int HS_FLAG_UCP = 64;
 
     /**
-     * Maximum operands allowed in a single AND (or the required side of an
-     * AND NOT) at one grammar level. {@link PatternCodeGenerator#generateAnd}
-     * enumerates every ordering of the operands (N! permutations) to express
-     * "all present, any order, unbounded distance" without lookahead — at 5
-     * operands that is already 120 permutations of the combined sub-patterns.
-     * Beyond this ceiling the resulting pattern reliably becomes too large
-     * for Hyperscan to compile, the same class of failure the chained
-     * NEAR/FOLLOWEDBY validation in {@link ExpressionParser} exists to catch
-     * up front rather than let Hyperscan reject opaquely later.
+     * Maximum operands at one AND level. {@link PatternCodeGenerator#generateAnd} enumerates every
+     * ordering of the operands (N! permutations), so 5 operands is already 120 alternatives of the
+     * combined sub-patterns; beyond this Hyperscan reliably rejects the pattern as too large.
+     * {@link ExpressionParser} enforces the limit at parse time.
      */
     static final int MAX_AND_OPERANDS = 5;
 

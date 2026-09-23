@@ -3,17 +3,11 @@ package com.db.macs3.ecomms.spectre.translator;
 import java.util.List;
 
 /**
- * Abstract syntax tree for a parsed lexicon term, produced by
- * {@link ExpressionParser} and consumed by {@link PatternCodeGenerator}.
+ * Abstract syntax tree of a parsed lexicon term, produced by {@link ExpressionParser} and consumed
+ * by {@link PatternCodeGenerator}, {@link PatternDecomposer} and {@link PatternComplexityAnalyzer}.
  *
- * <p>Working with an explicit tree — rather than generating pattern
- * fragments directly while parsing, as the previous implementation did —
- * is what makes "brackets resolve first, then NEAR/FOLLOWEDBY/AND/OR" a
- * structural property of the code rather than something that has to be
- * gotten right by careful ordering of string operations. A node's children
- * are, by construction, exactly the fully-resolved contents of whatever
- * parentheses enclosed them; nesting depth in the tree mirrors nesting
- * depth in the source term exactly, at any depth.
+ * <p>A node's children are exactly the resolved content of the parentheses that enclosed them, so
+ * nesting depth in the tree mirrors nesting depth in the source term at any depth.
  */
 sealed interface Ast {
 
@@ -24,38 +18,24 @@ sealed interface Ast {
     }
 
     /**
-     * {@code A AND B AND C} — all operands must be present, ANYWHERE in the
-     * message, in ANY order, with NO distance limit. Compiled DIRECTLY into
-     * a single valid Hyperscan pattern by {@link PatternCodeGenerator} —
-     * every ordering of the operands, joined by an unbounded
-     * {@code [\s\S]*} gap (the same technique {@link Ast.Near} uses for a
-     * BOUNDED gap, just without the bound). This needs no lookahead, no
-     * post-filter, and no scan-time cooperation from the caller — see
-     * {@link PatternCodeGenerator} class Javadoc for why the previous
-     * lookahead-based design (documented in the old README) could never
-     * have worked against Hyperscan, which does not support lookaround at all.
+     * {@code A AND B AND C} — every operand present ANYWHERE in the message, in ANY order, at ANY
+     * distance. {@link PatternCodeGenerator} compiles it to one Hyperscan pattern: every ordering of
+     * the operands joined by an unbounded {@code [\s\S]*} gap (the unbounded form of the gap
+     * {@link Near} uses). Hyperscan has no lookahead, so this alternation of orderings is what makes
+     * AND expressible without a post-filter.
      */
     record And(List<Ast> operands) implements Ast {
     }
 
     /**
-     * {@code A AND NOT B} (and its chained form {@code A AND NOT B AND NOT C},
-     * where every entry in {@code excluded} is combined into one exclusion
-     * check — the term matches only when {@code required} is present AND
-     * NONE of {@code excluded} is present, anywhere in the message).
+     * {@code A AND NOT (B)} (and chained {@code A AND NOT (B) AND NOT (C)}, or NOT-groups folded in by
+     * the parser). The term matches only when {@code required} is present AND NONE of
+     * {@code excluded} is present, anywhere in the message.
      *
-     * <p>Unlike {@link And}, this CANNOT be compiled into a single Hyperscan
-     * pattern — "B does not appear anywhere in this message" is not
-     * expressible without negative lookaround, which Hyperscan does not
-     * support (this is the fundamental fact the old README got wrong).
-     * {@link PatternCodeGenerator} therefore emits TWO independent, plain
-     * Hyperscan-valid patterns: {@code required}'s pattern (the term's
-     * {@code hsPattern}) and {@code excluded}'s combined pattern (the
-     * term's {@code exclusionRegex}). Both are Hyperscan-validated at
-     * compile time. A caller gets a correct result only by checking BOTH at
-     * scan time: the term matches iff {@code hsPattern} matches AND
-     * {@code exclusionRegex} does NOT match the same message — see the
-     * README's "AND NOT: the two-pattern contract" section.
+     * <p>Unlike {@link And} this cannot be a single Hyperscan pattern: "absent from the whole message"
+     * needs negative lookaround, which Hyperscan lacks. {@link PatternCodeGenerator} therefore emits
+     * two independent patterns — the required side and the excluded side (excluded operands OR'd) —
+     * and the caller evaluates the condition after the scan. Only valid at the root of a term.
      */
     record AndNot(Ast required, List<Ast> excluded) implements Ast {
     }
@@ -73,19 +53,11 @@ sealed interface Ast {
     }
 
     /**
-     * {@code NOT (X)} — a unary exclusion group. {@code NOT} is never an
-     * independent operator; this node exists ONLY as an intermediate shape
-     * produced by {@link ExpressionParser#parseAtom} for the two supported
-     * spellings ({@code X AND (NOT (Y))} and {@code X AND NOT (Y)}) and
-     * IMMEDIATELY folded, together with whatever other operand(s) share its
-     * enclosing {@code AND} level, into the existing {@link AndNot} node by
-     * {@link ExpressionParser#parseAnd} — see that method's Javadoc for the
-     * exact fold. A {@code Not} node therefore never appears in the final
-     * {@link Ast} handed to {@link PatternCodeGenerator}/{@link TermSyntaxTranslator}:
-     * one surviving unfolded (used standalone with nothing preceding it, as
-     * an {@link Or} alternative, or as a {@link Near}/{@link FollowedBy}
-     * operand) is rejected during parsing itself, before it could reach
-     * here — see {@link ExpressionParser#foldNotOperands}.
+     * {@code NOT (X)} — an internal, transient node. It is produced by {@link ExpressionParser#parseAtom}
+     * and folded, with the other operands of its enclosing {@code AND}, into an {@link AndNot} by
+     * {@link ExpressionParser#parseAnd}. One that finds no enclosing {@code AND} (standalone, as an
+     * {@link Or} alternative, or as a {@link Near}/{@link FollowedBy} operand) is a parse error, so a
+     * {@code Not} never reaches code generation.
      */
     record Not(Ast operand) implements Ast {
     }

@@ -4,83 +4,59 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Walks an {@link Ast} and generates the Hyperscan PCRE pattern string(s),
- * accumulating flags into a {@link ParseContext}.
+ * Walks an {@link Ast} and generates the Hyperscan PCRE text, recording flag needs and warnings in
+ * a {@link ParseContext}. Hyperscan supports no lookaround or backreferences, so every construct
+ * below is plain alternation and bounded/unbounded repetition.
  *
- * <p><b>AND: co-occurrence, any order, unbounded distance — WITHOUT lookahead</b>
- * <p>Hyperscan does not support lookaround of any kind. The pattern
- * {@code (?=.*A)(?=.*B)(?=.*C).*} once documented for AND in this project's
- * README was never something Hyperscan could actually compile — every term
- * using AND silently degraded to matching on ANY single operand (effectively
- * {@code A|B|C}), not all of them together. {@link #generateAnd} replaces
- * that with the SAME technique {@link #generateNear} already uses for a
- * BOUNDED gap — bidirectional alternation over an inter-operand gap — just
- * with the gap made unbounded ({@code [\s\S]*} instead of
- * {@code (?:\s+\S+){0,n}\s+}) and generalised from 2 operands to N by
- * enumerating every ordering (permutation): for {@code A AND B AND C}, the
- * six ways A/B/C can appear in the text, joined by {@code |}. This is
- * ordinary alternation and repetition — no lookaround, no backreferences —
- * so it is something Hyperscan can actually compile and match correctly.
+ * <p><b>Nodes</b>
+ * <ul>
+ *   <li><b>OR</b> → {@code (?:a|b|c)}.</li>
+ *   <li><b>AND</b> → every ordering of the operands joined by {@code [\s\S]*}, alternated:
+ *       {@code (?:A[\s\S]*B|B[\s\S]*A)}. Operand count is capped ({@link ParseContext#MAX_AND_OPERANDS}).</li>
+ *   <li><b>AND NOT</b> → the required side's pattern is returned; the excluded side (its operands
+ *       OR'd) is recorded through {@link ParseContext#setexclusionRegex}. The term matches iff the
+ *       required pattern is found AND the exclusion pattern is not — see {@link Ast.AndNot}.</li>
+ *   <li><b>NEAR / FOLLOWEDBY</b> → a gap-embedded pattern from {@link MultiLanguagePatternBuilder}.</li>
+ *   <li><b>Word / Phrase / QuotedPhrase</b> → an escaped literal, described next.</li>
+ * </ul>
  *
- * <p><b>AND NOT: a two-pattern contract, not a single regex</b>
- * <p>"B does not appear anywhere in this message" has no equivalent
- * construction — unlike AND's "all appear, any order", which is expressible
- * as ordinary alternation, "absent from the whole text" is exactly what
- * negative lookaround exists for, and Hyperscan has none. {@link #generateAndNot}
- * does not pretend otherwise: it returns the REQUIRED side's pattern as the
- * term's Hyperscan-scanned {@code hsPattern} (itself fully correct AND
- * semantics if it has multiple operands, via {@link #generateAnd}'s
- * recursion), and separately records the EXCLUDED side's own valid Hyperscan
- * pattern in {@link ParseContext#setexclusionRegex}. Both patterns are
- * independently Hyperscan-validated at compile time (see
- * {@code HyperscanCompiler}); a correct scan-time result requires checking
- * BOTH — the term matches iff {@code hsPattern} matches AND
- * {@code exclusionRegex} does NOT match the same message. See the
- * project README's "AND NOT: the two-pattern contract" section for exactly
- * how a caller applies this.
+ * <p><b>Literals.</b> A bare word is scanned code point by code point ({@link #encodeWord}):
+ * <ul>
+ *   <li>{@code *} → {@code \S*} (zero or more non-whitespace characters);</li>
+ *   <li>{@code ?} → {@code \S} (exactly one non-whitespace character), so {@code I?ll} matches
+ *       "I'll" and {@code he?d} matches "held";</li>
+ *   <li>an emoji code point → {@code \x{HEX}}; any other non-ASCII character is kept literally.
+ *       Both set {@link ParseContext#setNeedsUtf8};</li>
+ *   <li>PCRE metacharacters ({@code \ . ^ $ | + ( ) [ ] { } < >}) are escaped.</li>
+ * </ul>
+ * A bare multi-word phrase joins its words with one literal space (not a flexible gap). A
+ * double-quoted phrase ({@link #encodeQuotedPhrase}) means "match exactly", so {@code *} and
+ * {@code ?} in it are escaped literal characters, never wildcards.
  *
- * <p><b>Word encoding is a single pass (the fix for the wildcard bug)</b>
- * <p>The previous implementation had three separately-ordered word-encoding
- * methods; a word containing BOTH a wildcard AND a non-ASCII character (e.g.
- * German {@code verschwör*}) hit the wrong branch first and lost its
- * wildcard expansion. {@link #encodeWord} replaces all three with one
- * codepoint-by-codepoint scan that handles both wildcards ({@code *} and
- * {@code ?}), emoji, non-ASCII, and PCRE metacharacter escaping uniformly,
- * in one place.
- *
- * <p><b>{@code ?} is a single-character wildcard, like {@code *} but for
- * exactly one character; quoted phrases still escape both as literal</b>
- * <p>A bare {@code ?} (e.g. {@code he?d}) becomes {@code \S} — "exactly one
- * non-whitespace character" — never a literal question mark and never the
- * PCRE "optional" quantifier (which would require an escape to use safely
- * anyway). This mirrors {@code *}'s own {@code \S*} expansion exactly, just
- * bounded to one character instead of zero-or-more — e.g. {@code I?ll}
- * becomes {@code I\Sll}, matching "I'll", "I,ll", etc. Confirmed-fixed
- * regression: an earlier revision escaped {@code ?} to a literal {@code \?}
- * unconditionally, so a term like {@code "I?ll kill you"} could never match
- * real text containing an apostrophe in that position, even though the
- * author clearly intended {@code ?} as a wildcard for the one substituted
- * character (a common convention this operator language now honours, the
- * same way most glob-style languages use {@code ?} for "any one character").
- * {@link #encodeQuotedPhrase} is deliberately stricter than
- * {@link #encodeWord} and unaffected by this change: quotes mean "match
- * this exactly", so {@code *} and {@code ?} inside a quoted phrase are still
- * literal characters, never wildcards.
+ * <p><b>Whole-word matching.</b> Each literal is wrapped in {@code \b} at an edge whose first/last
+ * source character is an ASCII word character ({@code [A-Za-z0-9_]}), so {@code pd} matches the word
+ * "pd" but not the "pd" inside "updates" ({@link #withWordBoundaries}):
+ * <ul>
+ *   <li>a wildcard edge or non-word edge ({@code $100}, {@code u.s.}) gets no {@code \b}, so
+ *       {@code pd*} matches "pdf" and {@code *pd*} matches "updates" — the wildcard is the author's
+ *       explicit substring opt-in;</li>
+ *   <li>a term containing ANY non-ASCII text gets no boundaries at all
+ *       ({@link #containsNonAscii}) because Hyperscan rejects {@code \b} in UCP mode, which such a
+ *       term needs;</li>
+ *   <li>the trailing {@code \b} is omitted when {@link ParseContext#isTrailingBoundaries()} is
+ *       false — see {@link ParseContext}.</li>
+ * </ul>
  */
 final class PatternCodeGenerator {
 
     /**
-     * PCRE metacharacters that always need escaping (excludes {@code *} and {@code ?}, handled specially).
+     * PCRE metacharacters that always need escaping ({@code *} and {@code ?} are handled separately).
      */
     private static final String PCRE_META = "\\.^$|+()[]{}<>";
 
     /**
-     * Unbounded inter-operand gap for AND — "any character, any number of
-     * times, no limit". Built from the {@code [\s\S]} character class
-     * (matches any code point, whitespace or not) rather than {@code .*},
-     * so it works correctly WITHOUT the DOTALL flag — {@code .} without
-     * DOTALL does not match newlines, but {@code [\s\S]} always does,
-     * regardless of flags. See {@link ParseContext} class Javadoc.
+     * The unbounded gap AND joins its operands with: any character, any number of times. Built from
+     * {@code [\s\S]} rather than {@code .*} so it matches newlines whatever the DOTALL flag says.
      */
     private static final String UNBOUNDED_GAP = "[\\s\\S]*";
 
@@ -88,8 +64,8 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * Generates the Hyperscan pattern for {@code ast}, mutating {@code ctx}
-     * with discovered flags and, for AND NOT terms, the exclusion pattern.
+     * Generates the Hyperscan pattern for {@code ast}, mutating {@code ctx} with discovered flag needs
+     * and, for an AND NOT node, the exclusion pattern.
      */
     static String generate(Ast ast, ParseContext ctx) {
         return switch (ast) {
@@ -110,23 +86,14 @@ final class PatternCodeGenerator {
     // ── Whole-word matching ──────────────────────────────────────────────────
 
     /**
-     * Wraps a literal leaf in {@code \b} on each edge whose FIRST/LAST source
-     * character is an ASCII word character, so {@code pd} matches the word
-     * "pd" but not the "pd" inside "updates". Confirmed-fixed bug: leaves used
-     * to be emitted as bare literals, i.e. plain substring search.
-     *
-     * <p>Decided per edge, on the raw (pre-encoding) text:
+     * Wraps a literal in {@code \b} on each edge whose first/last SOURCE character is an ASCII word
+     * character. The decision is made on the raw, pre-encoding text:
      * <ul>
-     *   <li>an edge that is a wildcard ({@code *}/{@code ?} in a bare word) or
-     *       any non-word character ({@code $100}, {@code u.s.}, {@code #tag})
-     *       gets NO boundary — {@code \b} between two non-word characters
-     *       would demand a word character that isn't there. The wildcard is
-     *       therefore the author's explicit substring opt-in: {@code bomb*}
-     *       matches "bombing", {@code *pd*} matches "updates".</li>
-     *   <li>nothing is added at all when {@link ParseContext#isWordBoundaries()}
-     *       is false (term contains non-ASCII text — UCP mode rejects {@code \b}).</li>
-     *   <li>the END edge is skipped when {@link ParseContext#isTrailingBoundaries()} is
-     *       false — leaves feeding a native COMBINATION cannot end in an assertion.</li>
+     *   <li>an edge that is a wildcard ({@code *}/{@code ?} in a bare word) or any non-word character
+     *       ({@code $100}, {@code u.s.}, {@code #tag}) gets no boundary — {@code \b} between two non-word
+     *       characters would demand a word character that is not there;</li>
+     *   <li>nothing is added when {@link ParseContext#isWordBoundaries()} is false (non-ASCII term);</li>
+     *   <li>the END edge is skipped when {@link ParseContext#isTrailingBoundaries()} is false.</li>
      * </ul>
      */
     private static String withWordBoundaries(String encoded, String rawText, ParseContext ctx) {
@@ -144,26 +111,27 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * True when any literal in {@code ast} contains a non-ASCII character —
-     * exactly the condition under which {@link ParseContext#computeFlags()}
-     * will add UCP (via {@code setNeedsUtf8}), and so under which {@code \b}
-     * cannot be used. Computed up front from the AST so the decision is
-     * uniform across every leaf of the term.
+     * True when any literal in {@code ast} contains a non-ASCII character — the condition under which
+     * {@link ParseContext#computeFlags()} adds UCP, and so under which {@code \b} cannot be used. It is
+     * computed from the AST before generation so the decision is uniform across every leaf of the term.
      */
     static boolean containsNonAscii(Ast ast) {
         return leafTexts(ast).stream().anyMatch(text -> text.chars().anyMatch(c -> c > 0x7F));
     }
 
     /**
-     * True when at least one literal in {@code ast} would receive a {@code \b}
-     * edge — used to warn only when skipping boundaries actually changes a
-     * term's behavior (a pure-CJK term never would have had any).
+     * True when at least one literal in {@code ast} would receive a {@code \b} edge. Used to warn only
+     * when skipping boundaries actually changes the term's behavior (a pure-CJK term would never have
+     * had any).
      */
     static boolean hasBoundaryCandidate(Ast ast) {
         return leafTexts(ast).stream().anyMatch(text -> !text.isEmpty()
                 && (isAsciiWordChar(text.charAt(0)) || isAsciiWordChar(text.charAt(text.length() - 1))));
     }
 
+    /**
+     * The raw source text of every literal (word, phrase, quoted phrase) in {@code ast}.
+     */
     private static List<String> leafTexts(Ast ast) {
         List<String> texts = new ArrayList<>();
         collectLeafTexts(ast, texts);
@@ -204,18 +172,10 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * AND → every ordering of the operands, joined by an unbounded gap,
-     * alternated together — see class Javadoc. This is now a fully correct,
-     * self-contained Hyperscan pattern: {@code "price AND rigging"} compiles
-     * to {@code (?:price[\s\S]*rigging|rigging[\s\S]*price)}, which matches
-     * "There's price change and market rigging is going on" (rigging follows
-     * price, with other words between) but does NOT match "There's price
-     * change" alone (rigging never appears) — exactly the required behaviour,
-     * with no post-filter or downstream cooperation needed.
-     *
-     * <p>The operand-count ceiling is enforced by {@link ExpressionParser}
-     * at parse time (see {@link ParseContext#MAX_AND_OPERANDS}), not here —
-     * by the time code generation runs, the AST is already known-valid.
+     * AND → every ordering of the operands joined by an unbounded gap, alternated together, so
+     * {@code "price AND rigging"} becomes {@code (?:price[\s\S]*rigging|rigging[\s\S]*price)}. It
+     * matches "price change and market rigging is going on" but not "price change" alone. The operand
+     * ceiling is enforced by {@link ExpressionParser}, not here.
      */
     private static String generateAnd(Ast.And and, ParseContext ctx) {
         List<String> operandPatterns = new ArrayList<>(and.operands().size());
@@ -226,12 +186,9 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * AND NOT → returns the REQUIRED side's pattern as {@code hsPattern},
-     * and records the EXCLUDED side's pattern (every excluded operand
-     * combined with OR into one pattern) via
-     * {@link ParseContext#setexclusionRegex} — see class Javadoc for why
-     * these cannot be the same expression, and {@link Ast.AndNot} for the
-     * full two-pattern contract.
+     * AND NOT → returns the required side's pattern and records the excluded side's pattern (every
+     * excluded operand OR'd together) in {@link ParseContext#setexclusionRegex}; see {@link Ast.AndNot}
+     * for why these cannot be one expression.
      */
     private static String generateAndNot(Ast.AndNot andNot, ParseContext ctx) {
         String requiredPattern = generate(andNot.required(), ctx);
@@ -247,14 +204,10 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * Builds a full gap-embedded NEAR pattern. As of the {@code resolvedPatterns}
-     * change, {@code generate()} is only ever invoked directly on an
-     * {@code Ast.Near} node via {@link #generateOr}'s recursion into a
-     * multi-operand {@code Or} — {@link PatternDecomposer} intercepts every
-     * OTHER NEAR/FOLLOWEDBY node first, splitting it into independent
-     * gap-less leaves instead. See {@link PatternDecomposer} class Javadoc
-     * "the one exception" and {@link MultiLanguagePatternBuilder}'s own
-     * class Javadoc for why this one path still needs to exist.
+     * Builds a gap-embedded NEAR pattern via {@link MultiLanguagePatternBuilder}. Reached from
+     * {@code TermSyntaxTranslator#resolveSide}'s single-pattern attempt and from a NEAR nested inside
+     * a multi-operand {@code OR}; {@link PatternDecomposer} handles every other NEAR/FOLLOWEDBY node
+     * when a side falls back to leaves.
      */
     private static String generateNear(Ast.Near near, ParseContext ctx) {
         String leftPat = generate(near.left(), ctx);
@@ -266,8 +219,7 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * Builds a full gap-embedded FOLLOWEDBY pattern — see {@link #generateNear}
-     * Javadoc for why this remains reachable only via the OR-nested-proximity path.
+     * Builds a gap-embedded FOLLOWEDBY pattern; reachable from the same two places as {@link #generateNear}.
      */
     private static String generateFollowedBy(Ast.FollowedBy fb, ParseContext ctx) {
         String leftPat = generate(fb.left(), ctx);
@@ -279,11 +231,9 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * Propagates a {@link MultiLanguagePatternBuilder.BuildResult}'s UTF8
-     * flag need and any warning (e.g. RTL/LTR direction mismatch, or a
-     * char-based gap clamped to {@link MultiLanguagePatternBuilder#MAX_CHAR_GAP})
-     * into the shared {@code ctx} — {@code ctx.getWarnings()} is read back by
-     * {@link TermSyntaxTranslator#translate} once the whole term is done.
+     * Propagates a {@link MultiLanguagePatternBuilder.BuildResult}'s UTF8 need and warning (mixed
+     * RTL/LTR FOLLOWEDBY, or a clamped/narrowed gap) into {@code ctx}; the translator reads
+     * {@link ParseContext#getWarnings()} back once the term is done.
      */
     private static void propagateProximityResult(MultiLanguagePatternBuilder.BuildResult buildResult, ParseContext ctx) {
         if ((buildResult.recommendedHsFlags() & ParseContext.HS_FLAG_UTF8) != 0) {
@@ -295,13 +245,9 @@ final class PatternCodeGenerator {
     // ── AND: unbounded co-occurrence pattern construction ───────────────────────
 
     /**
-     * Builds a single Hyperscan-valid pattern expressing "every one of
-     * {@code operandPatterns} appears somewhere in the text, in ANY order,
-     * with NO distance limit" — see class Javadoc.
-     *
-     * @param operandPatterns already-generated PCRE fragments for each AND operand
-     * @return {@code (?:seq1|seq2|...)} where each {@code seqN} is one
-     * permutation of the operands joined by {@link #UNBOUNDED_GAP}
+     * Builds one pattern for "every operand appears somewhere, in any order, at any distance":
+     * {@code (?:seq1|seq2|...)} where each sequence is one permutation of {@code operandPatterns}
+     * joined by {@link #UNBOUNDED_GAP}.
      */
     private static String buildUnboundedCoOccurrencePattern(List<String> operandPatterns) {
         List<List<String>> permutations = permutationsOf(operandPatterns);
@@ -336,13 +282,9 @@ final class PatternCodeGenerator {
     // ── Leaf code generation ──────────────────────────────────────────────────
 
     /**
-     * Multiple bare words that appeared together inside one set of parens
-     * with no operator between them, e.g. {@code (bomb this place)}. Each
-     * word is independently wildcard (both {@code *} and {@code ?}) and
-     * emoji aware; words are joined with a single literal space, matching
-     * the existing quoted-phrase
-     * whitespace convention (exact single-space match, not a flexible
-     * {@code \s+} gap — this is deliberately a phrase, not a proximity operator).
+     * A bare multi-word phrase such as {@code (bomb this place)}: each word is encoded by
+     * {@link #encodeWord} (so wildcards and emoji work) and the words are joined by ONE literal space.
+     * This is a phrase, deliberately not a flexible {@code \s+} gap.
      */
     private static String generatePhrase(Ast.Phrase phrase, ParseContext ctx) {
         List<String> encoded = new ArrayList<>(phrase.words().size());
@@ -353,9 +295,9 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * Encodes one bare (unquoted) word into its PCRE fragment. Single
-     * codepoint-by-codepoint pass — see class Javadoc for why this replaces
-     * three separately-ordered methods from the previous implementation.
+     * Encodes one bare word in a single code-point pass — wildcards, emoji, non-ASCII text and
+     * metacharacter escaping are all handled here, so a word mixing a wildcard with a non-ASCII
+     * character (German {@code verschwör*}) expands correctly. See the class Javadoc for the rules.
      */
     static String encodeWord(String word, ParseContext ctx) {
         StringBuilder patternBuilder = new StringBuilder(word.length() * 2);
@@ -390,10 +332,8 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * Encodes a double-quoted phrase's inner text. Unlike {@link #encodeWord},
-     * {@code *} and {@code ?} are escaped as ordinary literal characters here
-     * (never wildcard-expanded or left as live quantifiers) — quotes mean
-     * "match this exactly".
+     * Encodes a double-quoted phrase's inner text. Unlike {@link #encodeWord}, {@code *} and
+     * {@code ?} are escaped as literal characters: quotes mean "match this exactly".
      */
     static String encodeQuotedPhrase(String text, ParseContext ctx) {
         StringBuilder patternBuilder = new StringBuilder(text.length() * 2);
@@ -421,9 +361,8 @@ final class PatternCodeGenerator {
     }
 
     /**
-     * Returns {@code true} if the Unicode codepoint belongs to an emoji block.
-     * Same coverage as the previous implementation (emoticons, symbols,
-     * transport, flags, supplemental blocks).
+     * True for a code point in an emoji block (emoticons, symbols, transport, flags, supplemental
+     * blocks, dingbats). Such code points are emitted as {@code \x{HEX}}.
      */
     static boolean isEmojiCodePoint(int codePoint) {
         return (codePoint >= 0x1F600 && codePoint <= 0x1F64F)

@@ -1,29 +1,23 @@
 package com.db.macs3.ecomms.spectre.model;
 
 /**
- * Classifies a text segment by its dominant Unicode script family,
- * carrying the properties the pattern builder needs to choose the
- * correct NEAR / FOLLOWEDBY gap strategy.
+ * The dominant Unicode script family of a text, with the properties the pattern builder needs to
+ * choose a NEAR/FOLLOWEDBY gap and the Hyperscan flags.
  *
- * <p><b>Gap strategy selection</b>
  * <ul>
- *   <li><b>Word-based</b> — scripts that use whitespace between words
- *       (Latin, Arabic, Hebrew, Cyrillic, …).
- *       Gap pattern: {@code (?:\\s+\\S+){0,n}\\s+}</li>
- *   <li><b>Char-based</b> — scripts with no reliable inter-word whitespace
- *       (CJK, Thai, …) or where whitespace is inconsistent (Korean).
- *       Gap pattern: {@code [\\s\\S]{0,N}} where {@code N = n × avgCharsPerWord}.
- *       This also handles the with-space case, making it safe for Korean.</li>
+ *   <li><b>Word-based</b> ({@link #isSpaceDelimited()}): scripts that separate words with
+ *       whitespace — Latin (and Greek, Cyrillic, Armenian, Georgian), Arabic, Hebrew, Indic.
+ *       Gap: {@code (?:\s+\S+){0,n}\s+}.</li>
+ *   <li><b>Character-based</b> ({@link #isCharBased()}): scripts with no reliable inter-word
+ *       whitespace — CJK, Kana, Hangul, Thai/Lao/Myanmar — and every mixture that contains one, plus
+ *       the catch-all {@link #MIXED}. Gap: {@code [\s\S]{0,N}} with
+ *       {@code N = n × avgCharsPerWord + n}, clamped. It also matches spaced Korean.</li>
  * </ul>
  *
- * <p><b>RTL (Arabic / Hebrew)</b>
- * <p>Arabic and Hebrew are stored in Unicode <em>logical order</em> — the
- * order characters are typed and read, independent of visual rendering.
- * The regex engine operates on stored (logical) order, so
- * {@code A FOLLOWEDBY B} means A sits at a lower byte index than B.
- * For purely Arabic or Hebrew text this is always correct.  The
- * {@link #isRightToLeft()} flag is exposed so callers can emit a warning
- * when one operand is RTL and the other is LTR.
+ * <p><b>RTL.</b> Arabic and Hebrew are stored in logical order (the order typed and read), and the
+ * regex engine works on stored order, so {@code A FOLLOWEDBY B} means A is stored before B; for
+ * purely Arabic or Hebrew text that is always the intended reading order. {@link #isRightToLeft()}
+ * lets callers warn when one operand is RTL and the other is LTR.
  */
 public enum ScriptType {
 
@@ -114,36 +108,33 @@ public enum ScriptType {
     }
 
     /**
-     * Average Unicode character count per "word" in this script.
-     * Used to convert an n-word gap distance into a character ceiling:
-     * {@code maxChars = n * getAvgCharsPerWord()}.
+     * Average characters per "word" in this script, used to turn an n-word distance into a character
+     * window: {@code n × getAvgCharsPerWord() + n}, clamped (see
+     * {@code MultiLanguagePatternBuilder#effectiveGapWidth}).
      */
     public int getAvgCharsPerWord() {
         return avgCharsPerWord;
     }
 
     /**
-     * True when a character-based ({@code [\\s\\S]{0,N}}) gap must be used
-     * because whitespace cannot reliably separate words.
+     * True when a character-based {@code [\s\S]{0,N}} gap must be used because whitespace cannot
+     * reliably separate words.
      */
     public boolean isCharBased() {
         return !spaceDelimited;
     }
 
     /**
-     * Recommended Hyperscan expression flag bitmask for this script type.
+     * The recommended Hyperscan flag bitmask: {@code CASELESS|DOTALL} (3) for {@link #LATIN}, and
+     * {@code CASELESS|DOTALL|UTF8|UCP} (99) for every other script.
      *
      * <pre>
-     *  Bit 0 (1)  = HS_FLAG_CASELESS
-     *  Bit 1 (2)  = HS_FLAG_DOTALL
-     *  Bit 5 (32) = HS_FLAG_UTF8
-     *  Bit 6 (64) = HS_FLAG_UCP  — makes \\s / \\S / \\w honour Unicode
-     *                               character properties (critical for
-     *                               Arabic, Korean, CJK, etc.)
+     *  1  = HS_FLAG_CASELESS
+     *  2  = HS_FLAG_DOTALL
+     *  32 = HS_FLAG_UTF8
+     *  64 = HS_FLAG_UCP — makes \s, \S and \w honour Unicode properties; without it {@code \S+}
+     *                     only matches ASCII non-whitespace and skips Arabic, Hebrew and CJK text
      * </pre>
-     * <p>
-     * Without UCP, {@code \\S+} only matches ASCII non-whitespace and
-     * silently skips Arabic / Hebrew / CJK characters.
      */
     public int recommendedHsFlags() {
         // Latin needs only CASELESS(1) + DOTALL(2).

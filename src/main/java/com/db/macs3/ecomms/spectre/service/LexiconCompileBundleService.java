@@ -22,55 +22,37 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Orchestrates {@code POST /api/lexicon/compile/bundle}.
+ * Orchestrates {@code POST /api/lexicon/compile/bundle}: compiles every term, then builds one combined
+ * Hyperscan database from them.
  *
- * <p>{@link TypedCompileRequest} is the single request type shared with
- * {@code /compile}/{@code /compile/csv} (see {@link LexiconCompileService})
- * — there is no separate request shape for this endpoint any more.
- *
- * <p>Each request carries one root-level {@code requestType}:
+ * <p><b>Term types.</b> The request's root {@code requestType} applies to all its terms:
  * <ul>
- *   <li>{@code NATURAL_LANGUAGE} — translated via the existing
- *       {@code TermSyntaxTranslator} pipeline, by delegating straight to
- *       {@link LexiconCompileService#compileTerm}. Identical behaviour to
- *       {@code /compile} for every Natural Language term.</li>
- *   <li>{@code REGEX} — the caller's {@code termDescription} is already
- *       a PCRE pattern. No translation step runs; the pattern is compiled
- *       as-is. Flags are still derived from the pattern's script content
- *       via {@link ScriptDetector} so non-Latin Regex-type patterns (e.g. a raw
- *       Korean or Arabic regex) get the correct UTF8/UCP flags.</li>
+ *   <li>{@code NATURAL_LANGUAGE} — {@link LexiconCompileService#compileTerm}, identical to {@code /compile}.</li>
+ *   <li>{@code REGEX} — {@code termDescription} is already PCRE and is validated and compiled as given, with
+ *       no translation and no {@code resolvedPatterns}. Flags come from
+ *       {@code ScriptDetector.detect(pattern).recommendedHsFlags()}: {@code CASELESS|DOTALL} for a Latin
+ *       pattern, plus {@code UTF8|UCP} for anything else. {@code requiresExclusionCheck} is always false.</li>
  * </ul>
  *
- * <p>After every term is resolved to PASS or FAILED, IF AND ONLY IF every
- * single term in the request reached PASS, all of their expressions (built
- * by {@link HyperscanCombinationHandler} — see that class for the
- * QUIET/COMBINATION mechanism and the id scheme, including why AND NOT terms
- * deliberately do NOT use native Hyperscan COMBINATION) are compiled into
- * <b>one combined multi-pattern Hyperscan database</b> via
- * {@link HyperscanCompiler#compileCombinedDatabase}. <b>A single FAILED term
- * anywhere in the request means NO combined database is built at all</b> —
- * see {@link #buildDatabasePortion} — even though every OTHER term may have
- * passed; a caller must not receive a {@code .hdb} that silently omits one
- * term's intended coverage. The JSON summary returned by {@link #buildBundle}
- * is the same {@link CompileResponse} / {@link TermCompilationResult} shape
- * that {@code /compile} returns, with additions specific to this endpoint: a
- * non-AND-NOT term gets {@code hyperscanExpressionId} (always its own term
- * number); an AND NOT term gets {@code requiredExpressionIds}/
- * {@code excludedExpressionIds} instead — see {@link TermCompilationResult}
- * class Javadoc.
+ * <p><b>Term ids.</b> Every {@code termId} must end with {@code ::<n>} ({@code n} a non-negative
+ * integer) and every {@code n} must be unique in the request; this is checked for the WHOLE request
+ * before any term compiles ({@link #validateTermIds}, {@link InvalidTermIdException}, HTTP 400). The
+ * number becomes the term's Hyperscan expression id; see {@link HyperscanCombinationHandler} for the id
+ * scheme, including AND NOT.
  *
- * <p><b>Hyperscan expression id scheme</b>
- * <p>Every {@code termId} in this platform follows the convention
- * {@code <lexicon_rule_name>::<term_number>} (e.g. {@code lexicon_research_1::1}).
- * Every {@code termId} in a bundle request MUST end with {@code ::<n>} for a
- * non-negative integer {@code n}, and every {@code n} in one request must be
- * unique — both are validated for the WHOLE request before any term is
- * compiled; see {@link #validateTermIds} and {@link InvalidTermIdException}.
- * See {@link HyperscanCombinationHandler} class Javadoc for the full id
- * scheme, including the AND NOT case, where the {@code .hdb} file is no
- * longer self-sufficient on its own and the JSON response's
- * {@code requiredExpressionIds}/{@code excludedExpressionIds} are required
- * to interpret a scan result correctly.
+ * <p><b>The combined database is built only when EVERY term reaches PASS.</b> A single FAILED term
+ * means no {@code .hdb} at all ({@link #buildDatabasePortion}), even if all others passed, so a caller
+ * can never receive a database silently missing one term's coverage. Outcomes:
+ * <ul>
+ *   <li>all PASS and the build succeeds — a {@code .hdb};</li>
+ *   <li>any term FAILED, or zero PASS — HTTP 200, {@code NO_DATABASE.txt} instead of the {@code .hdb},
+ *       explained by each term's own status;</li>
+ *   <li>all PASS but the combined build itself fails — {@code CompileResponse#databaseError} is set and the
+ *       controller answers HTTP 500 with the JSON (no zip).</li>
+ * </ul>
+ * The JSON summary has the same shape as {@code /compile}'s, plus {@code hyperscanExpressionId} (a
+ * non-AND-NOT term's own number) or {@code requiredExpressionIds}/{@code excludedExpressionIds}
+ * (an AND NOT term), and {@code patternMapping} where a term needed several ids.
  */
 @Service
 public class LexiconCompileBundleService {
@@ -99,12 +81,12 @@ public class LexiconCompileBundleService {
     }
 
     /**
-     * Compiles every term in the request and builds the combined Hyperscan
-     * database — but ONLY when every term in the request reached PASS; see
-     * {@link #buildDatabasePortion}.
+     * Compiles every term in the request and builds the combined database, but only when every term reached
+     * PASS; see the class Javadoc.
      *
-     * @param request validated typed-compile request
-     * @return {@link CompileBundleResult} — JSON summary + optional database bytes
+     * @param request a validated request
+     * @return the JSON summary plus the database bytes, when one was built
+     * @throws InvalidTermIdException if any {@code termId} is malformed or a term number repeats
      */
     public CompileBundleResult buildBundle(TypedCompileRequest request) {
         long startTimeMs = System.currentTimeMillis();
@@ -174,16 +156,13 @@ public class LexiconCompileBundleService {
     private static final Pattern TERM_ID_PATTERN = Pattern.compile("^.*::(\\d+)$");
 
     /**
-     * Parses the term number out of every {@code termId} in {@code request}
-     * and validates the WHOLE request before returning: every termId must
-     * match {@link #TERM_ID_PATTERN}, and every parsed term number must be
-     * unique within the request. A downstream Hyperscan id collision (two
-     * terms compiled at the same expression id) would silently corrupt the
-     * combined database — better to reject clearly here than debug that later.
+     * Parses the term number from every {@code termId} and validates the whole request: each id must match
+     * {@link #TERM_ID_PATTERN} (and fit an int) and every number must be unique. Two terms at one expression
+     * id would corrupt the combined database, so this is rejected up front. Malformed ids are reported before
+     * duplicates.
      *
-     * @return termId → term number, one entry per term in the request
-     * @throws InvalidTermIdException naming every malformed or duplicate
-     *                                termId found, if any
+     * @return termId → term number, one entry per term
+     * @throws InvalidTermIdException naming every malformed or duplicate id
      */
     private Map<String, Integer> validateTermIds(TypedCompileRequest request) {
         Map<String, Integer> termNumberByTermId = new LinkedHashMap<>();
@@ -233,16 +212,10 @@ public class LexiconCompileBundleService {
     // ── Regex-type term handling ─────────────────────────────────────────────
 
     /**
-     * Compiles a Regex-type term: the pattern is the caller's
-     * {@code termDescription} verbatim — no operator-language translation.
-     *
-     * <p>Flags are still derived automatically via {@link ScriptDetector} so
-     * a raw non-Latin regex (e.g. a hand-written Korean or Arabic pattern)
-     * gets UTF8/UCP without the caller having to know Hyperscan's flag
-     * bitmask values. {@code requiresExclusionCheck} is always {@code false}
-     * for Regex-type terms — AND NOT is part of the Natural Language operator
-     * language's syntax; an arbitrary caller-supplied regex has no such
-     * two-pattern exclusion contract to participate in.
+     * Compiles a Regex-type term: the pattern is {@code termDescription} verbatim. Flags are derived from
+     * the pattern's script (so a raw Korean or Arabic regex gets UTF8/UCP without the caller knowing the
+     * bitmask), and the pattern is validated with real Hyperscan. A rejection is a FAILED result with the
+     * Hyperscan message in {@code errorLog}.
      */
     private TermCompilationResult compileRegexTerm(TypedCompileRequest.TermInput termInput) {
         String pattern = termInput.termDescription();
@@ -258,6 +231,11 @@ public class LexiconCompileBundleService {
 
     // ── Combined database ────────────────────────────────────────────────────
 
+    /**
+     * Decides whether and how to build the database: none when any term FAILED or none PASSED (a note, HTTP 200);
+     * otherwise compile all expressions into one database. A failed build sets {@code databaseError} on the JSON
+     * so a caller cannot mistake per-term PASS statuses for a usable bundle.
+     */
     private CompileBundleResult buildDatabasePortion(CompileResponse jsonResponse,
                                                      List<TermCompilationResult> termResults,
                                                      List<Expression> passingExpressions) {
@@ -321,12 +299,8 @@ public class LexiconCompileBundleService {
     }
 
     /**
-     * Resolves {@code failedExpressionId} back to the specific term that
-     * caused it, checking every id shape a term might report under: a
-     * non-AND-NOT term's single {@code hyperscanExpressionId}, or an AND NOT
-     * term's {@code requiredExpressionIds}/{@code excludedExpressionIds}
-     * (any of which could be the one Hyperscan rejected during combined
-     * compilation).
+     * Resolves a failing Hyperscan expression id back to its term, checking every id shape a term can report
+     * under ({@code hyperscanExpressionId}, {@code requiredExpressionIds}, {@code excludedExpressionIds}).
      */
     private String describeFailedExpression(CompileResponse jsonResponse, Integer failedExpressionId) {
         if (failedExpressionId == null) {
@@ -353,27 +327,16 @@ public class LexiconCompileBundleService {
     // ── Result carrier ───────────────────────────────────────────────────────
 
     /**
-     * Carries the compile outcome back to the controller.
+     * The outcome handed back to the controller.
      *
-     * @param jsonResponse           identical shape to {@code /compile}'s response — carries
-     *                               {@code databaseError} populated when {@code databaseBuildFailed}
-     *                               is true, so a caller reading the JSON alone (not just this
-     *                               record) still sees the failure explicitly
-     * @param hyperscanDatabaseBytes the combined {@code .hdb} file content, or
-     *                               {@code null} when no database could be built
-     * @param databaseNote           human-readable explanation for why no database was built;
-     *                               null when a database was built successfully
-     * @param databaseBuildFailed    {@code true} only when EVERY term in the request reached
-     *                               PASS (so a combined build was actually attempted) and the
-     *                               combined Hyperscan compile/serialisation itself then
-     *                               failed — a genuine system-level failure, as opposed to
-     *                               either the "at least one term FAILED" case or the "zero
-     *                               PASS terms" case (both {@code false} here), which are
-     *                               already fully explained by each term's own compilationStatus
-     *                               — no combined build is even ATTEMPTED for those. The
-     *                               controller uses this to decide whether the response is an
-     *                               HTTP error (bundle unusable despite every term passing) or
-     *                               an ordinary 200 zip with a {@code NO_DATABASE.txt} note.
+     * @param jsonResponse           the {@code /compile}-shaped summary; carries {@code databaseError} when
+     *                               {@code databaseBuildFailed} is true
+     * @param hyperscanDatabaseBytes the {@code .hdb} content, or null when none was built
+     * @param databaseNote           why no database was built; null when one was
+     * @param databaseBuildFailed    true only when every term PASSED, a combined build was attempted, and it
+     *                               failed — a genuine system-level failure, unlike "a term FAILED" or "zero
+     *                               PASS" (both false), which each term's own status already explains. The
+     *                               controller turns true into HTTP 500 and false into a 200 zip
      */
     public record CompileBundleResult(
             CompileResponse jsonResponse,

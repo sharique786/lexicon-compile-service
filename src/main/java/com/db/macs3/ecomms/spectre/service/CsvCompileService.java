@@ -20,31 +20,24 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Parses a lexicon CSV upload and delegates to {@link LexiconCompileService}.
+ * Parses an uploaded lexicon CSV and delegates to {@link LexiconCompileService}.
  *
- * <p><b>Expected CSV format (2-column)</b>
+ * <p><b>Format</b> — two columns, {@code Term ID} and {@code Term Description}:
  * <pre>
  * Term ID, Term Description
  * lexicon_research_1::1, (manipulate*) NEAR{5} ((price) OR (spread))
  * lexicon_research_1::2, "((""please don't forward"") OR (""do not share""))"
  * </pre>
- *
- * <p>The {@code Risk Driver Name} column has been removed. Rows with a third
- * column are still parsed without error — the extra value is simply ignored.
- *
- * <p>CSV rows are always operator-language syntax — this service builds a
- * {@link TypedCompileRequest} with {@code requestType = NATURAL_LANGUAGE}
- * (the single request type shared with {@code /compile} and
- * {@code /compile/bundle} — see {@link TypedCompileRequest} class Javadoc).
- *
- * <p><b>Features</b>
  * <ul>
- *   <li>Optional header row — detected by "term id" in first column</li>
- *   <li>RFC 4180 double-quote escaping: {@code ""} → {@code "}</li>
- *   <li>UTF-8 BOM stripping (Excel CSV export)</li>
- *   <li>Blank-line and comment-line ({@code #}) skipping</li>
- *   <li>Multi-language and emoji content in Term Description</li>
+ *   <li>A header row is detected when the first column contains "term id" (any case) and is skipped.</li>
+ *   <li>RFC 4180 quoting through OpenCSV ({@code ""} inside quotes is a literal quote); cells are trimmed.</li>
+ *   <li>A UTF-8 BOM (Excel export) is stripped; the file is read as UTF-8.</li>
+ *   <li>Skipped: blank rows, rows whose first cell starts with {@code #}, and rows with fewer than two
+ *       columns (logged). Extra columns are ignored.</li>
  * </ul>
+ * Every row is Natural-Language syntax: the service builds a {@link TypedCompileRequest} with
+ * {@code requestType = NATURAL_LANGUAGE}. CSV parsing itself is lenient — a bad row never fails the
+ * upload; a bad TERM fails only that term's result.
  */
 @Service
 public class CsvCompileService {
@@ -58,12 +51,11 @@ public class CsvCompileService {
     }
 
     /**
-     * Parses CSV from an {@link InputStream} and compiles all terms.
+     * Parses the CSV and compiles every term. A CSV with no term rows yields a response with zero terms.
      *
-     * @param csvStream raw CSV bytes (may be BOM-prefixed UTF-8)
-     * @param ruleName  lexicon rule name for the response
-     * @param requestId caller-supplied or generated UUID, echoed in the response
-     * @return compile response with {@code request_id} set
+     * @param csvStream raw CSV bytes (UTF-8, BOM optional)
+     * @param ruleName  the lexicon rule name for the response
+     * @param requestId a generated UUID, echoed as {@code request_id}
      * @throws IOException if the CSV cannot be parsed
      */
     public CompileResponse compileFromCsv(InputStream csvStream, String ruleName, String requestId)

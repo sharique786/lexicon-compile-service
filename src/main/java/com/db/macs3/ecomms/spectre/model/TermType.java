@@ -4,36 +4,26 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 /**
- * How a lexicon term's {@code termDescription} should be compiled.
- *
- * <p><b>Naming history</b>
- * <p>This replaces the earlier {@code "Standard"} / {@code "NLT"} string-based
- * {@code requestType} values:
+ * How a request's {@code termDescription}s are compiled. The JSON values are exact and case-sensitive:
  * <ul>
- *   <li>{@code "Standard"} → {@link #NATURAL_LANGUAGE} — the term uses the
- *       operator language (OR / AND / NEAR{n} / FOLLOWEDBY{n} / wildcards /
- *       quoted phrases) and is translated into Hyperscan PCRE by
+ *   <li>{@link #NATURAL_LANGUAGE} ({@code "Natural Language"}) — the operator language (OR, AND, AND NOT,
+ *       NOT, NEAR{n}, FOLLOWEDBY{n}, wildcards, quoted phrases), translated to Hyperscan PCRE by
  *       {@link com.db.macs3.ecomms.spectre.translator.TermSyntaxTranslator}.</li>
- *   <li>{@code "NLT"} → {@link #REGEX} — the term's {@code termDescription}
- *       is already a valid PCRE pattern supplied by the caller. No
- *       translation step runs; the pattern is compiled by Hyperscan exactly
- *       as given. Script-aware flags (UTF8/UCP) are still derived
- *       automatically from the pattern's content.</li>
+ *   <li>{@link #REGEX} ({@code "Regex"}) — {@code termDescription} is already a PCRE pattern, compiled as
+ *       given with no translation; UTF8/UCP are still derived from the pattern's script. Honoured by
+ *       {@code /compile/bundle} only.</li>
  * </ul>
- *
- * <p>This mirrors the {@code TermType} already used by the downstream
- * Lexicon Scanner Service, so the same two names mean the same thing on
- * both sides of that integration.
+ * The same two names are used by the downstream Lexicon Scanner Service.
  */
 public enum TermType {
 
     /**
-     * Operator-language syntax, translated via {@code TermSyntaxTranslator}. Formerly {@code "Standard"}.
+     * Operator-language syntax, translated via {@code TermSyntaxTranslator}.
      */
     NATURAL_LANGUAGE("Natural Language"),
 
     /**
-     * Already-valid PCRE, compiled verbatim with no translation. Formerly {@code "NLT"}.
+     * Already-valid PCRE, compiled verbatim with no translation.
      */
     REGEX("Regex");
 

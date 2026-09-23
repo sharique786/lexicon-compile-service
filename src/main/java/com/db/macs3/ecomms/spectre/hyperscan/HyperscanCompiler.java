@@ -15,66 +15,53 @@ import java.util.EnumSet;
 import java.util.List;
 
 /**
- * Validates Hyperscan PCRE patterns using the {@code com.gliwka.hyperscan} Java binding
- * (version 5.4.0-2.0.0).
+ * Validates PCRE patterns with the real native Hyperscan library ({@code com.gliwka.hyperscan}
+ * 5.4.0-2.0.0), converts a term's flag bitmask into Hyperscan {@link ExpressionFlag} sets, and
+ * compiles the combined multi-pattern database served by {@code /compile/bundle}.
  *
- * <p><b>Library overview</b>
- * <p>{@code com.gliwka.hyperscan} bundles the native Hyperscan .so inside the JAR:
+ * <p><b>Native library.</b> Bundled in the jar for linux-x86_64, linux-aarch64, osx-aarch64 and windows-x86_64, and
+ * extracted to {@code java.io.tmpdir} on first use; nothing to deploy. There is no fallback engine:
+ * {@link #selfTest()} compiles a probe pattern at startup, and if the native library is unavailable
+ * the Spring context does not start (so Cloud Run health checks fail fast).
+ *
+ * <p><b>Validation.</b> {@link #validate} compiles one pattern alone into a throwaway
+ * {@link Database}, closes it, and returns pass or Hyperscan's own error message. It is stateless and
+ * {@link Database#compile} is thread-safe, so concurrent virtual-thread requests are fine.
+ *
+ * <p><b>Flag sets.</b> Which set an expression gets depends on its kind, never on a caller option:
+ * <table border="1">
+ *   <caption>Expression flag sets</caption>
+ *   <tr><th>Expression</th><th>Method</th><th>Flags</th></tr>
+ *   <tr><td>Plain single-pattern, non-AND-NOT term; also what {@link #validate} uses</td>
+ *       <td>{@link #toExpressionFlags}</td><td>CASELESS, DOTALL, SOM_LEFTMOST (+ UTF8, UCP)</td></tr>
+ *   <tr><td>Required/excluded pattern of an AND NOT term</td>
+ *       <td>{@link #toAndNotExpressionFlags}</td><td>CASELESS (+ UTF8, UCP)</td></tr>
+ *   <tr><td>Decomposed leaf feeding a native COMBINATION</td>
+ *       <td>{@link #toSubExpressionFlags}</td><td>CASELESS, QUIET (+ UTF8, UCP)</td></tr>
+ *   <tr><td>The COMBINATION formula itself</td>
+ *       <td>{@link #toCombinationExpressionFlags}</td><td>COMBINATION</td></tr>
+ * </table>
+ * UTF8 and UCP are added only when the term's bitmask says it has non-ASCII content. The
+ * constraints behind this scheme:
  * <ul>
- *   <li>linux-x86_64  → Cloud Run (standard)</li>
- *   <li>linux-aarch64 → Cloud Run (ARM), AWS Graviton</li>
- *   <li>osx-aarch64   → Apple Silicon dev machines</li>
+ *   <li>{@code SOM_LEFTMOST} is incompatible with {@code QUIET} (a real compile error), so a QUIET
+ *       leaf never gets it; only plain, reportable expressions do.</li>
+ *   <li>A {@code COMBINATION} expression ignores every flag except {@code SINGLEMATCH}/{@code QUIET}.</li>
+ *   <li>UCP is conditional because Hyperscan rejects {@code \b} in UCP mode (generated word
+ *       boundaries and Regex-type terms use it) and UCP compiles roughly 15x slower even for ASCII
+ *       patterns. It cannot simply be omitted either: non-ASCII text and emoji ({@code \x{XXXX}}) need
+ *       UTF8 to compile, and a pattern that validated fine could otherwise fail the combined build
+ *       ("Hexadecimal value is greater than \xFF").</li>
+ *   <li>An AND NOT pattern gets neither DOTALL nor SOM_LEFTMOST — only its presence matters, not its offsets.</li>
  * </ul>
- * The native library is extracted to {@code java.io.tmpdir} on first use.
- * No manual deployment is required.
  *
- * <p><b>Validation flow</b>
- * <p>For each term:
- * <ol>
- *   <li>Wrap the PCRE pattern in an {@link Expression} with the appropriate flags</li>
- *   <li>Call {@link Database#compile(Expression)} — throws {@link CompileErrorException}
- *       on invalid patterns</li>
- *   <li>Close the {@link Database} immediately (we only need compile validation)</li>
- *   <li>Return {@link ValidationResult#pass} or {@link ValidationResult#failed}</li>
- * </ol>
- *
- * <p><b>Native Hyperscan logical combinations — pure decomposition ONLY, never AND NOT</b>
- * <p>Hyperscan 5.0+ supports logical combinations of patterns natively —
- * {@code HS_FLAG_COMBINATION} lets a compiled expression be the STRING
- * {@code "(101&102)"} (operators {@code &}/{@code |}/{@code !} over other
- * expressions' numeric ids), and Hyperscan reports a match for THAT id only
- * when the boolean condition over the referenced sub-expressions is true —
- * evaluated natively during the scan, no application-level combination
- * needed after the fact. This is used in the {@code /compile/bundle}
- * endpoint's combined {@code .hdb} file ONLY for a term decomposed by
- * {@code PatternDecomposer} with NO {@code AND NOT} involved — a positive-only
- * {@code R1&R2&...&Rn} formula has no negation, so Hyperscan's eager,
- * progressive combination evaluation is safe for it. AND NOT is explicitly
- * NOT built this way any more — see {@code HyperscanCombinationHandler} class
- * Javadoc for why a combination mixing a positive requirement with a
- * negation (confirmed broken via Hyperscan's own documented evaluation
- * model) was replaced with every required/excluded pattern reporting as its
- * own plain expression, evaluated by the caller after the whole scan
- * completes. See {@link #toSubExpressionFlags(int)} (decomposition leaves),
- * {@link #toAndNotExpressionFlags(int)} (AND NOT sides), and
- * {@link #toCombinationExpressionFlags} (the combination formula itself).
- *
- * <p><b>Dependency note:</b> {@code ExpressionFlag.COMBINATION} and
- * {@code ExpressionFlag.QUIET} were added to {@code com.gliwka.hyperscan-java}
- * in its v1.0.0 release; this project pins the wrapper's v2.0.0 line
- * (version string {@code 5.4.0-2.0.0}), which post-dates that release. If a
- * future dependency bump ever removed these constants, every call site below
- * would fail to compile with an unambiguous "cannot find symbol" naming the
- * exact missing flag — not a silent runtime behaviour change.
- *
- * <p><b>Thread safety</b>
- * <p>{@link Database#compile} is thread-safe. Spring Boot 4 Tomcat uses JDK 21
- * virtual threads — many concurrent compilations are handled without OS-thread blocking.
- *
- * <p><b>No fallback</b>
- * <p>RE2J and any other fallback have been removed. If Hyperscan is unavailable
- * (unsupported platform, ABI mismatch), the {@link PostConstruct} self-test fails
- * and the Spring context does not start — Cloud Run health checks fail fast.
+ * <p><b>Native COMBINATION</b> ({@code HS_FLAG_COMBINATION}, Hyperscan 5.0+) lets an expression be a
+ * boolean formula such as {@code "(101&102)"} over other expressions' ids; Hyperscan reports the
+ * formula's own id when the condition holds. Here it is used only for a decomposed term WITHOUT AND
+ * NOT — a positive-only formula has no negation, so Hyperscan's eager, progressive evaluation is safe.
+ * AND NOT is never built this way; see {@link HyperscanCombinationHandler}. A combination
+ * sub-expression must not end in an assertion such as a trailing {@code \b}, which is why fallback
+ * leaves carry only a leading word boundary.
  */
 @Component
 public class HyperscanCompiler {
@@ -97,11 +84,8 @@ public class HyperscanCompiler {
     // ── Startup self-test ─────────────────────────────────────────────────────
 
     /**
-     * Verifies the Hyperscan native library is operational at startup.
-     *
-     * <p>Uses {@code jakarta.annotation.PostConstruct} (Jakarta EE 10 / Spring Boot 4).
-     * Compiles a trivial pattern to confirm {@link Database#compile} works.
-     * If this fails, the application context does not start.
+     * Startup check that the native library works: compiles a trivial pattern. Failure prevents
+     * the application context from starting.
      */
     @PostConstruct
     public void selfTest() {
@@ -124,15 +108,15 @@ public class HyperscanCompiler {
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Validates a single PCRE pattern by compiling it via Hyperscan.
+     * Validates one PCRE pattern by compiling it under {@link #toExpressionFlags(int)}. A fresh
+     * {@link Database} is created and closed per call, so each call is stateless.
      *
-     * <p>One {@link Database} is created per call and immediately closed after
-     * validation. Each call is stateless and safe for concurrent virtual threads.
+     * <p>Every candidate is validated under this one flag set, whatever it will eventually be compiled
+     * as, so the translator's "too large" checks are consistent.
      *
-     * @param pattern Hyperscan PCRE string from {@code TermSyntaxTranslator}
-     * @param hsFlags HS_FLAG_* bitmask (CASELESS=1, DOTALL=2, UTF8=32, UCP=64)
-     * @return {@link ValidationResult#pass} on success,
-     * {@link ValidationResult#failed} with Hyperscan error message on failure
+     * @param pattern Hyperscan PCRE string
+     * @param hsFlags flag bitmask (CASELESS=1, DOTALL=2, UTF8=32, UCP=64); only the UTF8/UCP bits matter
+     * @return {@link ValidationResult#pass}, or {@link ValidationResult#failed} with Hyperscan's message
      */
     public ValidationResult validate(String pattern, int hsFlags) {
         if (pattern == null || pattern.isBlank()) {
@@ -176,52 +160,15 @@ public class HyperscanCompiler {
     // ── Flag conversion ───────────────────────────────────────────────────────
 
     /**
-     * Flags for a term that compiles as one plain, top-level, independently
-     * reportable Hyperscan expression — a simple PASS term: not decomposed
-     * (estimated complexity under {@code PatternComplexityAnalyzer.COMPLEXITY_BUDGET},
-     * i.e. 700), not AND NOT, and compiled without error.
+     * Flags for a term that compiles as one plain, independently reportable expression: a
+     * single-pattern, non-AND-NOT PASS term. Also the set {@link #validate} uses for every pattern.
      *
-     * <p><b>{@code CASELESS}, {@code DOTALL}, and {@code SOM_LEFTMOST} are
-     * always included, unconditionally.</b> {@code UTF8}/{@code UCP} remain
-     * CONDITIONAL on {@code bitmask} — deliberately, not an oversight: always
-     * forcing them on was tried and confirmed to cause two real regressions —
-     * (1) Hyperscan rejects {@code \b} (word boundary) when UCP is active
-     * ("{@code \b} unsupported in UCP mode"), breaking any caller-supplied
-     * Regex-type term that uses it; (2) UCP mode measurably slows down
-     * Hyperscan compilation even for plain-ASCII patterns (~15x in this
-     * project's own performance test). UTF8/UCP are added only when
-     * {@code bitmask} indicates non-ASCII content is actually present — see
-     * {@link #toAndNotExpressionFlags(int)} for the AND NOT case and
-     * {@link #toSubExpressionFlags(int)} for the pure-decomposition-leaf
-     * case — both intentionally narrower than this one (no {@code DOTALL}/
-     * {@code SOM_LEFTMOST}), but UTF8/UCP are conditional there too, for the
-     * same reason (see their own Javadoc for the confirmed regression that
-     * fix addressed).
+     * <p>{@code CASELESS}, {@code DOTALL} and {@code SOM_LEFTMOST} are always included;
+     * {@code UTF8}/{@code UCP} only when {@code bitmask} has them (see the class Javadoc for why UCP must
+     * stay conditional). {@code SOM_LEFTMOST} is safe here because a plain expression is never
+     * {@code QUIET}.
      *
-     * <p><b>Also the general validation flag set</b>
-     * <p>{@link #validate} always uses this method (regardless of what a
-     * candidate pattern will eventually be compiled as downstream) — this is
-     * historically the flag set {@code PatternComplexityAnalyzer}'s
-     * {@code COMPLEXITY_BUDGET} was calibrated against, so validating every
-     * candidate under it keeps the "too large" pre-check accurate.
-     *
-     * <p><b>{@link ExpressionFlag#SOM_LEFTMOST} is always included here</b>
-     * <p>This method builds flags for a PLAIN, standalone, reportable
-     * expression — never a {@code QUIET} sub-expression and never a
-     * {@code COMBINATION} formula (those go through {@link #toSubExpressionFlags}
-     * and {@link #toCombinationExpressionFlags} respectively, which never
-     * include SOM_LEFTMOST — see their Javadoc for why). SOM_LEFTMOST is
-     * therefore always safe to include here: Hyperscan's own documentation
-     * and a real compile-time error this project hit directly both confirm
-     * SOM_LEFTMOST is incompatible with QUIET (and separately, with
-     * SINGLEMATCH/PREFILTER) — but a plain expression carries none of those.
-     *
-     * <p>Public so {@code LexiconCombinationHandler} can build multi-pattern
-     * {@link Expression} lists for the combined-database endpoint using the
-     * exact same flag-conversion logic as the single-pattern {@link #validate} path.
-     *
-     * @param bitmask HS_FLAG_* bitmask (only the UTF8/UCP bits matter here —
-     *                CASELESS/DOTALL/SOM_LEFTMOST are added regardless of this value)
+     * @param bitmask flag bitmask; only the UTF8/UCP bits matter
      */
     public EnumSet<ExpressionFlag> toExpressionFlags(int bitmask) {
         EnumSet<ExpressionFlag> flags = EnumSet.of(
@@ -236,33 +183,14 @@ public class HyperscanCompiler {
     }
 
     /**
-     * Flags for a required/excluded pattern belonging to an AND NOT term —
-     * see {@code HyperscanCombinationHandler} class Javadoc for why AND NOT
-     * no longer uses native COMBINATION and why every required/excluded
-     * pattern compiles as its own plain, individually-reportable expression.
+     * Flags for a required/excluded pattern of an AND NOT term, which compiles as its own plain,
+     * individually reportable expression (see {@link HyperscanCombinationHandler}).
      *
-     * <p><b>{@code CASELESS} always; {@code UTF8}/{@code UCP} conditional on
-     * {@code bitmask} — confirmed-fixed regression</b>: this used to be a
-     * fixed, unconditional {@code CASELESS}-only set. That broke any AND NOT
-     * term whose required/excluded side contains an emoji or other codepoint
-     * above {@code 0xFF} — {@code PatternCodeGenerator} encodes those as a
-     * literal {@code \x{XXXX}} escape, which Hyperscan/PCRE only accepts in
-     * UTF8 mode; without it, {@code compileCombinedDatabase} fails with
-     * "Hexadecimal value is greater than \xFF at index 0" — even though
-     * {@code TermSyntaxTranslator.translate} had already validated the exact
-     * same pattern text successfully, because validation went through
-     * {@link #toExpressionFlags} (UTF8-conditional) while the real
-     * {@code /compile/bundle} database build went through this method's old
-     * fixed set. Still deliberately narrower than {@link #toExpressionFlags}
-     * in every other respect: no {@code DOTALL}, and no {@code SOM_LEFTMOST} —
-     * an AND NOT term's required/excluded patterns are still plain
-     * (non-QUIET) expressions, so SOM_LEFTMOST would be structurally SAFE to
-     * add here (unlike the QUIET-sub-expression case), but that flag stays
-     * out regardless.
+     * <p>{@code CASELESS} always; {@code UTF8}/{@code UCP} when {@code bitmask} has them, because a side
+     * containing an emoji or any code point above 0xFF is encoded as {@code \x{XXXX}}, which Hyperscan
+     * accepts only in UTF8 mode. No {@code DOTALL} and no {@code SOM_LEFTMOST}.
      *
-     * @param bitmask HS_FLAG_* bitmask for the whole term (only the UTF8/UCP
-     *                bits matter here) — pass the term's
-     *                {@code TermCompilationResult.hyperscanFlags()}
+     * @param bitmask the term's flag bitmask ({@code TermCompilationResult.hyperscanFlags()})
      */
     public EnumSet<ExpressionFlag> toAndNotExpressionFlags(int bitmask) {
         EnumSet<ExpressionFlag> flags = EnumSet.of(ExpressionFlag.CASELESS);
@@ -276,34 +204,14 @@ public class HyperscanCompiler {
     }
 
     /**
-     * Flags for a decomposed leaf pattern that feeds a native logical
-     * combination — pure decomposition, no AND NOT (see
-     * {@code HyperscanCombinationHandler} class Javadoc) — rather than being
-     * reported on its own.
+     * Flags for a decomposed leaf that feeds a native COMBINATION (a fallback term without AND NOT).
      *
-     * <p>{@link ExpressionFlag#QUIET} suppresses this leaf's own match
-     * reporting — without it, a decomposed term's leaves would each
-     * independently raise their own match event, instead of only the
-     * combination expression's id (built with
-     * {@link #toCombinationExpressionFlags}) being reported for the term.
+     * <p>{@code QUIET} suppresses the leaf's own match report, so only the combination's id is reported
+     * for the term. {@code CASELESS} and {@code QUIET} always; {@code UTF8}/{@code UCP} when
+     * {@code bitmask} has them (same reason as {@link #toAndNotExpressionFlags}). Never
+     * {@code SOM_LEFTMOST}: Hyperscan rejects it together with {@code QUIET}.
      *
-     * <p><b>{@code CASELESS} and {@code QUIET} always; {@code UTF8}/
-     * {@code UCP} conditional on {@code bitmask}</b> — same confirmed-fixed
-     * regression described on {@link #toAndNotExpressionFlags}: a leaf
-     * containing an emoji or other codepoint above {@code 0xFF} needs UTF8
-     * mode to compile at all, and a decomposed term's leaves are
-     * {@code \x{XXXX}}-encoded the same way an AND NOT side is. {@code DOTALL}
-     * stays out (unaffected by this fix). Never {@code SOM_LEFTMOST} —
-     * confirmed incompatible with {@code QUIET} both by a real Hyperscan
-     * compile-time error this project hit directly ("HS_FLAG_QUIET is not
-     * supported in combination with HS_FLAG_SOM_LEFTMOST") and by Hyperscan's
-     * own documentation, which lists flags incompatible with SOM_LEFTMOST —
-     * UTF8/UCP carry no such incompatibility with QUIET, so adding them
-     * conditionally here is safe.
-     *
-     * @param bitmask HS_FLAG_* bitmask for the whole term (only the UTF8/UCP
-     *                bits matter here) — pass the term's
-     *                {@code TermCompilationResult.hyperscanFlags()}
+     * @param bitmask the term's flag bitmask ({@code TermCompilationResult.hyperscanFlags()})
      */
     public EnumSet<ExpressionFlag> toSubExpressionFlags(int bitmask) {
         EnumSet<ExpressionFlag> flags = EnumSet.of(ExpressionFlag.CASELESS, ExpressionFlag.QUIET);
@@ -317,20 +225,9 @@ public class HyperscanCompiler {
     }
 
     /**
-     * Flags for a logical combination expression itself (see class Javadoc).
-     * Hyperscan's own documentation states a COMBINATION-flagged expression
-     * "ignores all other flags except HS_FLAG_SINGLEMATCH and HS_FLAG_QUIET" —
-     * confirmed across multiple official sources (Hyperscan API reference,
-     * the Compiling Patterns guide, and Intel's own published logical-combinations
-     * article). Neither SINGLEMATCH nor QUIET is added here by default: a
-     * combination expression is quiet only when it itself feeds an OUTER
-     * combination (never produced by this codebase — see class Javadoc "Why
-     * exactly one combination expression per term"), and SINGLEMATCH is an
-     * optional match-deduplication choice this codebase does not currently
-     * opt into. CASELESS/UTF8/etc. apply only to the sub-expressions being
-     * combined (via {@link #toSubExpressionFlags}), not to the boolean
-     * formula referencing their ids — Hyperscan ignores them here regardless,
-     * so they are never added.
+     * Flags for the logical COMBINATION expression itself: just {@code COMBINATION}. Hyperscan
+     * ignores every other flag on a combination except {@code SINGLEMATCH}/{@code QUIET}, neither of
+     * which is used here. CASELESS/UTF8 apply to the combined sub-expressions, not to the formula.
      */
     public EnumSet<ExpressionFlag> toCombinationExpressionFlags() {
         return EnumSet.of(ExpressionFlag.COMBINATION);
@@ -395,51 +292,23 @@ public class HyperscanCompiler {
     // ── Combined multi-pattern database (for the /compile/bundle endpoint) ─────
 
     /**
-     * Compiles a list of {@link Expression}s into a single combined Hyperscan
-     * database and serialises it to a byte array using {@link Database#save}.
+     * Compiles {@code expressions} into ONE combined database and serialises it with
+     * {@link Database#save}. This produces the persistent {@code .hdb} that the Lexicon Scan Engine loads
+     * with {@link Database#load} and scans against many messages with a single native call each
+     * (one multi-pattern database is far faster than N single-pattern ones). {@link #validate}, by
+     * contrast, only checks one pattern and discards the database.
      *
-     * <p><b>Why one combined database instead of one-per-term</b>
-     * <p>{@link #validate} (used by {@code /compile}) creates one ephemeral
-     * single-pattern {@link Database} per term purely to check compile
-     * validity, then discards it. This method is different: it produces the
-     * one persistent multi-pattern database that the Lexicon Scan Engine
-     * loads via {@link Database#load} and scans against millions of messages
-     * with a single native call per message (Hyperscan's multi-pattern mode
-     * is what makes that fast — scanning with N separate single-pattern
-     * databases would be N times slower).
+     * <p><b>Ids.</b> Every expression must carry a unique, non-null id; {@code LexiconCompileBundleService}
+     * assigns each term's number (parsed from its {@code termId}) or an allocated auxiliary id, so a match
+     * id can always be mapped back to its term.
      *
-     * <p><b>Expression IDs</b>
-     * <p>Each {@link Expression} passed in must already carry a unique
-     * {@code id} (set via the 3-arg {@code Expression(pattern, flags, id)}
-     * constructor). {@code com.gliwka.hyperscan.wrapper.Database} requires
-     * this — if any expression in the list has a null id while others don't,
-     * or if two expressions share the same id, the underlying library throws.
-     * The caller ({@code LexiconCompileBundleService}) assigns
-     * {@code id = index of the term in the original request's terms array},
-     * so a downstream consumer can always map a Hyperscan match id back to
-     * the term that produced it.
+     * <p><b>What is saved.</b> {@code save()} writes each expression's metadata (id, pattern, flags) and the
+     * serialised native database together, so the {@code .hdb} is self-contained. It is not portable
+     * across CPU architectures with different instruction-set features; load it on a compatible platform.
      *
-     * <p><b>What {@code save()} actually writes</b>
-     * <p>{@link Database#save(java.io.OutputStream)} writes BOTH the
-     * expression metadata (id, pattern, flags for every expression) AND the
-     * platform-specific serialised native database into the same stream, in
-     * that order. The returned byte array is therefore fully self-contained —
-     * {@link Database#load(java.io.InputStream)} on the same bytes
-     * reconstructs an equivalent database with no separate metadata file
-     * needed. This is what becomes the single {@code .hdb} file in the zip.
-     *
-     * <p><b>Platform portability caveat</b>
-     * <p>The serialised bytes are <b>not portable across CPU architectures</b>
-     * with different instruction-set features (see Intel's Hyperscan
-     * documentation on {@code hs_serialize_database}). The database must be
-     * loaded on a platform compatible with the one it was compiled on.
-     *
-     * @param expressions PASS expressions to combine; must be non-empty and
-     *                    each must have a unique non-null id
-     * @return {@link CombinedCompileResult#success} with the serialised bytes,
-     * or {@link CombinedCompileResult#failure} with the Hyperscan
-     * error and (if identifiable) the id of the expression that
-     * caused the failure
+     * @param expressions the expressions to combine; non-empty, each with a unique non-null id
+     * @return {@link CombinedCompileResult#success} with the bytes, or {@link CombinedCompileResult#failure}
+     *         with the error and, when identifiable, the id of the failing expression
      */
     public CombinedCompileResult compileCombinedDatabase(List<Expression> expressions) {
         if (expressions == null || expressions.isEmpty()) {
@@ -484,14 +353,13 @@ public class HyperscanCompiler {
     /**
      * Result of one {@link #compileCombinedDatabase} call.
      *
-     * @param success            true when the combined database compiled and serialised cleanly
-     * @param databaseBytes      the {@code .hdb} file content (null on failure)
-     * @param databaseSizeBytes  {@code databaseBytes.length} (0 on failure)
-     * @param expressionCount    number of expressions included (0 on failure)
-     * @param failedExpressionId the id of the expression that broke compilation,
-     *                           when Hyperscan was able to identify it; null otherwise
-     *                           (always null when {@code success} is true)
-     * @param errorMessage       human-readable error; null when {@code success} is true
+     * @param success            true when the database compiled and serialised
+     * @param databaseBytes      the {@code .hdb} content; null on failure
+     * @param databaseSizeBytes  {@code databaseBytes.length}; 0 on failure
+     * @param expressionCount    number of expressions included; 0 on failure
+     * @param failedExpressionId the id of the expression that broke compilation when Hyperscan can
+     *                           identify it; null otherwise and always null on success
+     * @param errorMessage       human-readable error; null on success
      */
     public record CombinedCompileResult(
             boolean success,

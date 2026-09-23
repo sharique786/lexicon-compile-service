@@ -16,24 +16,19 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Core compilation service.
+ * Core compilation service behind {@code POST /compile} and {@code POST /compile/csv}, and the
+ * Natural-Language term pipeline reused by {@code /compile/bundle}.
  *
- * <p>Per-term pipeline:
- * <ol>
- *   <li>{@link TermSyntaxTranslator#translate} — custom query lang → PCRE pattern(s) + flags</li>
- *   <li>Build {@link TermCompilationResult}    — echo input + append result fields.
- *       No separate Hyperscan validation happens here any more — every pattern
- *       {@link TermSyntaxTranslator} returns has already been validated against
- *       the real Hyperscan compiler internally (see its class Javadoc).</li>
- * </ol>
+ * <p>Per term: {@link TermSyntaxTranslator#translate} turns the operator-language description into
+ * Hyperscan-validated pattern(s) and flags (it already validated them against real Hyperscan), and the
+ * outcome becomes a {@link TermCompilationResult}. Every term is treated as Natural Language here —
+ * {@link TypedCompileRequest#getRequestType()} is not consulted, so a Regex-type request is only
+ * honoured by {@code /compile/bundle}.
  *
- * <p>{@link TypedCompileRequest} is the single request type for both this
- * service's own {@code /compile}/{@code /compile/csv} use and
- * {@code LexiconCompileBundleService}'s {@code /compile/bundle} use — see
- * {@link TypedCompileRequest} class Javadoc.
+ * <p>Translation warnings (fallback to leaves, clamped gaps, skipped whole-word matching, ...) are
+ * logged, not returned: the response carries no {@code warnings} field.
  *
- * <p>Uses JDK 21 pattern matching switch on the sealed {@link TranslationResult}.
- * Stateless — safe for concurrent virtual-thread requests.
+ * <p>Stateless; safe for concurrent virtual-thread requests.
  */
 @Service
 public class LexiconCompileService {
@@ -55,13 +50,11 @@ public class LexiconCompileService {
     }
 
     /**
-     * Compiles all terms in the request.
+     * Compiles every term in the request and summarises the outcome. HTTP 200 is returned for any
+     * structurally valid request even when individual terms fail; each term's {@code compilationStatus}
+     * carries the detail.
      *
-     * <p>HTTP 200 is always returned for structurally valid requests even when
-     * individual terms fail. Per-term {@code compilationStatus=FAILED} carries details.
-     *
-     * @param request validated compile request
-     * @return compile response with per-term results and summary counts
+     * @param request a validated compile request
      */
     public CompileResponse compile(TypedCompileRequest request) {
         long startMs = System.currentTimeMillis();
@@ -96,9 +89,7 @@ public class LexiconCompileService {
     }
 
     /**
-     * Returns the engine mode identifier for the health endpoint.
-     *
-     * @return always {@code "HYPERSCAN_NATIVE"}
+     * @return the engine identifier, always {@code "HYPERSCAN_NATIVE"}
      */
     public String getEngineMode() {
         return compiler.getEngineMode();
@@ -107,14 +98,10 @@ public class LexiconCompileService {
     // ── Per-term pipeline ─────────────────────────────────────────────────────
 
     /**
-     * Runs translate → build-result for one term using JDK 21 pattern matching switch.
-     *
-     * <p>Public (not just used internally by {@link #compile}) so that
-     * {@code LexiconCompileBundleService} can reuse this exact pipeline for
-     * {@code requestType=TermType.NATURAL_LANGUAGE} terms in the {@code /compile/bundle}
-     * endpoint, guaranteeing identical translate/result-building behaviour
-     * between {@code /compile} and {@code /compile/bundle} with zero
-     * duplicated logic.
+     * Translates one term and builds its {@link TermCompilationResult}: PASS with its pattern(s), or FAILED
+     * with the translator's message. Public so {@code LexiconCompileBundleService} reuses this exact
+     * pipeline for Natural-Language terms, guaranteeing identical results across endpoints. An unexpected
+     * exception during translation becomes a FAILED result rather than an error response.
      */
     public TermCompilationResult compileTerm(TypedCompileRequest.TermInput term) {
         TranslationResult translation;

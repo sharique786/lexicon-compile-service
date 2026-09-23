@@ -5,7 +5,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * Type-safe configuration bound from {@code application.yml} under prefix {@code lexicon}.
+ * Type-safe binding of {@code application.yml} under the prefix {@code lexicon}
+ * ({@code hyperscan-version}, {@code compiler.max-terms-per-request}, {@code upload.max-file-size}).
+ * Note: no application code currently reads these values. The upload limit that actually applies comes from
+ * {@code spring.servlet.multipart.max-file-size}, and no term-count limit is enforced.
  */
 @Validated
 @ConfigurationProperties(prefix = "lexicon")

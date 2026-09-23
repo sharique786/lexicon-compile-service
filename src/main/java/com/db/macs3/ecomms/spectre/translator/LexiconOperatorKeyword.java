@@ -1,17 +1,9 @@
 package com.db.macs3.ecomms.spectre.translator;
 
 /**
- * Single source of truth for every reserved operator keyword in the lexicon
- * operator language. Previously these appeared as raw string literals
- * ("OR", "AND", "NEAR", "FOLLOWEDBY", "NOT") scattered across
- * {@link Tokenizer}, {@link ExpressionParser}, and their error messages —
- * changing a keyword, or checking every place case-sensitivity matters,
- * meant hunting down every occurrence individually. Referencing these
- * constants everywhere means there is exactly one place that defines what
- * the reserved keywords are.
- *
- * <p>All keywords are reserved ONLY in this exact case — see the
- * case-sensitivity requirement in {@link Tokenizer} class Javadoc.
+ * The reserved operator keywords of the lexicon operator language, defined once and referenced by
+ * {@link Tokenizer}, {@link ExpressionParser} and their error messages. All are reserved only in
+ * this exact (upper) case.
  */
 final class LexiconOperatorKeyword {
 

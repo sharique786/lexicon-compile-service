@@ -166,13 +166,9 @@ final class Tokenizer {
             return new Token.Or();
         }
         if (word.equals(NOT)) {
-            // "NOT" is tokenized as its own keyword here so scanAndOrAndNot()
-            // (called from the AND branch above) can pair it with a preceding
-            // AND into a single Token.AndNot. A bare Token.Not that reaches
-            // ExpressionParser WITHOUT having been consumed that way means
-            // "NOT" appeared on its own — ExpressionParser rejects that with
-            // a specific error (there is no independent NOT operator; see
-            // requirement history — it must always be written "AND NOT").
+            // A bare NOT token. When it directly follows AND it is merged into Token.AndNot by
+            // scanAndOrAndNot(); a NOT that stands alone is left to ExpressionParser, which
+            // treats "NOT (" as the unary exclusion group and everything else as literal text.
             return new Token.Not();
         }
         if (word.equals(AND)) {
@@ -285,15 +281,10 @@ final class Tokenizer {
     }
 
     /**
-     * Upper bound on {@code n} inside {@code NEAR{n}}/{@code FOLLOWEDBY{n}} —
-     * see {@link #validateProximityDistance}. Also the practical ceiling this
-     * project's char-based gap machinery is exercised against: even at this
-     * maximum, {@link MultiLanguagePatternBuilder#charBasedGap(
-     * com.db.macs3.ecomms.spectre.model.ScriptType, int, java.util.function.IntFunction)}
-     * still adaptively narrows the generated {@code [\s\S]{0,N}} gap against
-     * real Hyperscan for a term whose actual operand structure needs it —
-     * this limit bounds how large a distance an author can REQUEST, not how
-     * large a gap ends up being compiled.
+     * Upper bound on {@code n} inside {@code NEAR{n}}/{@code FOLLOWEDBY{n}}; see
+     * {@link #validateProximityDistance}. It limits the distance an author may
+     * REQUEST — the width actually compiled for a character-based script can
+     * still be narrowed later by {@link MultiLanguagePatternBuilder}.
      */
     static final int MAX_PROXIMITY_DISTANCE = 50;
 

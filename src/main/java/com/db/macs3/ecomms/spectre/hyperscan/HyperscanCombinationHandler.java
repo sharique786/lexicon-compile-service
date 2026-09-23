@@ -12,98 +12,49 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Builds the Hyperscan {@link Expression}(s) one term needs in a
- * {@code /compile/bundle} combined database.
+ * Builds the Hyperscan {@link Expression}(s) one PASS term contributes to the {@code /compile/bundle}
+ * combined database, and decides how their ids are assigned. Which of three shapes a term gets is
+ * decided only by {@link TermCompilationResult#requiresExclusionCheck()} and
+ * {@code regexPattern.size()}:
+ * <table border="1">
+ *   <caption>Expression shapes</caption>
+ *   <tr><th>Term</th><th>Expressions</th><th>Reportable id</th></tr>
+ *   <tr><td>Non-AND-NOT, one pattern</td>
+ *       <td>one plain expression ({@link HyperscanCompiler#toExpressionFlags})</td>
+ *       <td>{@code hyperscanExpressionId} = the term number</td></tr>
+ *   <tr><td>Non-AND-NOT, several leaves (fallback)</td>
+ *       <td>one QUIET expression per leaf ({@link HyperscanCompiler#toSubExpressionFlags}) plus one
+ *           native COMBINATION formula over them</td>
+ *       <td>{@code hyperscanExpressionId} = the term number (the combination's id);
+ *           {@code patternMapping} mirrors the formula</td></tr>
+ *   <tr><td>AND NOT (any leaf count on either side)</td>
+ *       <td>one plain expression per required and excluded pattern
+ *           ({@link HyperscanCompiler#toAndNotExpressionFlags}); no combination</td>
+ *       <td>none — {@code requiredExpressionIds} / {@code excludedExpressionIds} instead;
+ *           {@code patternMapping} holds the formula</td></tr>
+ * </table>
  *
- * <p><b>AND NOT no longer uses native Hyperscan COMBINATION — confirmed broken</b>
- * <p>An earlier version of this class compiled every AND NOT term as a
- * single native {@code HS_FLAG_COMBINATION} formula, e.g.
- * {@code (R&!E)} or, for a decomposed excluded side,
- * {@code (R&(!E1|!E2|!Em))}. This is confirmed BROKEN by Hyperscan's own
- * documented evaluation model, not merely observed as a bug in this
- * project's own testing:
+ * <p><b>Why AND NOT never uses native COMBINATION.</b> Hyperscan evaluates a combination eagerly and
+ * progressively ("raises matches at every offset where one of its sub-expressions matches and the
+ * logical value of the whole expression is true"), not once after the scan. Only PURELY negative
+ * combinations are deferred to end of data. {@code R&!E} also needs the positive {@code R}, so as soon
+ * as {@code R} matches while {@code E} simply has not been reached yet, {@code !E} reads true and the
+ * combination fires before {@code E} could appear later in the same text — a false positive. A
+ * positive-only {@code R1&R2&...} formula has no such ambiguity and stays on COMBINATION.
  *
- * <ul>
- *   <li>Hyperscan's Compiling Patterns guide states a combination
- *       expression "will raise matches at every offset where one of its
- *       sub-expressions matches and the logical value of the whole
- *       expression is true" — combinations are evaluated EAGERLY and
- *       PROGRESSIVELY as the scan proceeds, not once, holistically, after
- *       the whole text has been seen.</li>
- *   <li>Hyperscan's own changelog documents special-case handling for
- *       <i>purely negative</i> combinations specifically because of this:
- *       "add support for purely negative combinations, which report match
- *       at EOD [end-of-data] in case of no sub-expressions matched." A
- *       combination that can be satisfied by "nothing has matched (yet)"
- *       is deliberately deferred to end-of-data, since Hyperscan cannot
- *       know until the scan finishes whether that will remain true.</li>
- *   <li>{@code R&!E} is NOT a purely negative combination — it also
- *       requires the positive condition {@code R} to be true — so it does
- *       NOT receive this end-of-data deferral. The moment {@code R}
- *       matches, if {@code E} has simply not been REACHED yet in the scan
- *       (not confirmed absent — merely not yet seen), {@code !E} reads as
- *       true at that instant and the combination fires immediately,
- *       before {@code E} has had any chance to match later in the same
- *       text. This is exactly the false-positive this class previously
- *       produced.</li>
- * </ul>
+ * <p>Instead every AND NOT pattern reports individually, and the caller evaluates the condition after
+ * the whole scan, from the complete set of matched ids: matched iff every required id was found and NOT
+ * every excluded id was found (an excluded side with several entries is excluded only when all of
+ * them are present). A consequence is that an AND NOT term is not resolvable from the {@code .hdb}
+ * alone — the JSON's {@code requiredExpressionIds}/{@code excludedExpressionIds}/{@code patternMapping}
+ * are required.
  *
- * <p><b>A term with NEAR/FOLLOWEDBY structure but no AND NOT is unaffected
- * and remains on native COMBINATION</b> — {@code R1&R2&...&Rn} involves no
- * negation at all, so it has no such ambiguity: a positive sub-expression's
- * truth value is only ever true after it genuinely matches, never before.
- * Hyperscan's own worked example in the same documentation shows exactly
- * this kind of formula firing correctly and progressively as each
- * referenced sub-expression matches. Whether a term uses native
- * COMBINATION is therefore decided strictly by
- * {@link TermCompilationResult#requiresExclusionCheck()}, not by whether
- * either side has more than one pattern — this now fires unconditionally
- * for any NEAR/FOLLOWEDBY structure (see {@code PatternDecomposer}), not
- * only when a complexity heuristic previously flagged a side as over
- * budget; the branch logic below was already indifferent to WHY
- * {@code regexPattern.size()>1}, so nothing here needed to change.
+ * <p><b>Ids.</b> A non-AND-NOT term's reportable id is always its own term number. Every other
+ * expression (leaves, AND NOT patterns) takes an id from an auxiliary range starting at
+ * {@code max(term number) + 1} ({@link #computeIdOffset}), so it never collides with a term number.
  *
- * <p><b>The fix: no combination for AND NOT — every pattern reports individually,
- * evaluated by the caller after the whole scan completes</b>
- * <p>For an AND NOT term, every pattern in both
- * {@link TermCompilationResult#regexPattern()} (required) and
- * {@link TermCompilationResult#exclusionRegex()} (excluded) compiles as
- * its own plain, independently reportable expression — never
- * {@code QUIET}, never {@code COMBINATION}. A single {@code Scanner.scan()}
- * call is still synchronous and returns the complete list of every match
- * that occurred anywhere in the text by the time it returns, so a caller
- * that waits for the whole scan to finish before evaluating "were ALL
- * required ids present AND NONE of the excluded ids present" sees an
- * accurate, complete picture — this is exactly the "industry-standard"
- * end-of-scan post-processing approach Hyperscan's own eager-combination
- * behaviour requires for any formula mixing a positive and a negative
- * condition. See {@link #addExpressions} return value and
- * {@code LexiconCompileBundleService} for where this evaluation happens.
- *
- * <p><b>The id scheme, revised</b>
- * <p>For a term that does NOT require an exclusion check (simple or purely
- * decomposed), the reportable expression id is still ALWAYS the term's own
- * term number, exactly as before — see {@link ExpressionAssignment#hyperscanExpressionId()}.
- * For an AND NOT term, there is no longer a single reportable id at all —
- * every required and excluded pattern gets its own id from the same
- * allocated auxiliary range decomposition leaves already used, and the
- * caller is told exactly which ids belong to which side via
- * {@link ExpressionAssignment#requiredExpressionIds()} /
- * {@link ExpressionAssignment#excludedExpressionIds()}. This does mean an
- * AND NOT term's {@code .hdb} contribution is no longer self-resolving the
- * way a simple or purely-decomposed term's is — the caller must read the
- * JSON response to know which ids to combine, and how. That trade-off is
- * unavoidable: Hyperscan itself cannot correctly resolve this boolean
- * condition natively for a mixed positive/negative formula, so the
- * responsibility must move to the caller regardless of id-naming choices.
- *
- * <p><b>Flag constraint: COMBINATION only pairs with QUIET/SINGLEMATCH</b>
- * <p>Still relevant for the (now narrower) case where COMBINATION is used
- * at all — a Hyperscan expression flagged {@code COMBINATION} may only
- * additionally carry {@code QUIET} and/or {@code SINGLEMATCH}, never
- * {@code CASELESS}/{@code UTF8}/{@code UCP}/{@code DOTALL}/{@code SOM_LEFTMOST}.
- * {@link HyperscanCompiler#toCombinationExpressionFlags} already returns
- * exactly {@code {COMBINATION}} and nothing else.
+ * <p><b>Flag constraint.</b> A {@code COMBINATION} expression may carry only {@code QUIET}/{@code SINGLEMATCH};
+ * {@link HyperscanCompiler#toCombinationExpressionFlags} returns just {@code COMBINATION}.
  */
 @Component
 public class HyperscanCombinationHandler {
@@ -115,23 +66,16 @@ public class HyperscanCombinationHandler {
     }
 
     /**
-     * The auxiliary (non-term-number) id range must never overlap a real
-     * term number, however sparse or large those term numbers are.
-     * {@code offset = (largest term number) + 1} is the first id available
-     * for every auxiliary expression this request needs (decomposition
-     * leaves, and now every required/excluded pattern of an AND NOT term);
-     * every subsequent auxiliary id is handed out sequentially from there
-     * by {@link HyperscanIdAllocator}.
+     * The first auxiliary id: {@code max(termNumbers) + 1}, so auxiliary ids (decomposition leaves and every
+     * AND NOT pattern) can never overlap a real term number however sparse or large those numbers are.
      */
     public int computeIdOffset(Collection<Integer> termNumbers) {
         return termNumbers.stream().mapToInt(Integer::intValue).max().orElse(0) + 1;
     }
 
     /**
-     * Hands out sequentially increasing auxiliary ids within one bundle
-     * request. Starting from {@link #computeIdOffset}, every id this
-     * allocator returns is guaranteed distinct from every real term number
-     * and from every other id it has already handed out.
+     * Hands out sequentially increasing auxiliary ids within one bundle request, starting at
+     * {@link #computeIdOffset}; each is distinct from every term number and every id already issued.
      */
     public static final class HyperscanIdAllocator {
         private int nextId;
@@ -146,29 +90,16 @@ public class HyperscanCombinationHandler {
     }
 
     /**
-     * The result of assigning expression id(s) to one term — exactly one
-     * of {@code hyperscanExpressionId} / {@code requiredExpressionIds}+
-     * {@code excludedExpressionIds} is populated, never both:
+     * How one term's expression id(s) were assigned. Exactly one of {@code hyperscanExpressionId} or
+     * {@code requiredExpressionIds}+{@code excludedExpressionIds} is populated.
      *
-     * @param hyperscanExpressionId populated for a term that does NOT require
-     *                              an exclusion check (simple or purely
-     *                              decomposed) — always the term's own term
-     *                              number. Null for an AND NOT term.
-     * @param requiredExpressionIds populated ONLY for an AND NOT term — the id(s)
-     *                              of the required side's plain expression(s), one
-     *                              per entry of {@code regexPattern}. Null otherwise.
-     * @param excludedExpressionIds populated ONLY for an AND NOT term — the id(s)
-     *                              of the excluded side's plain expression(s), one
-     *                              per entry of {@code exclusionRegex}. Null otherwise.
-     * @param patternMapping        the logical formula over this term's expression id(s)
-     *                              — see {@code TermCompilationResult} class Javadoc
-     *                              "patternMapping". Null for a simple, single-pattern,
-     *                              non-AND-NOT term (nothing to map — its one id IS the
-     *                              whole answer). Non-null for pure decomposition (mirrors
-     *                              the native COMBINATION formula also written into the
-     *                              {@code .hdb}) and for AND NOT (the ONLY place this
-     *                              formula is recorded, since AND NOT never gets a native
-     *                              COMBINATION in the {@code .hdb} itself).
+     * @param hyperscanExpressionId for a term without AND NOT: its own term number; null for AND NOT
+     * @param requiredExpressionIds AND NOT only: one id per {@code regexPattern} entry; null otherwise
+     * @param excludedExpressionIds AND NOT only: one id per {@code exclusionRegex} entry; null otherwise
+     * @param patternMapping        the boolean formula over this term's ids ({@code TermCompilationResult}
+     *                              "patternMapping"): null for a single-pattern non-AND-NOT term; for several
+     *                              leaves it mirrors the COMBINATION written into the {@code .hdb}; for AND NOT
+     *                              it is the only place the formula exists
      */
     public record ExpressionAssignment(
             Integer hyperscanExpressionId,
@@ -179,33 +110,14 @@ public class HyperscanCombinationHandler {
     }
 
     /**
-     * Adds this PASS term's Hyperscan {@link Expression}(s) to
-     * {@code expressionsOut} and returns how its id(s) were assigned — see
-     * class Javadoc for why AND NOT terms and non-AND-NOT terms are handled
-     * completely differently now.
-     *
-     * <p>Which {@code ExpressionFlag} set an expression gets is decided
-     * strictly by which of these three cases it falls into — never by the
-     * term's own script content any more:
-     * <ul>
-     *   <li>AND NOT (any term, regardless of decomposition on either side) —
-     *       {@link HyperscanCompiler#toAndNotExpressionFlags(int)} ({@code CASELESS}
-     *       always, plus {@code UTF8}/{@code UCP} when the term's content needs them)</li>
-     *   <li>Simple, single-pattern, non-AND-NOT PASS term —
-     *       {@link HyperscanCompiler#toExpressionFlags} ({@code CASELESS},
-     *       {@code DOTALL}, {@code SOM_LEFTMOST} always, plus {@code UTF8}/
-     *       {@code UCP} when the term's content needs them)</li>
-     *   <li>Pure decomposition leaf, no AND NOT —
-     *       {@link HyperscanCompiler#toSubExpressionFlags(int)} ({@code CASELESS},
-     *       {@code QUIET} always, plus {@code UTF8}/{@code UCP} when the term's
-     *       content needs them)</li>
-     * </ul>
+     * Appends this PASS term's Hyperscan expressions to {@code expressionsOut} and returns how its ids
+     * were assigned; see the class Javadoc for the three shapes. The flag set of each expression follows
+     * from its kind (AND NOT pattern, plain single pattern, or QUIET leaf), never from the term's script.
      *
      * @param termResult     a PASS result
-     * @param termNumber     this term's own term number, parsed from its {@code termId}
-     * @param idAllocator    shared across the whole bundle request — see {@link #computeIdOffset}
-     * @param expressionsOut every expression this term needs is appended here
-     * @return this term's id assignment — see {@link ExpressionAssignment}
+     * @param termNumber     the term's number, parsed from its {@code termId}
+     * @param idAllocator    shared across the whole bundle request
+     * @param expressionsOut receives every expression the term needs
      */
     public ExpressionAssignment addExpressions(TermCompilationResult termResult, int termNumber,
                                                HyperscanIdAllocator idAllocator, List<Expression> expressionsOut) {
@@ -241,19 +153,10 @@ public class HyperscanCombinationHandler {
     }
 
     /**
-     * Adds every pattern in {@code patterns} as its own PLAIN (non-QUIET,
-     * non-COMBINATION, individually reportable) expression — used only for
-     * AND NOT terms now, where every required/excluded pattern must report
-     * on its own so the caller can evaluate the boolean condition after the
-     * whole scan completes. Flagged via {@link HyperscanCompiler#toAndNotExpressionFlags(int)}
-     * ({@code CASELESS} always, plus {@code UTF8}/{@code UCP} when
-     * {@code hyperscanFlags} indicates non-ASCII content — see that method's
-     * Javadoc for the confirmed "Hexadecimal value is greater than \xFF"
-     * regression this fixes; still no SOM_LEFTMOST, even though these are
-     * plain, non-QUIET expressions for which SOM_LEFTMOST would be
-     * structurally safe).
+     * Adds each pattern as its own plain, individually reportable expression (used for the AND NOT
+     * sides), flagged by {@link HyperscanCompiler#toAndNotExpressionFlags(int)}.
      *
-     * @param hyperscanFlags the term's own {@code TermCompilationResult.hyperscanFlags()} bitmask
+     * @param hyperscanFlags the term's {@code TermCompilationResult.hyperscanFlags()} bitmask
      */
     private List<Integer> addPlainSide(List<String> patterns, int hyperscanFlags, HyperscanIdAllocator idAllocator,
                                        List<Expression> expressionsOut) {
@@ -267,16 +170,10 @@ public class HyperscanCombinationHandler {
     }
 
     /**
-     * Adds every pattern in {@code patterns} as its own QUIET expression,
-     * returning their allocated ids. Used only for the pure-decomposition
-     * (no AND NOT) COMBINATION path, which remains safe — see class Javadoc.
-     * Flagged via {@link HyperscanCompiler#toSubExpressionFlags(int)}
-     * ({@code CASELESS} + {@code QUIET} always, plus {@code UTF8}/{@code UCP}
-     * when {@code hyperscanFlags} indicates non-ASCII content — same
-     * confirmed regression as {@link #addPlainSide} — never SOM_LEFTMOST,
-     * confirmed incompatible with QUIET).
+     * Adds each pattern as its own QUIET expression and returns the allocated ids (used for the
+     * fallback-leaves COMBINATION path), flagged by {@link HyperscanCompiler#toSubExpressionFlags(int)}.
      *
-     * @param hyperscanFlags the term's own {@code TermCompilationResult.hyperscanFlags()} bitmask
+     * @param hyperscanFlags the term's {@code TermCompilationResult.hyperscanFlags()} bitmask
      */
     private List<Integer> addQuietSide(List<String> patterns, int hyperscanFlags, HyperscanIdAllocator idAllocator,
                                        List<Expression> expressionsOut) {
@@ -290,14 +187,8 @@ public class HyperscanCombinationHandler {
     }
 
     /**
-     * Builds the AND NOT logical formula for {@code TermCompilationResult.patternMapping}
-     * — {@code "(<required>&!<excluded>)"}, where each side is {@link #sideFormula}'d
-     * independently (bare id if that side has exactly one; parenthesised
-     * AND-join if it was decomposed into several — same "AND convention"
-     * documented on {@code requiredExpressionIds}/{@code excludedExpressionIds}).
-     * This is the ONLY place this formula is recorded — never written into the
-     * {@code .hdb} itself as a native {@code COMBINATION}, since that combination
-     * shape is confirmed unsafe for AND NOT (see class Javadoc).
+     * Builds the AND NOT {@code patternMapping}, {@code "(<required>&!<excluded>)"}, with each side rendered
+     * by {@link #sideFormula}. Recorded only in the JSON; the {@code .hdb} never encodes it.
      */
     private static String buildAndNotFormula(List<Integer> requiredIds, String requiredFormulaTemplate,
                                              List<Integer> excludedIds, String excludedFormulaTemplate) {
@@ -306,14 +197,9 @@ public class HyperscanCombinationHandler {
     }
 
     /**
-     * One side's AND-join sub-formula: a bare id when {@code ids} has exactly
-     * one entry, or a parenthesised AND-join when it was decomposed into
-     * several — {@code formulaTemplate}'s own grouping (see
-     * {@code PatternDecomposer.Result#formulaTemplate()}) when one is
-     * available, mirroring the term's actual authored nesting, or a flat
-     * {@code (id1&id2&...)} AND-join when it is not (e.g. a
-     * {@code TermCompilationResult} built directly rather than via the real
-     * translator pipeline).
+     * One side's sub-formula: the bare id for a single pattern, otherwise a parenthesised AND-join that
+     * follows {@code formulaTemplate}'s grouping (the term's authored nesting) or, with no template, a flat
+     * {@code (id1&id2&...)}.
      */
     private static String sideFormula(List<Integer> ids, String formulaTemplate) {
         if (ids.size() == 1) {
@@ -323,12 +209,9 @@ public class HyperscanCombinationHandler {
     }
 
     /**
-     * Substitutes every {@code {i}} leaf-index placeholder in {@code formulaTemplate}
-     * with {@code ids.get(i)} — see {@code PatternDecomposer.Result#formulaTemplate()}.
-     * Falls back to a flat {@code id1&id2&...} AND-join, in leaf order, when no
-     * template is available (null) — the shape every caller got before this
-     * template existed, still correct (if not tree-shaped) for a term whose
-     * leaves have no further grouping to convey.
+     * Substitutes each {@code {i}} placeholder in {@code formulaTemplate} with {@code ids.get(i)}
+     * (see {@code PatternDecomposer.Result#formulaTemplate()}); with a null template, a flat
+     * {@code id1&id2&...} AND-join in leaf order.
      */
     private static String applyFormulaTemplate(String formulaTemplate, List<Integer> ids) {
         if (formulaTemplate == null) {

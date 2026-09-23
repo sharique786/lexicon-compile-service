@@ -11,40 +11,30 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Request body for {@code POST /api/lexicon/compile/bundle}.
+ * The request body for {@code POST /compile} and {@code POST /compile/bundle}; {@code /compile/csv}
+ * builds the same type internally.
  *
- * <p><b>Schema changes from the previous per-term version</b>
- * <ul>
- *   <li>{@code requestType} has moved from each individual {@code TermInput} to
- *       the <em>root level</em> — a single request now declares one term type
- *       for all its terms. Mixed-type requests are no longer supported; submit
- *       separate requests for Natural Language and Regex terms.</li>
- *   <li>{@code riskDriverName} has been removed entirely.</li>
- *   <li>{@code request_id} has been added for end-to-end request tracing; it
- *       is echoed back unchanged in the response JSON.</li>
- * </ul>
- *
- * <p>JSON example:
  * <pre>
  * {
  *   "request_id": "550e8400-e29b-41d4-a716-446655440000",
  *   "lexiconRuleName": "lexicon_research_1",
  *   "requestType": "Natural Language",
  *   "terms": [
- *     {
- *       "termId": "lexicon_research_1::1",
- *       "termDescription": "(manipulate) NEAR{5} ((price) OR (spread) OR (stock))"
- *     },
- *     {
- *       "termId": "lexicon_research_1::2",
- *       "termDescription": "insider AND trading"
- *     }
+ *     { "termId": "lexicon_research_1::1",
+ *       "termDescription": "(manipulate) NEAR{5} ((price) OR (spread) OR (stock))" },
+ *     { "termId": "lexicon_research_1::2", "termDescription": "insider AND trading" }
  *   ]
  * }
  * </pre>
- *
- * <p>See {@link TermType} for exactly what {@code "Natural Language"} and
- * {@code "Regex"} mean for how {@code termDescription} is interpreted.
+ * <ul>
+ *   <li>{@code request_id}, {@code lexiconRuleName} — required, non-blank; {@code request_id} is echoed back.</li>
+ *   <li>{@code requestType} — required, exactly {@code "Natural Language"} or {@code "Regex"} for ALL terms
+ *       (mixed requests are not supported). See {@link TermType}.</li>
+ *   <li>{@code terms} — required, non-empty; each needs a non-blank {@code termId} and
+ *       {@code termDescription}. There is no per-request term-count limit.</li>
+ *   <li>Unknown JSON properties are ignored.</li>
+ * </ul>
+ * See {@link TermType} for how {@code termDescription} is interpreted.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class TypedCompileRequest {
@@ -78,14 +68,16 @@ public class TypedCompileRequest {
     // ── Nested record: TermInput ──────────────────────────────────────────────
 
     /**
-     * One lexicon term. Contains only the term's identifier and its description.
-     * {@code requestType} and {@code riskDriverName} are no longer carried
-     * per-term (see root-level fields above).
+     * One lexicon term.
      *
-     * @param termId          unique identifier, echoed back in the result
-     * @param termDescription operator-language expression ({@link TermType#NATURAL_LANGUAGE})
-     *                        or raw PCRE pattern ({@link TermType#REGEX}) —
-     *                        determined by the root {@code requestType}
+     * <p>The compact constructor replaces every run of newline, carriage-return and tab characters in
+     * {@code termDescription} with one space before validation, so a term pasted from a multi-line source is
+     * unchanged in meaning, and one consisting only of such characters is rejected as blank.
+     *
+     * @param termId          identifier echoed back in the result; for {@code /compile/bundle} it must end in
+     *                        {@code ::<n>} (see {@code LexiconCompileBundleService})
+     * @param termDescription an operator-language expression ({@link TermType#NATURAL_LANGUAGE}) or a raw PCRE
+     *                        pattern ({@link TermType#REGEX}), decided by the root {@code requestType}
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record TermInput(

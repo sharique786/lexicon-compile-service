@@ -4,116 +4,53 @@ import com.db.macs3.ecomms.spectre.model.ScriptType;
 import com.db.macs3.ecomms.spectre.util.ScriptDetector;
 
 /**
- * Estimates whether an {@link Ast} is likely to produce a pattern Hyperscan
- * rejects with "Pattern is too large", and rejects it EARLY — before
- * {@link PatternCodeGenerator} even runs — with a specific, actionable error
- * instead of letting Hyperscan fail opaquely at compile time.
+ * Estimates whether an {@link Ast} is likely to compile to a pattern Hyperscan rejects with
+ * "Pattern is too large". {@code TermSyntaxTranslator#resolveSide} uses it as a cheap
+ * pre-check before it generates and trial-compiles a side as one gap-embedded pattern: a
+ * side predicted over budget goes straight to {@link PatternDecomposer}'s leaves, saving a
+ * compile that would almost certainly fail. It only measures ({@link #estimate},
+ * {@link #isOverBudget}); it never rejects a term. Real Hyperscan validation still has the
+ * final say for anything the heuristic lets through.
  *
- * <p><b>Live again — the pre-check gate for {@code TermSyntaxTranslator#resolveSide}</b>
- * <p>Between the original design and the {@code resolvedPatterns} change,
- * this class went fully dormant for one release: NEAR/FOLLOWEDBY structure
- * split unconditionally via {@link PatternDecomposer}, regardless of
- * complexity, and a single gap-embedded pattern was only ever reachable via
- * the OR-nested-proximity exception. That turned out to be the wrong default
- * for the common case: a "very simple, straightforward" proximity term (the
- * overwhelming majority) doesn't need decomposition's AND-only precision
- * trade-off at all — it compiles to one safe, self-contained gap-embedded
- * pattern just fine, letting Hyperscan enforce the actual distance/order
- * natively. {@link TermSyntaxTranslator#resolveSide} now calls
- * {@link #isOverBudget} again, exactly as originally: a cheap pre-check,
- * BEFORE attempting to generate and real-Hyperscan-validate the single
- * pattern, to skip that attempt for a structure already predicted too large
- * — decomposition into independent leaves is the FALLBACK now (used when
- * this heuristic says no, or when it says yes but real Hyperscan rejects the
- * single pattern anyway), not the unconditional default. {@code resolvedPatterns}
- * itself is unaffected by any of this — {@link PatternDecomposer#decompose}
- * still runs unconditionally to supply it (and the fallback leaves), whether
- * or not this class ends up gating anything for a given term.
+ * <p><b>What drives Hyperscan's limit.</b> "Pattern is too large" follows compiled automaton
+ * STATE COUNT, not string length (a 190-character pattern can fail while a much longer,
+ * simpler one compiles). A bounded gap such as {@code (?:\s+\S+){0,4}} makes the automaton
+ * track how many gap words were consumed — cheap alone. When a proximity operand is itself a
+ * proximity node, two gap counters are tracked at once, a PRODUCT of state spaces. Nesting
+ * depth therefore compounds multiplicatively, while OR-branch width at one level does not.
  *
- * <p><b>Why string length isn't the right signal</b>
- * <p>The reported failure case compiles to a 190-character pattern — nowhere
- * near any raw length limit. Hyperscan's "Pattern is too large" is a
- * documented consequence of compiled AUTOMATON STATE COUNT, not string
- * length: Intel's own issue tracker shows a 32,000-repeat bounded quantifier
- * on a simple pattern compiling fine, while a 73-repeat bounded quantifier
- * on a pattern with additional structure fails.
+ * <p><b>The score</b> ({@link #estimate}): OR adds its operands, AND and proximity multiply
+ * them. NEAR is doubled (both directions are generated). A wildcard word weighs
+ * {@link #WILDCARD_WEIGHT}, a plain one {@link #PLAIN_WEIGHT}. A proximity node whose
+ * operand is itself proximity is multiplied by that operand's {@code distance + 1}. Under a
+ * character-based script the node is also multiplied by its effective character gap
+ * ({@link MultiLanguagePatternBuilder#effectiveGapWidth}), because a bounded
+ * {@code [\s\S]{0,N}} repeat under UTF8+UCP is far costlier than a word gap; word-based
+ * scripts get factor 1.
  *
- * <p><b>Revision history: nesting depth, not branch width, is the primary driver</b>
- * <p>The first version of this analyzer scored pure OR-branch width and
- * wildcard presence, multiplying operand scores together at each NEAR/FOLLOWEDBY.
- * Real Hyperscan testing falsified that model directly: a term with a single
- * NEAR over an 18-alternative and an 8-alternative OR group (no nesting)
- * scored 480 under that model and compiled successfully; a term with two
- * NESTED FOLLOWEDBY operators over much narrower 4-alternative OR groups
- * scored only 294 and was REJECTED by real Hyperscan with "Pattern is too
- * large" — the model had the ordering backwards.
- *
- * <p>The reason, reasoned from how bounded repetition compiles: a bounded
- * gap like {@code (?:\s+\S+){0,4}} requires the automaton to track "how many
- * gap-words have been consumed so far" as part of its state (a handful of
- * states — 0 through 4 — is cheap on its own, which is why the wide,
- * single-level NEAR case above compiled fine). But when one proximity
- * operator's operand is ITSELF a proximity operator, the automaton must
- * track TWO independent gap-counters SIMULTANEOUSLY for ambiguous partial
- * matches — the outer gap's count AND the inner gap's count — and that is a
- * PRODUCT of state spaces, not a sum. Nesting depth compounds multiplicatively;
- * OR-branch width at a single level does not compound the same way.
- *
- * <p>{@link #estimate} now applies an explicit nesting penalty: a NEAR/FOLLOWEDBY
- * whose operand is itself a NEAR/FOLLOWEDBY multiplies the whole expression's
- * score by {@code (nestedDistance + 1)} — the nested gap's own bound plus
- * one, standing in for the number of additional simultaneous counter-states
- * that nesting introduces. A single-level proximity operator (either operand
- * a plain OR/word/phrase, never another proximity node) gets no such penalty,
- * matching the empirical result that width alone did not cause failure.
- *
- * <p><b>This is still a heuristic, not a guarantee</b>
- * <p>It is now calibrated against two known real Hyperscan outcomes (one
- * PASS at raw complexity 480, one real FAILURE at raw complexity 294 that
- * becomes 1470 once the nesting penalty is applied — see
- * {@code PatternComplexityAnalyzerTest}), not just reasoned from first
- * principles. Two data points bound the budget but do not prove the formula
- * generalizes to arbitrary structures; {@link #COMPLEXITY_BUDGET} remains a
- * single named constant specifically so it can be re-tuned as more real
- * Hyperscan compilation results become available.
- *
- * <p><b>Over-budget no longer means rejection — it means decomposition</b>
- * <p>An earlier revision of this class threw {@link TranslationException}
- * directly when {@link #COMPLEXITY_BUDGET} was exceeded. This class no
- * longer decides what happens on an over-budget result — it only measures
- * complexity ({@link #estimate}) and answers whether a given AST is over
- * budget ({@link #isOverBudget}). {@link TermSyntaxTranslator} now responds
- * to an over-budget result by attempting to DECOMPOSE the offending side
- * into independent leaf patterns (see {@code PatternDecomposer}) rather than
- * rejecting the term outright — see {@link TermSyntaxTranslator} class
- * Javadoc for the full flow, and for the real precision trade-off
- * decomposition carries (it discards NEAR/FOLLOWEDBY's distance and order
- * constraints). Rejection is now reserved for the narrower case where even
- * decomposition cannot help — a single leaf that is itself over budget on
- * its own, with no proximity structure left to decompose.
+ * <p><b>Calibration.</b> {@link #COMPLEXITY_BUDGET} is set between two observed real Hyperscan
+ * outcomes: a single NEAR over an 18- and an 8-alternative OR group compiles (score 480), and
+ * two nested FOLLOWEDBY over 4-alternative groups is rejected (score 1470 with the nesting
+ * penalty). Two points do not prove the formula generalises, so the budget stays a single
+ * named constant that can be re-tuned.
  */
 final class PatternComplexityAnalyzer {
 
     /**
-     * Complexity budget — see class Javadoc. Comfortably above the known
-     * real PASS case (480, single-level wide NEAR) and comfortably below the
-     * known real FAILURE case (1470 with the nesting penalty applied,
-     * two-level nested FOLLOWEDBY). An AST whose estimated score exceeds
-     * this is over budget — see {@link #isOverBudget}.
+     * Score above which an AST is considered over budget; see the class Javadoc for how it was
+     * chosen (comfortably above the known-good 480, comfortably below the known-bad 1470).
      */
     static final int COMPLEXITY_BUDGET = 700;
 
     /**
-     * Multiplier applied to a NEAR operand's score — NEAR generates both
-     * A-then-B and B-then-A, doubling automaton complexity relative to the
-     * same operands under a single-direction FOLLOWEDBY.
+     * Multiplier for NEAR: it generates both A-then-B and B-then-A, doubling the automaton
+     * relative to a single-direction FOLLOWEDBY over the same operands.
      */
     private static final int NEAR_DIRECTIONALITY_FACTOR = 2;
 
     /**
-     * Extra weight for a wildcard-containing word/phrase — {@code \S*}'s own
-     * unbounded internal branching compounds with any surrounding bounded
-     * repetition or alternation it sits inside.
+     * Weight of a wildcard-containing word/phrase: the unbounded {@code \S*} compounds with any
+     * bounded repetition or alternation around it.
      */
     private static final int WILDCARD_WEIGHT = 2;
     private static final int PLAIN_WEIGHT = 1;
@@ -122,30 +59,23 @@ final class PatternComplexityAnalyzer {
     }
 
     /**
-     * @return true when {@code ast}'s estimated complexity exceeds
-     * {@link #COMPLEXITY_BUDGET} — the caller should attempt
-     * decomposition (see {@code PatternDecomposer}) rather than
-     * code-generating {@code ast} as a single pattern.
+     * @return true when {@code ast}'s estimated complexity exceeds {@link #COMPLEXITY_BUDGET}
+     *         (an arithmetic overflow while scoring also counts as over budget)
      */
     static boolean isOverBudget(Ast ast) {
         return estimateSafely(ast) > COMPLEXITY_BUDGET;
     }
 
     /**
-     * @return the estimated complexity score — exposed (package-visible,
-     * not just via {@link #isOverBudget}) so callers building an
-     * error or warning message can report the actual number.
+     * @return the estimated complexity score, package-visible so callers can report the number
      */
     static int estimate(Ast ast) {
         return estimateSafely(ast);
     }
 
     /**
-     * Wraps the real {@link #estimateRaw} to treat integer overflow (an
-     * extremely deep or wide nested structure) as unambiguously over-budget
-     * rather than letting {@link ArithmeticException} propagate — a term
-     * complex enough to overflow a 32-bit score is complex enough to treat
-     * as over budget regardless of the exact number.
+     * Runs {@link #estimateRaw}, treating integer overflow as unambiguously over budget: a term
+     * complex enough to overflow a 32-bit score is over budget whatever the exact number.
      */
     private static int estimateSafely(Ast ast) {
         try {
@@ -194,12 +124,9 @@ final class PatternComplexityAnalyzer {
     }
 
     /**
-     * The extra multiplicative penalty for a proximity operator whose
-     * operand(s) are THEMSELVES proximity operators — see class Javadoc.
-     * {@code (nestingFactor(left) × nestingFactor(right))}: neutral (1) for
-     * a non-proximity operand, {@code distance+1} for a nested one — so a
-     * proximity node with NEITHER operand nested gets no penalty at all,
-     * matching the empirical single-level-NEAR PASS case exactly.
+     * Extra multiplier for a proximity node whose operand(s) are themselves proximity nodes:
+     * {@code nestingFactor(left) × nestingFactor(right)}, where the factor is 1 for a
+     * non-proximity operand and {@code distance + 1} for a nested one.
      */
     private static int nestingPenalty(Ast left, Ast right) {
         return Math.multiplyExact(nestingFactor(left), nestingFactor(right));
@@ -218,33 +145,10 @@ final class PatternComplexityAnalyzer {
     }
 
     /**
-     * Extra multiplicative penalty for a proximity node's OWN gap cost under
-     * a character-based script (CJK/Hangul/Thai/…) — a cost driver this
-     * class had ZERO coverage for until this was added: a simple, non-nested
-     * two-word CJK {@code NEAR{10}} scored identically to the same structure
-     * in plain Latin, even though the former compiles to an expensive bounded
-     * {@code [\s\S]{0,N}} wildcard-class repeat under UTF8+UCP and the latter
-     * to the far cheaper {@code (?:\s+\S+){0,10}\s+} word-token gap — see
-     * {@link MultiLanguagePatternBuilder#MAX_CHAR_GAP} for the real-Hyperscan
-     * calibration data behind that cost difference.
-     *
-     * <p>Applied at EVERY Near/FollowedBy node, nested or not — deliberately
-     * broader than only the non-nested case, since this penalizes a different,
-     * orthogonal cost driver from {@link #nestingPenalty} (structural
-     * simultaneous gap-counters) and stacks with it multiplicatively the same
-     * way {@link #NEAR_DIRECTIONALITY_FACTOR} already does.
-     *
-     * <p>Neutral (returns {@code 1}) for a word-based script — pure-Latin
-     * (and pure-Arabic/Hebrew/Devanagari) terms are completely unaffected by
-     * construction, for any operand text, since {@link ScriptType#isCharBased()}
-     * is {@code false} for those scripts regardless of distance. This is what
-     * protects this class's two real-Hyperscan calibration points (both pure
-     * Latin/German text — see {@code TermSyntaxTranslatorTest
-     * .nestingDepthNotBranchWidth_correctRelativeOrdering}) from being
-     * perturbed by this change.
-     *
-     * @return the clamped effective gap width (at least 1) for a char-based
-     * script, or {@code 1} (neutral) for a word-based one
+     * Extra multiplier for a proximity node's own gap cost under a character-based script
+     * (CJK, Hangul, Thai, …): the clamped effective gap width, at least 1. Applied at every
+     * proximity node, nested or not, and stacks with {@link #nestingPenalty}. Neutral (1) for
+     * word-based scripts, for any operand text.
      */
     private static int charGapPenalty(Ast left, Ast right, int distance) {
         ScriptType script = ScriptDetector.detectCombined(collectText(left), collectText(right));
@@ -255,15 +159,9 @@ final class PatternComplexityAnalyzer {
     }
 
     /**
-     * Collects a subtree's raw, un-codegen'd lexicon text — enough for
-     * {@link ScriptDetector#detectCombined} to classify the script, without
-     * running full {@link PatternCodeGenerator} codegen (which this
-     * pre-codegen complexity check has no need for; unlike
-     * {@link PatternDecomposer#decompose}, which genuinely needs the
-     * generated PCRE fragments to bake into leaf patterns).
-     * {@link ScriptDetector}'s own classification is designed to tolerate
-     * embedded regex/wildcard syntax in raw lexicon text (it skips ASCII
-     * punctuation/metacharacters), so raw text is safe input here.
+     * Collects a subtree's raw lexicon text, enough for {@link ScriptDetector#detectCombined} to
+     * classify its script without running code generation. {@link ScriptDetector} ignores ASCII
+     * punctuation and wildcard characters, so raw text is safe input.
      */
     private static String collectText(Ast ast) {
         return switch (ast) {

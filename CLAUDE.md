@@ -382,6 +382,22 @@ source character is an ASCII word character** (`[A-Za-z0-9_]`):
   used) and once combination-safe (the fallback leaves, and `resolvedPatterns`
   when they're used — keeping the leaf byte-identity guarantee).
 
+**The adaptive gap-width trial compile must not use UCP for a `\b` pattern** — confirmed-fixed regression.
+`MultiLanguagePatternBuilder.compilesUnderHyperscan` trial-compiles candidate gap widths (only once a
+distance exceeds the static cap: word gap > 29, char gap > 30). It used to always trial under `UTF8+UCP`;
+a whole-word ASCII pattern contains `\b`, which Hyperscan rejects under UCP, so EVERY width "failed", the gap
+collapsed to `{0,0}` (an invalid repeat) and `NEAR{30}`..`NEAR{50}` silently fell back to decomposition. A pattern
+containing `\b` is now trialled under the non-UCP flag set it will really compile with
+(`TRIAL_COMPILE_FLAGS_ASCII`). Covered by `WholeWordMatchingTest.longProximityDistance_staysOneWholeWordPattern`.
+
+**A term containing U+FFFD is rejected** (`TermSyntaxTranslator.translate`): the replacement character means the
+term was mis-encoded before it arrived, and it would otherwise compile to a PASS pattern that can never match.
+
+**Behaviours worth knowing (documented in README "Known limitations")**: translation warnings are logged, never
+returned (`LexiconCompileService#compileTerm`); `/compile` and `/compile/csv` ignore `requestType` (only
+`/compile/bundle` honours `"Regex"`); framework request-parsing failures (malformed JSON, bad `requestType`,
+wrong content type) are swallowed by `GlobalExceptionHandler`'s catch-all and surface as HTTP 500.
+
 **Cross-service impact**: `regexPattern`/`exclusionRegex`/`resolvedPatterns`
 now contain `\b`. Both downstream services compile these with their own
 Hyperscan/Java-regex, where `\b` is valid, but the Scanner Service must keep
@@ -760,7 +776,7 @@ Genuinely compiled and tested — not merely reviewed — against a hand-built
 but functionally faithful stub environment (real Hyperscan `Scanner`/
 `Database` simulation with genuine `COMBINATION`/`QUIET` evaluation, real
 JSON parsing, a real parameterized-test runner for `@ParameterizedTest`/
-`@ValueSource`). 449+ tests passing as of the `resolvedPatterns` change. The one
+`@ValueSource`). 486 tests passing (real Hyperscan, including whole-word scans). The one
 file needing full Spring Test infrastructure
 (`LexiconCompileControllerTest`, `MockMvc`) is out of this stub
 environment's scope — reviewed by hand, not compiled, consistent with the

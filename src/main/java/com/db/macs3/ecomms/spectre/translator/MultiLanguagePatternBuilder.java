@@ -13,156 +13,96 @@ import java.util.EnumSet;
 import java.util.function.IntFunction;
 
 /**
- * Builds NEAR and FOLLOWEDBY Hyperscan PCRE patterns with full multi-language support.
+ * Builds gap-embedded NEAR and FOLLOWEDBY patterns whose gap is chosen by the operands' script.
  *
- * <p><b>Narrowed to one residual caller as of the {@code resolvedPatterns}
- * change — no longer the general NEAR/FOLLOWEDBY path</b>
- * <p>NEAR/FOLLOWEDBY structure now unconditionally splits into independent
- * leaf patterns via {@link PatternDecomposer}, with the gap conveyed as
- * literal {@code NEAR{n}}/{@code FOLLOWEDBY{n}} keyword text in
- * {@code resolvedPatterns} instead of being compiled into a regex fragment
- * — see that class's Javadoc "the one exception". This builder's
- * {@link #buildNear}/{@link #buildFollowedBy} (and therefore the static
- * clamp and adaptive real-Hyperscan retry below) are reachable from exactly
- * ONE remaining path: {@link PatternCodeGenerator#generateNear}/
- * {@link PatternCodeGenerator#generateFollowedBy}, called only when a
- * NEAR/FOLLOWEDBY node is nested inside a multi-operand {@code OR} — a case
- * confirmed to be real, currently-used functionality that cannot be
- * losslessly flattened into a flat leaf list, so it deliberately keeps
- * compiling as a single gap-embedded pattern exactly as before. Both the
- * static clamp and the adaptive retry stay live specifically because this
- * residual path can still, in principle, produce a gap Hyperscan rejects as
- * "too large" — removing either here would silently reintroduce that bug
- * for this narrower case. Do not "finish disconnecting" this class without
- * first re-reading {@code PatternDecomposer}'s Javadoc on why OR-nested
- * proximity is excluded from unconditional splitting.
+ * <p><b>Where it is used.</b> {@link PatternCodeGenerator#generateNear}/{@code generateFollowedBy}
+ * call it in two situations: (1) {@code TermSyntaxTranslator#resolveSide} generating the single
+ * self-contained pattern it prefers for any side with proximity; (2) a NEAR/FOLLOWEDBY nested inside
+ * a multi-operand {@code OR}, which is never decomposed and so has no fallback. The clamp and the
+ * adaptive retry below therefore matter for both.
  *
- * <p><b>Problem with the previous implementation</b>
- * <p>The old builder always used a word-token gap:
- * <pre>{@code (?:\s+\S+){0,n}\s+}</pre>
- * This requires whitespace between terms.  It works for space-delimited
- * languages (English, Arabic, Hebrew) but <em>always fails</em> for CJK
- * (Chinese / Japanese), Thai, and informal Korean where no spaces appear
- * between characters.
- *
- * <p><b>Strategy per script family</b>
+ * <p><b>Word gap or character gap.</b> "Within n words" has no single meaning across scripts.
+ * {@link ScriptDetector#detectCombined} classifies the operand pair and {@link ScriptType#isCharBased()}
+ * picks the gap:
  * <table border="1">
- *   <tr><th>Script</th><th>Gap type</th><th>Pattern</th></tr>
- *   <tr><td>Latin (English, etc.)</td><td>Word-based</td>
- *       <td>{@code (?:\\s+\\S+){0,n}\\s+}</td></tr>
- *   <tr><td>Arabic / Hebrew (RTL)</td><td>Word-based + UCP flag</td>
- *       <td>{@code (?:\\s+\\S+){0,n}\\s+} with UTF8+UCP</td></tr>
- *   <tr><td>CJK / Kana (Chinese, Japanese)</td><td>Char-based</td>
- *       <td>{@code [\\s\\S]{0,N}} where N = n × 3</td></tr>
- *   <tr><td>Hangul (Korean)</td><td>Char-based</td>
- *       <td>{@code [\\s\\S]{0,N}} where N = n × 5</td></tr>
- *   <tr><td>Thai / Myanmar</td><td>Char-based</td>
- *       <td>{@code [\\s\\S]{0,N}} where N = n × 6</td></tr>
- *   <tr><td>Mixed CJK + any</td><td>Char-based</td>
- *       <td>{@code [\\s\\S]{0,N}} where N = n × 4</td></tr>
- *   <tr><td>Mixed RTL + Latin</td><td>Word-based</td>
- *       <td>{@code (?:\\s+\\S+){0,n}\\s+} with UTF8+UCP</td></tr>
+ *   <caption>Gap by script</caption>
+ *   <tr><th>Script(s)</th><th>Gap</th><th>Requested width</th></tr>
+ *   <tr><td>Latin (incl. Greek, Cyrillic), Arabic, Hebrew, Devanagari and other Indic, mixed RTL + Latin/Indic</td>
+ *       <td>word: {@code (?:\s+\S+){0,n}\s+}</td><td>n words, at most {@link #MAX_WORD_GAP}</td></tr>
+ *   <tr><td>CJK (Han), Kana</td><td>character: {@code [\s\S]{0,N}}</td><td>N = n × 3 + n</td></tr>
+ *   <tr><td>Hangul</td><td>character</td><td>N = n × 5 + n</td></tr>
+ *   <tr><td>Thai, Lao, Myanmar</td><td>character</td><td>N = n × 6 + n</td></tr>
+ *   <tr><td>any space-free script mixed with anything else (MIXED_CJK)</td><td>character</td><td>N = n × 4 + n</td></tr>
+ *   <tr><td>any other mixture (MIXED)</td><td>character</td><td>N = n × 6 + n</td></tr>
  * </table>
+ * The "× avgCharsPerWord + n" formula (the extra {@code n} is a buffer for punctuation, spaces and
+ * mixed characters) is what {@link #effectiveGapWidth} computes; N is then clamped to
+ * {@link #MAX_CHAR_GAP}. A character gap is used when whitespace cannot reliably separate words;
+ * {@code [\s\S]} also matches whitespace, so it is safe for Korean text with or without spaces.
+ * Any pair containing a space-free script forces a character gap even if the other operand uses spaces.
  *
- * <p>Every char-based {@code N} above is clamped to {@link #MAX_CHAR_GAP} —
- * real Hyperscan rejects {@code [\s\S]{0,N}} under this script family's
- * required UTF8+UCP flags well before the raw formula's {@code N} gets large,
- * independent of which script it is (see {@link #MAX_CHAR_GAP} Javadoc for
- * the calibration data). A clamp emits a warning rather than failing the term.
+ * <p><b>Clamping and adaptive narrowing.</b> Hyperscan rejects a bounded repeat as "Pattern is too
+ * large" once its bound gets large, independent of what is repeated, so both gaps are capped
+ * ({@link #MAX_WORD_GAP}, {@link #MAX_CHAR_GAP}). A wide OR group next to the gap can lower the
+ * safe width further, so when the static cap already applies the width is narrowed term by term by
+ * trial-compiling the real pattern against Hyperscan ({@link #charBasedGap}, {@link #wordBasedGap}).
+ * Either kind of narrowing puts a precision-loss warning on the {@link BuildResult}; it never
+ * fails the term.
  *
- * <p><b>NEAR — always bidirectional</b>
- * <p>NEAR{n} means A is within n word/char gaps of B, in either order:
- * <pre>{@code (?:A<gap>B|B<gap>A)}</pre>
+ * <p><b>NEAR</b> is bidirectional, {@code (?:A<gap>B|B<gap>A)}. <b>FOLLOWEDBY</b> is
+ * directional, {@code A<gap>B}, in logical (stored) order — which is reading order for purely
+ * Arabic or Hebrew text. FOLLOWEDBY with mixed RTL and LTR operands adds a warning, because the
+ * author's visual notion of "after" may differ from stored order.
  *
- * <p><b>FOLLOWEDBY — directional with RTL awareness</b>
- * <p>FOLLOWEDBY{n} means A appears before B in logical (stored) order:
- * <pre>{@code A<gap>B}</pre>
- * For purely RTL text (Arabic or Hebrew), the regex engine processes bytes
- * in logical order which IS the reading order, so no reversal is needed.
- * When operands mix RTL and LTR scripts, a warning is logged because the
- * "before" relationship may not match the user's visual expectation.
- *
- * <p><b>Integration with existing translator</b>
- * <p>Replace calls in {@code LexiconTermTranslator} (or equivalent) with:
- * <pre>{@code
- * // OLD — hard-coded word-only gap:
- * String gap  = "(?:\\s+\\S+){0,%d}\\s+".formatted(n);
- * String near = "(?:%s%s%s|%s%s%s)".formatted(leftOperand, gap, rightOperand, rightOperand, gap, leftOperand);
- *
- * // NEW — language-aware:
- * BuildResult result = MultiLanguagePatternBuilder.buildNear(leftOperand, rightOperand, maxDistance);
- * String near    = result.pattern();
- * int    hsFlags = result.recommendedHsFlags();
- * }</pre>
+ * <p>The pattern's script also gives {@link BuildResult#recommendedHsFlags()}: {@code CASELESS+DOTALL}
+ * for Latin, plus {@code UTF8+UCP} for every other script.
  */
 public final class MultiLanguagePatternBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(MultiLanguagePatternBuilder.class);
 
     /**
-     * Hard ceiling on a character-based gap's width ({@code N} in
-     * {@code [\s\S]{0,N}}) — empirically calibrated, not reasoned from first
-     * principles. Real Hyperscan, compiled under exactly the flags
-     * {@code HyperscanCompiler.toExpressionFlags()} produces for a non-Latin
-     * script (CASELESS + DOTALL + SOM_LEFTMOST + UTF8 + UCP — the same flags
-     * {@code TermSyntaxTranslator}'s validation step actually uses), rejects
-     * {@code [\s\S]{0,N}} with "Pattern is too large" once {@code N} reaches
-     * the low-to-mid 30s — confirmed by a bisection sweep run against the
-     * real native library (Docker, {@code linux-x86_64}) across CJK, Thai,
-     * and Hangul operands, at both a 2-character pair and a ~20-character
-     * pair, in both the bidirectional NEAR shape
-     * ({@code (?:A[\s\S]{0,N}B|B[\s\S]{0,N}A)}) and the standalone
-     * decomposed-leaf shape ({@code [\s\S]{0,N}B}):
+     * Hard ceiling on a character gap's width ({@code N} in {@code [\s\S]{0,N}}), calibrated against
+     * the real native library rather than reasoned. Under the flags a non-Latin term compiles with
+     * (CASELESS + DOTALL + SOM_LEFTMOST + UTF8 + UCP) Hyperscan rejects the gap once {@code N} reaches
+     * the low 30s. A bisection sweep over CJK, Thai and Hangul operands (a 2-character and a
+     * ~20-character pair), in both the bidirectional NEAR shape and the standalone decomposed-leaf
+     * shape, found the largest safe {@code N}:
      * <pre>
-     *   CJK-short   (内幕/交易):  safeNear=32  safeLeaf=31
-     *   CJK-long    (~20 chars):  safeNear=31  safeLeaf=31
-     *   THAI-short  (ราคา/การซื้อขาย): safeNear=31  safeLeaf=31
-     *   HANGUL-short(내부자/거래):  safeNear=31  safeLeaf=31
+     *   CJK-short    (内幕/交易):            safeNear=32  safeLeaf=31
+     *   CJK-long     (~20 chars):           safeNear=31  safeLeaf=31
+     *   THAI-short   (ราคา/การซื้อขาย):      safeNear=31  safeLeaf=31
+     *   HANGUL-short (내부자/거래):          safeNear=31  safeLeaf=31
      * </pre>
-     * The boundary is remarkably script- and shape-independent (31-32
-     * everywhere tested), consistent with a fixed internal Hyperscan limit
-     * for bounded repeats of a wide/multi-byte character class under UTF8,
-     * not something that scales with the specific script's average word
-     * length. 30 is one below the smallest measured safe value, as a margin
-     * against Hyperscan-version/input variance the sweep didn't cover.
-     * Re-tune if a future Hyperscan version or a wider sweep changes this.
+     * The boundary barely varies with script or shape, so it looks like a fixed Hyperscan limit on
+     * bounded repeats of a wide multi-byte class. 30 is one below the smallest safe value, as a margin.
+     * Re-tune if a future Hyperscan version or wider sweep changes this.
      *
-     * <p><b>Not sufficient on its own for OR-heavy operands</b> — the sweep
-     * behind this number used plain two-word operand pairs on each side of
-     * the gap. A real lexicon term's operand is very often itself an OR
-     * group ({@code ((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10}
-     * ((活动) OR (记录))}), which increases compiled automaton state count
-     * beyond what this single calibration point covers — real Hyperscan can
-     * still reject {@code [\s\S]{0,30}} sitting next to a wide alternation
-     * with "Pattern is too large" even though 30 is safe for a plain pair.
-     * {@link #charBasedGap(ScriptType, int, IntFunction)} handles this by
-     * test-compiling the ACTUAL term shape against the real Hyperscan
-     * library and adaptively reducing the width further, term by term, when
-     * even this static ceiling isn't safe for it — see that method's Javadoc.
+     * <p>The cap alone is not enough for OR-heavy operands (for example
+     * {@code ((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR (记录))}): the extra
+     * alternation raises state count, so {@link #charBasedGap(ScriptType, int, IntFunction)} narrows
+     * the width further by trial compilation.
      */
     static final int MAX_CHAR_GAP = 30;
 
     /**
-     * Flags used ONLY for the adaptive trial-compiles in
-     * {@link #compilesUnderHyperscan}, deciding whether a candidate
-     * character-gap width is safe for a SPECIFIC term's actual operand
-     * structure — never used to compile a pattern that is actually returned
-     * to a caller. Matches the flag set the {@code GapWidthCalibrationProbe}
-     * test used to calibrate {@link #MAX_CHAR_GAP} itself:
-     * {@code CASELESS + DOTALL + SOM_LEFTMOST + UTF8 + UCP} — the same set
-     * {@code HyperscanCompiler.toExpressionFlags()} produces for non-Latin
-     * content, and the flag set a simple (non-decomposed) PASS term's final
-     * expression actually compiles under. A decomposition leaf really
-     * compiles under a narrower set ({@code CASELESS + QUIET} only, no
-     * SOM_LEFTMOST/UTF8/UCP — see {@code HyperscanCompiler.toSubExpressionFlags}),
-     * so trial-testing a leaf shape under this richer set is deliberately
-     * conservative: fewer flags generally means Hyperscan tracks less
-     * per-match state, so a width that compiles here is expected to compile
-     * under the leaf's real, lighter flag set too.
+     * Flags for the adaptive trial compiles in {@link #compilesUnderHyperscan}, used only to decide
+     * whether a candidate gap width is safe — never to compile a pattern that is returned. They
+     * match {@code HyperscanCompiler.toExpressionFlags()} for non-Latin content (CASELESS + DOTALL +
+     * SOM_LEFTMOST + UTF8 + UCP), which is also what {@link #MAX_CHAR_GAP} was calibrated under. A
+     * decomposed leaf really compiles under a lighter set (CASELESS + QUIET), so testing under this
+     * one is deliberately conservative.
      */
     private static final EnumSet<ExpressionFlag> TRIAL_COMPILE_FLAGS = EnumSet.of(
             ExpressionFlag.CASELESS, ExpressionFlag.DOTALL,
             ExpressionFlag.SOM_LEFTMOST, ExpressionFlag.UTF8, ExpressionFlag.UCP);
+
+    /**
+     * The trial flags for a pattern containing {@code \b}: the same set without UTF8/UCP, which
+     * is what an ASCII whole-word term really compiles under (Hyperscan rejects {@code \b} in UCP mode).
+     */
+    private static final EnumSet<ExpressionFlag> TRIAL_COMPILE_FLAGS_ASCII = EnumSet.of(
+            ExpressionFlag.CASELESS, ExpressionFlag.DOTALL, ExpressionFlag.SOM_LEFTMOST);
 
     private MultiLanguagePatternBuilder() {
     }
@@ -170,8 +110,8 @@ public final class MultiLanguagePatternBuilder {
     // ── Result records ────────────────────────────────────────────────────
 
     /**
-     * Holds a gap sub-pattern and, when the requested width had to be
-     * clamped to {@link #MAX_CHAR_GAP}, a non-null precision-loss warning.
+     * A gap sub-pattern plus a precision-loss warning, non-null when the requested width had to
+     * be clamped or narrowed.
      */
     record GapResult(String pattern, String warning) {
         boolean hasWarning() {
@@ -180,13 +120,13 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Holds the generated PCRE pattern and the recommended Hyperscan flags.
+     * A generated pattern with the script it was built for.
      *
      * @param pattern            the Hyperscan-compatible PCRE pattern
-     * @param scriptType         detected script combination
+     * @param scriptType         the detected script combination of the two operands
      * @param recommendedHsFlags flag bitmask (1=CASELESS, 2=DOTALL, 32=UTF8, 64=UCP)
-     * @param warning            non-null when there is a known limitation to report
-     *                           (e.g. mixed RTL+LTR FOLLOWEDBY)
+     * @param warning            non-null for a known limitation (mixed RTL+LTR FOLLOWEDBY, or a
+     *                           clamped/narrowed gap)
      */
     public record BuildResult(
             String pattern,
@@ -211,16 +151,16 @@ public final class MultiLanguagePatternBuilder {
     // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * Builds a bidirectional NEAR pattern.
+     * Builds a bidirectional NEAR pattern: {@code leftOperand} within n words/characters of
+     * {@code rightOperand}, in either order — {@code (?:A<gap>B|B<gap>A)}.
      *
-     * <p>NEAR{n} matches when {@code leftOperand} appears within n words/characters
-     * of {@code rightOperand} in either order — i.e.:
-     * {@code leftOperand…rightOperand} OR {@code rightOperand…leftOperand}.
+     * <p>The trial shape passed to the gap builder is this same bidirectional pattern with the term's
+     * actual (possibly OR-expanded) operand text, so any adaptive narrowing reflects this term's real
+     * automaton cost.
      *
      * @param leftOperand  first operand (already escaped for Hyperscan PCRE)
      * @param rightOperand second operand
-     * @param maxDistance  maximum distance in "word gaps" (or character multiples for CJK)
-     * @return {@link BuildResult} containing the pattern and recommended flags
+     * @param maxDistance  the author's distance n, in word gaps
      */
     public static BuildResult buildNear(String leftOperand, String rightOperand, int maxDistance) {
         ScriptType script = ScriptDetector.detectCombined(leftOperand, rightOperand);
@@ -248,22 +188,16 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Builds a directional FOLLOWEDBY pattern.
+     * Builds a directional FOLLOWEDBY pattern: {@code leftOperand} before {@code rightOperand} in
+     * logical (stored) order, at most n words/characters apart — {@code A<gap>B}.
      *
-     * <p>FOLLOWEDBY{n} matches when {@code leftOperand} appears before {@code rightOperand}
-     * in logical (stored) order, with at most n word gaps between them.
+     * <p>For purely Arabic or Hebrew operands logical order equals reading order, so nothing special
+     * is needed. For mixed RTL + LTR operands the result carries a warning, because the author's
+     * visual notion of "after" may not match stored order.
      *
-     * <p><b>RTL note</b>
-     * <p>For <em>purely</em> Arabic or Hebrew terms, logical order equals
-     * reading order — no special handling is needed.
-     * For <em>mixed</em> RTL + LTR terms, a warning is included in the
-     * result because the user's visual intent (e.g. Arabic word "comes after"
-     * an English word) may not align with logical-order matching.
-     *
-     * @param leftOperand  first operand (expected to appear first in text)
-     * @param rightOperand second operand (expected to follow leftOperand)
-     * @param maxDistance  maximum gap distance
-     * @return {@link BuildResult} containing the pattern and recommended flags
+     * @param leftOperand  first operand (expected to appear first)
+     * @param rightOperand second operand (expected to follow)
+     * @param maxDistance  the author's distance n, in word gaps
      */
     public static BuildResult buildFollowedBy(String leftOperand, String rightOperand, int maxDistance) {
         ScriptType script = ScriptDetector.detectCombined(leftOperand, rightOperand);
@@ -336,26 +270,11 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Builds the gap sub-pattern that sits between the two term operands.
-     *
-     * <p>Dispatches to either a word-based or character-based gap based on
-     * the detected {@link ScriptType}. {@code trialPatternForWidth}, when
-     * non-null, is forwarded to
-     * {@link #charBasedGap(ScriptType, int, IntFunction)} or
-     * {@link #wordBasedGap(int, IntFunction)} respectively for adaptive
-     * reduction against real Hyperscan — see those methods' Javadoc.
-     *
-     * <p><b>Word-based gaps need this too — confirmed, not assumed</b> — an
-     * earlier revision of this Javadoc claimed the word-token gap
-     * ({@code (?:\s+\S+){0,n}\s+}) never needs adaptive reduction, reasoning
-     * that it doesn't carry the char-based gap's wide/multi-byte
-     * character-class cost. That reasoning didn't hold up: real Hyperscan
-     * testing (raising {@code Tokenizer.MAX_PROXIMITY_DISTANCE} from 9 to
-     * 50 surfaced this directly) rejects a plain {@code (a) NEAR{49} (b)}
-     * with "Pattern is too large" — the SAME bounded-repeat state-count
-     * limit that drives {@link #MAX_CHAR_GAP} turns out to apply to
-     * {@code {0,n}} repeats generally, independent of what's inside the
-     * repeated group.
+     * Builds the gap between two operands, dispatching on {@link ScriptType#isCharBased()} to
+     * {@link #charBasedGap(ScriptType, int, IntFunction)} or {@link #wordBasedGap(int, IntFunction)}.
+     * A non-null {@code trialPatternForWidth} enables adaptive narrowing against real Hyperscan for
+     * both kinds of gap: the word gap needs it too, because the bounded-repeat state limit applies to
+     * any {@code {0,n}} whatever it repeats (a plain {@code (a) NEAR{49} (b)} is already rejected).
      */
     static GapResult buildGap(ScriptType script, int maxDistance, IntFunction<String> trialPatternForWidth) {
         if (script.isCharBased()) {
@@ -365,20 +284,14 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Word-based gap for space-delimited languages (Latin, Arabic, Hebrew).
-     *
-     * <p>Pattern: {@code (?:\\s+\\S+){0,n}\\s+}
+     * The unclamped word gap for space-delimited scripts: {@code (?:\s+\S+){0,n}\s+}.
      * <ul>
-     *   <li>{@code \\s+} — one or more Unicode whitespace characters</li>
-     *   <li>{@code \\S+} — one or more Unicode non-whitespace characters
-     *       (= one word; with UCP flag this matches Arabic/Hebrew words too)</li>
+     *   <li>{@code \s+\S+} — whitespace then one word (a non-whitespace run); with UCP, {@code \S}
+     *       also covers Arabic, Hebrew and other non-ASCII letters</li>
      *   <li>{@code {0,n}} — up to n intervening words</li>
-     *   <li>Final {@code \\s+} — whitespace before the second term</li>
+     *   <li>the final {@code \s+} — whitespace before the second operand, so the gap always needs at
+     *       least one whitespace character (two fragments inside one word can never match)</li>
      * </ul>
-     *
-     * <p><b>Why \\S+ works for Arabic/Hebrew:</b> with the {@code HS_FLAG_UCP}
-     * flag, {@code \\S} matches any Unicode non-whitespace code point, including
-     * Arabic (U+0600–U+06FF) and Hebrew (U+0590–U+05FF) characters.
      *
      * @param maxDistance maximum number of intervening words
      */
@@ -387,51 +300,25 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Ceiling on the word-based gap's own {@code {0,n}} bound — calibrated
-     * the same way as {@link #MAX_CHAR_GAP}, by bisection sweep against the
-     * real native Hyperscan library under {@code CASELESS + DOTALL +
-     * SOM_LEFTMOST}, for {@code (?:\s+\S+){0,N}\s+} in both the
-     * bidirectional NEAR shape ({@code (?:a<gap>b|b<gap>a)}) and the
-     * standalone decomposed-leaf shape ({@code <gap>b}):
-     * <pre>
-     *   NEAR-bidirectional: safeMaxN=30
-     *   decomposed-leaf:    safeMaxN=30
-     * </pre>
-     * Confirms the SAME internal Hyperscan bounded-repeat state-count limit
-     * that drives {@link #MAX_CHAR_GAP} (measured 31-32 there) applies here
-     * too, independent of what the repeated group actually contains — this
-     * is a property of {@code {0,N}} itself, not of the character-class
-     * width. 29 is one below the smallest measured safe value (30), as the
-     * same margin {@link #MAX_CHAR_GAP} takes against Hyperscan-version/input
-     * variance the sweep didn't cover.
+     * Ceiling on the word gap's {@code {0,n}} bound, calibrated like {@link #MAX_CHAR_GAP} by a
+     * bisection sweep under CASELESS + DOTALL + SOM_LEFTMOST, for both the bidirectional NEAR shape
+     * and the standalone leaf shape: the largest safe {@code n} was 30 in both. That is the same
+     * internal bounded-repeat limit that governs the character gap, so it is a property of
+     * {@code {0,N}} itself, not of the repeated class. 29 is one below the smallest safe value.
      */
     static final int MAX_WORD_GAP = 29;
 
     /**
-     * Word-based gap, adaptively narrowed beyond the static
-     * {@link #MAX_WORD_GAP} clamp when even that clamp still produces
-     * "Pattern is too large" for THIS term's actual operand structure —
-     * the word-based equivalent of
-     * {@link #charBasedGap(ScriptType, int, IntFunction)}; see that
-     * method's Javadoc for the full mechanism (this one is identical,
-     * just narrowing a word-count bound instead of a character-count one).
+     * Word gap clamped to {@link #MAX_WORD_GAP} and, when a trial shape is supplied, narrowed further
+     * by trial compilation — the word-count equivalent of
+     * {@link #charBasedGap(ScriptType, int, IntFunction)}, whose Javadoc describes the mechanism.
      *
-     * <p>{@code trialPatternForWidth == null} skips adaptive reduction
-     * entirely but still applies the static {@link #MAX_WORD_GAP} clamp —
-     * equivalent to what {@link #wordBasedGap(int)} would produce if it were
-     * itself clamped. This is what {@link #buildGap(ScriptType, int)} (the
-     * no-trial 2-arg overload, used by callers with no real pattern to
-     * trial-compile) resolves to for a word-based script.
+     * <p>The trial compile only runs once {@code maxDistance} exceeds {@link #MAX_WORD_GAP}; an
+     * ordinary small distance never pays for a Hyperscan compile. With a {@code null} trial only the
+     * static clamp applies.
      *
-     * <p>Same performance guard as {@link #charBasedGap(ScriptType, int, IntFunction)}:
-     * only triggered once {@code maxDistance} already exceeds
-     * {@link #MAX_WORD_GAP} — an ordinary, comfortably-small-distance term
-     * (the overwhelming majority) never pays for a Hyperscan trial compile.
-     *
-     * @param maxDistance          maximum "word" distance specified by the lexicon term author
-     * @param trialPatternForWidth given a candidate word-count width, builds the full
-     *                             real pattern that width would produce for this term —
-     *                             or {@code null} to skip adaptive reduction
+     * @param maxDistance          the author's distance n, in words
+     * @param trialPatternForWidth builds the full real pattern for a candidate width, or {@code null}
      */
     static GapResult wordBasedGap(int maxDistance, IntFunction<String> trialPatternForWidth) {
         int staticWidth = Math.min(maxDistance, MAX_WORD_GAP);
@@ -453,9 +340,9 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Builds the precision-loss warning for {@link #wordBasedGap(int, IntFunction)} —
-     * same three-case structure as {@link #charGapWarning}, in terms of words
-     * instead of characters.
+     * The precision-loss warning for {@link #wordBasedGap(int, IntFunction)}: {@code null} when
+     * nothing was clamped, otherwise one of two messages — clamped to the static maximum only, or
+     * narrowed further by trial compilation. Same structure as {@link #charGapWarning}.
      */
     private static String wordGapWarning(int maxDistance, int staticWidth, int finalWidth, boolean confirmedSafe) {
         if (finalWidth >= maxDistance) {
@@ -488,99 +375,37 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Character-based gap for space-free languages (CJK, Thai, Korean).
-     *
-     * <p>Pattern: {@code [\\s\\S]{0,N}} where {@code N = n × avgCharsPerWord}.
-     *
-     * <ul>
-     *   <li>{@code [\\s\\S]} — any character (whitespace or not); handles
-     *       both the space-free case (CJK) and the spaced case (formal Korean)</li>
-     *   <li>{@code {0,N}} — bounded window; N is the character-count ceiling</li>
-     * </ul>
-     *
-     * <p>The ceiling {@code N} is intentionally generous to account for
-     * mixed-width content (kanji interspersed with kana or Latin), punctuation,
-     * and furigana.  The trade-off is slightly more false positives vs.
-     * fewer false negatives — acceptable for a surveillance alerting system.
-     *
-     * <p><b>Clamped to {@link #MAX_CHAR_GAP}</b> — the raw formula below can
-     * produce a width real Hyperscan refuses to compile ("Pattern is too
-     * large") well before any structural complexity budget would ever flag
-     * the term, since a simple two-word NEAR/FOLLOWEDBY has no nesting for
-     * {@code PatternComplexityAnalyzer} to penalize. When the raw width
-     * exceeds {@link #MAX_CHAR_GAP}, the returned {@link GapResult} carries a
-     * non-null warning describing the precision loss instead of silently
-     * narrowing the match window.
-     *
-     * <p>No adaptive reduction beyond the static clamp — equivalent to
-     * {@code charBasedGap(script, maxDistance, null)}. Existing callers with
-     * no operand context (e.g. {@link PatternComplexityAnalyzer}'s
-     * pre-codegen cost estimate, which only has raw un-codegen'd lexicon
-     * text to work with, not a real trial-compilable pattern) keep this
-     * cheap, Hyperscan-free behaviour. See
-     * {@link #charBasedGap(ScriptType, int, IntFunction)} for the adaptive
-     * version {@link #buildNear} and {@link #buildFollowedBy} actually use.
-     *
-     * @param script      the resolved script type (provides avgCharsPerWord)
-     * @param maxDistance maximum "word" distance specified by the lexicon term author
+     * Character gap without adaptive narrowing — {@code charBasedGap(script, maxDistance, null)}.
+     * For callers with no operand pattern to trial-compile.
      */
     static GapResult charBasedGap(ScriptType script, int maxDistance) {
         return charBasedGap(script, maxDistance, null);
     }
 
     /**
-     * Character-based gap, adaptively narrowed beyond the static
-     * {@link #MAX_CHAR_GAP} clamp when even that clamp still produces
-     * "Pattern is too large" for THIS term's actual operand structure.
+     * Character gap {@code [\s\S]{0,N}} for space-free scripts, where the raw width is
+     * {@code N = n × avgCharsPerWord + n} (see the class Javadoc), clamped to {@link #MAX_CHAR_GAP}
+     * and, when a trial shape is supplied, narrowed further for this term.
      *
-     * <p><b>Why the static clamp alone isn't enough</b> — {@link #MAX_CHAR_GAP}
-     * was calibrated against plain two-word operand pairs (see its Javadoc).
-     * A real lexicon term's operand is very often a wide OR group instead
-     * — {@code ((内幕) OR (正常) OR (的) OR (商业)) FOLLOWEDBY{10} ((活动) OR
-     * (记录))} — and the extra alternation increases compiled automaton
-     * state count beyond what the calibration point covers, so {@code
-     * [\s\S]{0,30}} sitting next to a wide alternation can still be
-     * rejected by real Hyperscan even though 30 is safe for a plain pair.
+     * <p>{@code [\s\S]} matches any character including whitespace. The window is deliberately
+     * generous (kanji among kana or Latin, punctuation, furigana): slightly more false positives in
+     * exchange for fewer false negatives, which suits alerting.
      *
-     * <p><b>What this does about it</b> — starting from the same
-     * statically-clamped width {@link #charBasedGap(ScriptType, int)} would
-     * use, this test-compiles {@code trialPatternForWidth.apply(width)} —
-     * the REAL candidate pattern for this term, shape and all (bidirectional
-     * NEAR, directional FOLLOWEDBY, or a decomposed leaf's gap-prefix — see
-     * {@link #buildNear}, {@link #buildFollowedBy}, and {@code
-     * PatternDecomposer} for the three trial shapes actually supplied) —
-     * against the real Hyperscan native library (under
-     * {@link #TRIAL_COMPILE_FLAGS}). If it fails to compile, the width is
-     * decremented and retried, continuing down to a floor of 0, until a
-     * width is found that compiles or 0 itself is reached. This keeps this
-     * class's own design principle intact one step earlier than usual: by
-     * the time the gap this method returns is baked into the term's final
-     * pattern, real Hyperscan has already validated the shape it appears
-     * in, at this exact width — not just guessed to be safe from a generic
-     * calibration point.
+     * <p><b>Adaptive narrowing.</b> The static cap was calibrated on plain two-word operand pairs. A
+     * wide OR group next to the gap can push state count over Hyperscan's limit even at 30. Starting
+     * from the static width, this test-compiles {@code trialPatternForWidth.apply(width)} — the real
+     * candidate pattern (bidirectional NEAR or directional FOLLOWEDBY, as supplied by
+     * {@link #buildNear}/{@link #buildFollowedBy}) — under {@link #TRIAL_COMPILE_FLAGS}, and
+     * decrements the width until it compiles or reaches 0. So the gap that ends up in the term's
+     * pattern has already been accepted by real Hyperscan in the shape it appears in.
      *
-     * <p>{@code trialPatternForWidth == null} skips this entirely and
-     * behaves exactly like {@link #charBasedGap(ScriptType, int)} — for
-     * callers with no real operand pattern to trial-compile.
+     * <p>The trial only runs when the static clamp actually applies (raw width above
+     * {@link #MAX_CHAR_GAP}), because a Hyperscan compile costs tens of milliseconds and ordinary
+     * small distances never need it. With a {@code null} trial only the static clamp applies.
      *
-     * <p><b>Only triggered once the static clamp itself would already
-     * apply</b> — when the raw formula width is already {@code <=}
-     * {@link #MAX_CHAR_GAP}, this returns immediately with no Hyperscan
-     * call at all, exactly like the non-adaptive overload. Real Hyperscan
-     * compilation is comparatively expensive (tens of milliseconds), and
-     * every ordinary, comfortably-small-distance term would otherwise pay
-     * for a trial compile it essentially never needs — this keeps that
-     * common case exactly as cheap as before. Only a term whose raw width
-     * ALREADY exceeds the calibrated ceiling (the same regime
-     * {@link #MAX_CHAR_GAP} itself was introduced for) pays for the extra
-     * trial-compile(s), which is also exactly the regime where a term is
-     * actually at risk of "Pattern is too large".
-     *
-     * @param script                the resolved script type (provides avgCharsPerWord)
-     * @param maxDistance           maximum "word" distance specified by the lexicon term author
-     * @param trialPatternForWidth  given a candidate character width, builds the full
-     *                              real pattern that width would produce for this term —
-     *                              or {@code null} to skip adaptive reduction
+     * @param script               resolved script (provides avgCharsPerWord)
+     * @param maxDistance          the author's distance n, in words
+     * @param trialPatternForWidth builds the full real pattern for a candidate width, or {@code null}
      */
     static GapResult charBasedGap(ScriptType script, int maxDistance, IntFunction<String> trialPatternForWidth) {
         // rawChars = maxDistance words × average chars per word, plus a small
@@ -605,20 +430,19 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Attempts to compile {@code pattern} under {@link #TRIAL_COMPILE_FLAGS}
-     * against the real Hyperscan native library, purely to decide whether a
-     * candidate gap width is safe — see
-     * {@link #charBasedGap(ScriptType, int, IntFunction)}. Returns
-     * {@code true} on any compile-unrelated failure (e.g. the native
-     * library itself being unavailable) rather than blocking pattern
-     * generation on an environment problem this method has no way to fix —
-     * the REAL, authoritative compile check still happens later in
-     * {@code HyperscanCompiler.validate()}, per this class's own design
-     * principle that only the real Hyperscan compiler has final say.
+     * Trial-compiles {@code pattern} under {@link #TRIAL_COMPILE_FLAGS}, to decide whether a
+     * candidate gap width is safe. Returns {@code true} when the compile fails for a reason unrelated
+     * to the pattern (for example the native library being unavailable): pattern generation must not
+     * be blocked by an environment problem, and {@code HyperscanCompiler.validate()} remains the
+     * authoritative check.
      */
     private static boolean compilesUnderHyperscan(String pattern) {
+        // A pattern with a \b belongs to a whole-word (ASCII-only) term, which really compiles
+        // without UTF8/UCP — and Hyperscan rejects \b under UCP, so trialling it under the
+        // non-Latin flags would fail every width and collapse the gap to nothing.
+        EnumSet<ExpressionFlag> flags = pattern.contains("\\b") ? TRIAL_COMPILE_FLAGS_ASCII : TRIAL_COMPILE_FLAGS;
         try {
-            Expression expression = new Expression(pattern, TRIAL_COMPILE_FLAGS);
+            Expression expression = new Expression(pattern, flags);
             try (Database db = Database.compile(expression)) {
                 return true;
             }
@@ -632,11 +456,9 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * Builds the precision-loss warning for {@link #charBasedGap}, covering
-     * three cases: no clamp needed at all ({@code null}); clamped to the
-     * static {@link #MAX_CHAR_GAP} ceiling but no further reduction needed;
-     * and adaptively reduced further still, because even that ceiling
-     * failed to compile for this term's real operand structure.
+     * The precision-loss warning for {@link #charBasedGap}: {@code null} when nothing was clamped;
+     * otherwise either "clamped to the static {@link #MAX_CHAR_GAP}" or "narrowed further because
+     * even that failed to compile for this term's operand structure".
      */
     private static String charGapWarning(ScriptType script, int maxDistance, int rawChars,
                                           int staticWidth, int finalWidth, boolean confirmedSafe) {
@@ -671,14 +493,12 @@ public final class MultiLanguagePatternBuilder {
     }
 
     /**
-     * The clamped character-gap width {@link #charBasedGap} will actually
-     * use for {@code script}/{@code maxDistance} — the single source of
-     * truth for this calculation, shared with {@link PatternComplexityAnalyzer}
-     * so its cost estimate matches the pattern that will really be generated.
+     * The character-gap width {@link #charBasedGap} uses for {@code script}/{@code maxDistance}
+     * before any adaptive narrowing — the single source of truth, shared with
+     * {@link PatternComplexityAnalyzer} so its cost estimate matches the generated pattern.
      *
-     * @return {@code 0} for a word-based script (no character-width concept
-     * applies); otherwise {@code min(maxDistance * avgCharsPerWord +
-     * maxDistance, MAX_CHAR_GAP)}
+     * @return {@code 0} for a word-based script; otherwise
+     *         {@code min(maxDistance × avgCharsPerWord + maxDistance, MAX_CHAR_GAP)}
      */
     static int effectiveGapWidth(ScriptType script, int maxDistance) {
         if (!script.isCharBased()) {

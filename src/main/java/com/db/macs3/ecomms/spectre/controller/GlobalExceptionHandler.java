@@ -17,10 +17,16 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Converts exceptions to structured JSON error responses.
- *
- * <p>All errors include: {@code status}, {@code error}, optional {@code details},
- * and {@code timestamp}.
+ * Converts exceptions into JSON error bodies: {@code status}, {@code error}, optional {@code details},
+ * {@code timestamp}.
+ * <ul>
+ *   <li>Bean-validation failure → 400, {@code details} listing {@code "field: message"} entries;</li>
+ *   <li>oversized upload → 413;</li>
+ *   <li>an invalid {@code termId} set on {@code /compile/bundle} → 400;</li>
+ *   <li>anything else → 500 {@code "Internal server error"}. This catch-all also receives the framework's
+ *       own request-parsing failures — malformed JSON, an unsupported content type, an unknown
+ *       {@code requestType} value — so those currently surface as 500 rather than 400/415.</li>
+ * </ul>
  */
 @RestControllerAdvice
 class GlobalExceptionHandler {

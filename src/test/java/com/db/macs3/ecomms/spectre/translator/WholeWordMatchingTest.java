@@ -120,6 +120,19 @@ class WholeWordMatchingTest {
     }
 
     @Test
+    @DisplayName("a proximity distance above the word-gap cap still compiles to ONE whole-word pattern: "
+            + "the adaptive trial compile must not use UCP, which rejects \\b and would collapse the gap to {0,0}")
+    void longProximityDistance_staysOneWholeWordPattern() throws Exception {
+        for (String term : new String[]{"a NEAR{50} b", "a NEAR{30} b", "(alpha) FOLLOWEDBY{50} (beta)"}) {
+            var s = translateOk(term);
+            assertThat(s.hsPatterns()).as(term).hasSize(1);
+            assertThat(s.hsPatterns().getFirst()).as(term).contains("\\b").doesNotContain("{0,0}");
+        }
+        assertThat(matches("alpha NEAR{40} beta", "alpha " + "x ".repeat(10) + "beta")).isTrue();
+        assertThat(matches("alpha NEAR{40} beta", "alphabet " + "x ".repeat(10) + "beta")).isFalse();
+    }
+
+    @Test
     @DisplayName("CJK and Hebrew terms compile with no \\b, so they can actually hit non-Latin text")
     void nonLatinTerms_haveNoBoundaryAndHit() throws Exception {
         assertThat(translateOk("股票").hsPatterns()).containsExactly("股票");

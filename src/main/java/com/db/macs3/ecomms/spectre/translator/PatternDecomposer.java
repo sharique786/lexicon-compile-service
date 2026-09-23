@@ -6,90 +6,44 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Splits a {@code NEAR}/{@code FOLLOWEDBY} tree into independent leaf
- * sub-patterns, and — in the same pass — builds a literal-keyword
- * "resolved" text representation of the same tree (see
- * {@link TermCompilationResult#resolvedPatterns()}).
+ * Splits a NEAR/FOLLOWEDBY tree into independent, gap-less leaf patterns and, in the same
+ * pass, renders the same tree as literal-keyword text ({@link Result#resolvedText()}).
  *
- * <p><b>{@link #decompose} itself still runs unconditionally for every term
- * containing proximity structure — but its LEAVES are no longer always what
- * ends up in {@code regexPattern}.</b> This class's own job hasn't changed:
- * every NEAR/FOLLOWEDBY node (with one narrow, deliberate exception — see
- * below) always splits into independent, gap-less leaves here, in the same
- * unified pass that builds {@link Result#resolvedText()} — the gap is NEVER
- * compiled into a regex fragment by THIS class, not even as a leaf prefix
- * (an earlier revision baked each node's own gap fragment as a literal
- * prefix onto the following leaf, as a "safe strengthening" over an even
- * earlier revision that discarded the gap entirely — both are gone, by
- * design). What changed is the CALLER: {@code TermSyntaxTranslator#resolveSide}
- * now decides, per side, whether to actually USE these leaves for
- * {@code regexPattern}, or to re-generate the side as ONE self-contained
- * gap-embedded pattern instead (preferred whenever it's safe to compile —
- * see that method's Javadoc for the full two-layer decision). Either way,
- * {@link Result#resolvedText()} is unconditionally what
- * {@code resolvedPatterns} reports, using the term author's raw, un-clamped,
- * un-multiplied distance rendered as literal operator text — {@code
- * " NEAR{n} "} / {@code " FOLLOWEDBY{n} "}. A downstream Java-regex-based
- * consumer (Lexicon Scan Engine / Lexicon Scanner Service) reconstructs the
- * actual proximity/AND-NOT relationship from this text WHENEVER a side
- * actually fell back to decomposed leaves (when it didn't — the common,
- * simple case — Hyperscan itself already enforced the relationship natively,
- * and this text is there for a caller who wants to read it directly anyway)
- * — see {@code TermCompilationResult.resolvedPatterns} class Javadoc for the
- * full contract, and {@code src/test/java/.../TokenProximityMatcher.java}-family
- * classes in this repo's test tree for a reference implementation of that
- * downstream logic (this repo does not consume {@code resolvedPatterns}
- * itself — it only produces it).
+ * <p><b>Role in the pipeline.</b> {@link #decompose} runs for every side of every term.
+ * {@code TermSyntaxTranslator#resolveSide} then decides whether {@code regexPattern} uses
+ * these leaves (the FALLBACK, for a side too large to compile as one pattern) or one
+ * self-contained gap-embedded pattern (preferred whenever Hyperscan accepts it).
+ * {@link Result#resolvedText()} is what {@code resolvedPatterns} reports either way.
  *
- * <p><b>Nesting one proximity operator inside another's RIGHT operand is
- * preserved with explicit parentheses — confirmed-fixed regression</b>
- * <p>{@code "(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)"}
- * — a NEAR whose right operand is itself a NEAR — previously rendered
- * {@code resolvedPatterns} as the fully flat
- * {@code "(?:manipulate|front run) NEAR{5} (?:price|spread) NEAR{5} stock"},
- * indistinguishable from the LEFT-nested chain a naive left-to-right reading
- * would reconstruct from that same flat text — silently losing which pair the
- * author actually grouped together, even though {@code regexPattern} itself
- * was already fully correct. Fixed: {@code resolvedPatterns} is now
- * {@code "(?:manipulate|front run) NEAR{5} ((?:price|spread) NEAR{5} stock)"}
- * and the corresponding {@code patternMapping} is {@code "(54&(55&56))"}
- * (not the flat {@code "(54&55&56)"}) — see {@link #decomposeProximity} for
- * exactly which side gets wrapped and why.
+ * <p><b>Leaves carry no gap.</b> The NEAR/FOLLOWEDBY distance and order are never compiled
+ * into a leaf. They exist only in {@code resolvedText}, rendered as literal
+ * {@code " NEAR{n} "} / {@code " FOLLOWEDBY{n} "} using the author's raw distance.
+ * Leaves are combined with boolean AND, so a consumer of a decomposed term must read
+ * {@code resolvedPatterns} to enforce the proximity between leaves (see
+ * {@link com.db.macs3.ecomms.spectre.model.TermCompilationResult#resolvedPatterns()}; the test tree's {@code ResolvedPatternMatcher}
+ * is a reference implementation of that consumer logic).
  *
- * <p><b>The one exception: NEAR/FOLLOWEDBY nested inside {@code OR}</b>
- * <p>A NEAR/FOLLOWEDBY node that is one alternative of a multi-operand
- * {@code Ast.Or} — e.g. {@code "(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"}
- * — genuinely cannot be flattened into a flat, boolean-AND'd leaf list
- * without changing what the surrounding {@code OR} means. This case is
- * confirmed real, currently-used functionality (not a hypothetical edge
- * case), so it is deliberately left alone: a multi-operand {@code Or} is
- * still treated as ONE opaque leaf, generated via
- * {@link PatternCodeGenerator#generate}, exactly as before — which means
- * {@code PatternCodeGenerator.generateNear}/{@code generateFollowedBy} (and
- * therefore {@code MultiLanguagePatternBuilder}'s gap-building, including
- * its static clamp and adaptive real-Hyperscan retry) are still reachable,
- * but ONLY via this one residual path. Do not "finish the job" by also
- * flattening through {@code Or} without first designing how a
- * consumer-facing OR-of-AND-groups formula would work — that is a
- * materially larger change than this one (it would require
- * {@code regexPattern} to become a nested structure, not a flat list — see
- * {@code HyperscanCombinationHandler}, whose id-allocation scheme assumes
- * a flat AND-only leaf list).
+ * <p><b>Right-side nesting keeps its grouping.</b> When the RIGHT operand of a proximity
+ * node is itself a proximity node, its rendering is wrapped in one extra pair of
+ * parentheses: {@code "(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)"}
+ * renders as {@code "(?:manipulate|front run) NEAR{5} ((?:price|spread) NEAR{5} stock)"}
+ * with {@code formulaTemplate} {@code "{0}&({1}&{2})"}. The LEFT side is never wrapped: a flat
+ * left-to-right rendering already means left-associative nesting, which is also what an
+ * unparenthesised chain parses to. See {@link #decomposeProximity}.
  *
- * <p><b>{@code AND} is flattened, not left opaque, when it contains nested
- * proximity — and this is lossless</b>
- * <p>Unlike {@code OR}, {@code Ast.And}'s own semantics ("all operands
- * co-occur anywhere in the message, in any order, unbounded distance") is
- * ALREADY exactly equivalent to "these operands' leaves are all
- * independently present somewhere" — the same flat-AND convention every
- * other multi-leaf case in this codebase already uses. So when an
- * {@code And} operand is (or contains) a NEAR/FOLLOWEDBY node, decomposing
- * through the {@code And} loses nothing beyond what decomposing the nested
- * NEAR/FOLLOWEDBY itself already trades away — seee {@link #containsProximity}.
- * A plain {@code And} with NO nested proximity anywhere is left completely
- * untouched (one opaque leaf, via {@code PatternCodeGenerator.generateAnd}'s
- * existing permutation-based single pattern) — this is what keeps ordinary
- * {@code AND} terms fully unaffected by this whole feature.
+ * <p><b>NEAR/FOLLOWEDBY inside {@code OR} is not decomposed.</b> A multi-operand
+ * {@code Ast.Or} is one opaque leaf generated by {@link PatternCodeGenerator#generate},
+ * because flattening an OR alternative into AND'd leaves would change what the OR means
+ * (it would need {@code regexPattern} to be a nested structure, not a flat list). Such a
+ * term, e.g. {@code "(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"}, therefore always
+ * compiles as one gap-embedded pattern through {@code generateNear}/{@code generateFollowedBy}
+ * and {@link MultiLanguagePatternBuilder}, and has no fallback.
+ *
+ * <p><b>{@code AND} with nested proximity is flattened, losslessly.</b> AND already means
+ * "every operand present somewhere, any order, any distance" — exactly "all these leaves are
+ * present". When an {@code And} contains NEAR/FOLLOWEDBY ({@link #containsProximity}) its
+ * operands are decomposed individually; an {@code And} with no nested proximity stays one
+ * opaque permutation pattern.
  */
 final class PatternDecomposer {
 
@@ -97,32 +51,21 @@ final class PatternDecomposer {
     }
 
     /**
-     * @param leaves          independent, individually Hyperscan-compilable PCRE
-     *                        fragments, in left-to-right term order — never
-     *                        containing any gap fragment
-     * @param resolvedText    the same subtree rendered with literal
-     *                        {@code NEAR{n}}/{@code FOLLOWEDBY{n}}/{@code AND}
-     *                        keyword text standing in for what would otherwise be
-     *                        a gap — see class Javadoc "right-side nesting is
-     *                        wrapped in parentheses" for exactly when this string
-     *                        gains extra grouping parens beyond a leaf's own text.
-     *                        For a leaf reached via the OR-nested-proximity
-     *                        exception, this is byte-identical to that leaf's own
-     *                        entry in {@code leaves}, since both come from the
-     *                        exact same {@link PatternCodeGenerator#generate} call.
-     * @param formulaTemplate the same subtree's boolean-AND structure, using
-     *                        {@code {i}} placeholders (0-based, indexing into
-     *                        THIS Result's own {@code leaves}) in place of each
-     *                        leaf and {@code &} in place of every keyword —
-     *                        e.g. {@code "{0}&({1}&{2})"}. Mirrors
-     *                        {@code resolvedText}'s own grouping exactly (same
-     *                        right-side-wraps-in-parens rule, same never-wrap-the-
-     *                        left rule), so {@code HyperscanCombinationHandler}
-     *                        can later substitute each placeholder with that
-     *                        leaf's allocated Hyperscan expression id to build a
-     *                        {@code patternMapping}/native-combination formula
-     *                        that reflects the term's actual authored structure
-     *                        instead of a flat AND-join of every leaf.
+     * One decomposed subtree.
+     *
+     * @param leaves          independent PCRE fragments, each individually Hyperscan-compilable,
+     *                        in left-to-right term order, containing no gap fragment
+     * @param resolvedText    the subtree rendered with literal {@code NEAR{n}} /
+     *                        {@code FOLLOWEDBY{n}} / {@code AND} keyword text (see the class
+     *                        Javadoc for when extra grouping parentheses appear). Every leaf
+     *                        appears in it byte-for-byte, in the same order as in {@code leaves}
+     * @param formulaTemplate the same subtree's boolean-AND structure with {@code {i}}
+     *                        placeholders (0-based indexes into THIS result's {@code leaves})
+     *                        and {@code &} in place of each keyword, e.g. {@code "{0}&({1}&{2})"}.
+     *                        It mirrors {@code resolvedText}'s grouping, so
+     *                        {@code HyperscanCombinationHandler} can substitute each placeholder
+     *                        with the leaf's Hyperscan expression id to build
+     *                        {@code patternMapping} and the native COMBINATION formula
      */
     record Result(List<String> leaves, String resolvedText, String formulaTemplate) {
     }
@@ -152,17 +95,12 @@ final class PatternDecomposer {
     }
 
     /**
-     * @param ast a NEAR/FOLLOWEDBY/AND tree (or any AST — a leaf root simply
-     *            returns a single-element {@code leaves} list containing
-     *            {@code ast}'s generated pattern, with {@code resolvedText}
-     *            identical to it)
-     * @param ctx shared parse context — mutated with UTF8/UCP flag needs and
-     *            warnings exactly as {@link PatternCodeGenerator#generate}
-     *            would for the equivalent non-decomposed pattern; each node
-     *            is visited exactly once by this single unified pass, so
-     *            there is no risk of duplicate flag/warning mutation between
-     *            {@code leaves} and {@code resolvedText} — they are built
-     *            together, not by two independent walks.
+     * Decomposes {@code ast}. A leaf root simply yields one leaf whose {@code resolvedText}
+     * is that leaf's own pattern.
+     *
+     * @param ctx shared parse context, mutated with UTF8/UCP needs and warnings exactly as
+     *            {@link PatternCodeGenerator#generate} would. Each node is visited once, by
+     *            this single pass, so {@code leaves} and {@code resolvedText} can never disagree
      */
     static Result decompose(Ast ast, ParseContext ctx) {
         return switch (ast) {
@@ -202,33 +140,12 @@ final class PatternDecomposer {
     }
 
     /**
-     * Decomposes both sides of one NEAR/FOLLOWEDBY node and stitches them
-     * together: {@code left}'s leaves unchanged, followed by {@code right}'s
-     * leaves — no gap fragment is baked onto either side any more (see class
-     * Javadoc). {@code resolvedText} joins the two sides' own resolved text
-     * with the literal {@code " KEYWORD{distance} "} text instead.
-     *
-     * <p><b>Right-side nesting is wrapped in parentheses; left-side nesting
-     * never is — this is what lets {@code resolvedPatterns}/{@code patternMapping}
-     * retain an explicitly-authored tree shape.</b> A flat, left-to-right
-     * rendering of a proximity chain is naturally read as LEFT-associative —
-     * that is exactly the shape {@link ExpressionParser}'s own implicit
-     * chaining loop already produces with no extra parentheses at all (see
-     * its class Javadoc "Chained NEAR/FOLLOWEDBY"), so leaving {@code left}
-     * unwrapped here costs nothing: a chain like
-     * {@code (A FOLLOWEDBY{4} B) FOLLOWEDBY{4} C} still renders as the flat
-     * {@code "A FOLLOWEDBY{4} B FOLLOWEDBY{4} C"}, unchanged from before. But
-     * when {@code right} is ITSELF a NEAR/FOLLOWEDBY node — only reachable via
-     * an author explicitly grouping it, e.g.
-     * {@code "(A) NEAR{5} ((B) NEAR{5} (C))"} — a flat rendering would be
-     * silently reinterpreted as the LEFT-nested chain on a naive left-to-right
-     * reading, losing the author's actual grouping even though no leaf/gap
-     * information was discarded. Wrapping {@code right} in one extra pair of
-     * parentheses whenever it is itself proximity-structured preserves this
-     * distinction losslessly, for both {@code resolvedText} (a downstream
-     * {@code ResolvedPatternMatcher}-style consumer recurses into the
-     * parenthesised group as its own nested chain) and {@code formulaTemplate}
-     * (the corresponding sub-formula is parenthesised the same way).
+     * Decomposes both operands of one NEAR/FOLLOWEDBY node and joins them: {@code left}'s
+     * leaves followed by {@code right}'s (no gap fragment added), with
+     * {@code resolvedText} joining the two renderings by {@code " KEYWORD{distance} "}.
+     * A right operand that is itself proximity is wrapped in parentheses in both
+     * {@code resolvedText} and {@code formulaTemplate}; a left operand never is (see the class
+     * Javadoc for why).
      */
     private static Result decomposeProximity(Ast left, Ast right, int distance, String keyword, ParseContext ctx) {
         Result leftResult = decompose(left, ctx);
@@ -252,15 +169,10 @@ final class PatternDecomposer {
     }
 
     /**
-     * Flattens an {@code And} node known (via {@link #containsProximity}) to
-     * contain nested proximity structure: every operand is independently
-     * decomposed and their leaves concatenated (AND's own semantics is
-     * already flat-presence — see class Javadoc), and {@code resolvedText}/
-     * {@code formulaTemplate} join each operand's own rendering with the
-     * literal {@code " AND "} keyword / {@code "&"} respectively — never
-     * parenthesised, since AND is commutative/associative and a flat AND-join
-     * loses nothing (unlike NEAR/FOLLOWEDBY's right-side wrapping — see
-     * {@link #decomposeProximity}).
+     * Flattens an {@code And} known (via {@link #containsProximity}) to contain proximity:
+     * every operand is decomposed and the leaves concatenated. {@code resolvedText} and
+     * {@code formulaTemplate} join operands with {@code " AND "} / {@code "&"}, never
+     * parenthesised, since AND is commutative and associative.
      */
     private static Result decomposeAnd(Ast.And and, ParseContext ctx) {
         List<String> combined = new ArrayList<>();
@@ -282,14 +194,9 @@ final class PatternDecomposer {
     }
 
     /**
-     * True when {@code ast} contains a {@link Ast.Near}/{@link Ast.FollowedBy}
-     * node reachable by recursing only through {@link Ast.And} — {@link Ast.Or}
-     * is deliberately NOT recursed into (an {@code Or} is always its own
-     * opaque boundary for this check, matching the OR-nested-proximity
-     * exception in class Javadoc: whether or not one of an {@code Or}'s
-     * alternatives contains proximity has no bearing on whether the
-     * ENCLOSING {@code And} should flatten — that {@code Or} stays one
-     * opaque leaf regardless).
+     * True when {@code ast} contains a NEAR/FOLLOWEDBY reachable by recursing only through
+     * {@link Ast.And}. {@link Ast.Or} is deliberately not recursed into — it is always one
+     * opaque leaf (see the class Javadoc).
      */
     private static boolean containsProximity(Ast ast) {
         return switch (ast) {

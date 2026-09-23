@@ -33,26 +33,21 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 /**
- * REST controller for the Lexicon Compile Service.
- *
- * <p><b>Endpoints</b>
+ * REST controller for the Lexicon Compile Service, base path {@code /api/lexicon}.
  * <dl>
- *   <dt>POST /api/lexicon/compile</dt>
- *   <dd>JSON body (plain or GZIP-compressed) → compile results</dd>
- *   <dt>POST /api/lexicon/compile/csv</dt>
- *   <dd>Multipart CSV file → compile results</dd>
- *   <dt>POST /api/lexicon/compile/bundle</dt>
- *   <dd>JSON body with per-term {@code requestType} (Natural Language/Regex) → zip file
- *       containing the JSON results (same shape as {@code /compile}) and a
- *       single combined Hyperscan database file</dd>
- *   <dt>GET /api/lexicon/health</dt>
- *   <dd>Engine status and supported features</dd>
+ *   <dt>{@code POST /compile}</dt>
+ *   <dd>JSON body (plain or GZIP) → per-term compile results.</dd>
+ *   <dt>{@code POST /compile/csv}</dt>
+ *   <dd>Multipart CSV file → the same results.</dd>
+ *   <dt>{@code POST /compile/bundle}</dt>
+ *   <dd>JSON body → a zip with the JSON results and one combined Hyperscan database.</dd>
+ *   <dt>{@code GET /health}</dt>
+ *   <dd>Engine status and the supported operator/language listing.</dd>
  * </dl>
  *
- * <p><b>Compression</b>
- * <p>Request decompression: {@code GzipRequestFilter}.
- * Response compression: Tomcat {@code server.compression.*}.
- * HTTP 200 is returned even when individual terms fail compilation.
+ * <p><b>Compression.</b> Request bodies with {@code Content-Encoding: gzip} are inflated by
+ * {@code GzipRequestFilter}; responses are compressed by Tomcat ({@code server.compression.*}).
+ * HTTP 200 is returned even when individual terms fail to compile.
  */
 @RestController
 @RequestMapping("/api/lexicon")
@@ -102,6 +97,18 @@ public class LexiconCompileController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
+    /**
+     * Compiles lexicon terms from a JSON body. {@link TypedCompileRequest} is the request type shared with
+     * {@code /compile/bundle}: {@code request_id}, {@code lexiconRuleName}, {@code requestType} and a
+     * non-empty {@code terms} list are all required. {@code requestType} is validated but this endpoint
+     * translates every term as Natural Language; only {@code /compile/bundle} honours {@code "Regex"}.
+     *
+     * <p>Recommended client headers: {@code Content-Encoding: gzip} for a compressed body and
+     * {@code Accept-Encoding: gzip} for a compressed response.
+     *
+     * @param request the validated request
+     * @return the per-term results
+     */
     public ResponseEntity<CompileResponse> compileJson(
             @Valid @RequestBody TypedCompileRequest request) {
 
@@ -131,6 +138,14 @@ public class LexiconCompileController {
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
+    /**
+     * Compiles lexicon terms from a CSV upload (see {@link CsvCompileService} for the format). A UUID
+     * {@code request_id} is generated and echoed in the response.
+     *
+     * @param file     the CSV file (UTF-8, BOM optional); an empty file is rejected with HTTP 400
+     * @param ruleName optional rule name; defaults to the file name without its extension
+     * @return the per-term results
+     */
     public ResponseEntity<CompileResponse> compileCsv(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "ruleName", required = false) String ruleName) {
@@ -211,6 +226,30 @@ public class LexiconCompileController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = "application/zip"
     )
+    /**
+     * Compiles the request's terms and returns a zip with the JSON results and one combined Hyperscan
+     * database.
+     *
+     * <p>Zip contents (HTTP 200, {@code application/zip}):
+     * <ul>
+     *   <li>{@code {ruleName}-compile-results.json} — always present, the same shape as {@code /compile}'s response;</li>
+     *   <li>{@code {ruleName}.hdb} — present only when EVERY term reached PASS and the combined build succeeded;</li>
+     *   <li>{@code NO_DATABASE.txt} — instead of the {@code .hdb} when any term did not reach PASS (even if all
+     *       others passed) or none did.</li>
+     * </ul>
+     * The zip file name is {@code {ruleName}-compile-bundle.zip}, with the rule name reduced to
+     * {@code [a-zA-Z0-9._-]}.
+     *
+     * <p><b>HTTP 500 instead of a zip</b> when every term PASSED but the combined build itself failed: the body
+     * is {@code application/json} in {@code /compile}'s shape with {@code databaseError} set, so per-term PASS
+     * statuses cannot be mistaken for a usable bundle.
+     *
+     * <p>The {@code .hdb} is written by {@code Database#save} (expression metadata plus the serialised native
+     * database) and loads directly with {@code Database.load(InputStream)}. Each expression's id is its term
+     * number (or an auxiliary id); see {@code HyperscanCombinationHandler}.
+     *
+     * @param request the validated request
+     */
     public ResponseEntity<byte[]> compileBundle(
             @Valid @RequestBody TypedCompileRequest request) {
 
@@ -252,8 +291,7 @@ public class LexiconCompileController {
     }
 
     /**
-     * Builds the zip in memory: JSON results entry, plus either the combined
-     * {@code .hdb} database entry or a {@code NO_DATABASE.txt} explanation.
+     * Builds the zip in memory: the JSON results, then the {@code .hdb} or a {@code NO_DATABASE.txt} explanation.
      */
     private byte[] buildBundleZip(String ruleName,
                                   LexiconCompileBundleService.CompileBundleResult bundle)
@@ -285,7 +323,8 @@ public class LexiconCompileController {
     }
 
     /**
-     * Replaces anything outside {@code [a-zA-Z0-9._-]} with {@code _} for safe zip/file names.
+     * Reduces {@code name} to {@code [a-zA-Z0-9._-]} (anything else becomes {@code _}) for safe zip and
+     * file names; a blank name becomes {@code lexicon_rule}.
      */
     private String sanitizeFilename(String name) {
         if (name == null || name.isBlank()) {
@@ -297,9 +336,8 @@ public class LexiconCompileController {
     // ── GET /api/lexicon/health ───────────────────────────────────────────────
 
     /**
-     * Engine health and feature listing.
-     *
-     * @return map with engine mode, version, supported operators and languages
+     * Liveness plus a static listing of the engine, library versions, supported operators and languages.
+     * The Spring Actuator {@code /actuator/health} additionally probes the native library.
      */
     @GetMapping(value = "/health", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> engineHealth() {

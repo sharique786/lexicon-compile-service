@@ -67,6 +67,7 @@ lexicon:
   hyperscan-version: 5.4.0-2.0.0
   compiler:
     max-terms-per-request: 1000
+    inline-proximity: false
   upload:
     max-file-size: 10MB
 

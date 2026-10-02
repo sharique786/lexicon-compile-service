@@ -39,7 +39,7 @@ class LexiconCompileServiceTest {
     @BeforeEach
     void setUp() {
         var compiler = new HyperscanCompiler();
-        var translator = new TermSyntaxTranslator(compiler);
+        var translator = new TermSyntaxTranslator(compiler, true);
         compiler.selfTest();
         service = new LexiconCompileService(translator, compiler, new SimpleMeterRegistry());
     }

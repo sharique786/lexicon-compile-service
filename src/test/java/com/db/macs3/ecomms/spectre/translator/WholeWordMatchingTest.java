@@ -27,7 +27,7 @@ class WholeWordMatchingTest {
     void setUp() {
         compiler = new HyperscanCompiler();
         compiler.selfTest();
-        translator = new TermSyntaxTranslator(compiler);
+        translator = new TermSyntaxTranslator(compiler, true);
     }
 
     private TranslationResult.Success translateOk(String term) {

@@ -55,7 +55,7 @@ class LexiconCompileBundleServiceTest {
     @BeforeEach
     void setUp() {
         var compiler = new HyperscanCompiler();
-        var translator = new TermSyntaxTranslator(compiler);
+        var translator = new TermSyntaxTranslator(compiler, true);
         compiler.selfTest();
         var compileService = new LexiconCompileService(translator, compiler, new SimpleMeterRegistry());
         var handler = new HyperscanCombinationHandler(compiler);
@@ -368,7 +368,7 @@ class LexiconCompileBundleServiceTest {
     void allTermsPassButCombinedBuildFails() {
         var compiler = new HyperscanCompiler();
         compiler.selfTest();
-        var translator = new TermSyntaxTranslator(compiler);
+        var translator = new TermSyntaxTranslator(compiler, true);
         var compileService = new LexiconCompileService(translator, compiler, new SimpleMeterRegistry());
         var handler = new HyperscanCombinationHandler(compiler);
 

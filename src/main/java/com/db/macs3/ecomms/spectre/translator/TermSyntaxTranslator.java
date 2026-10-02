@@ -4,6 +4,8 @@ import com.db.macs3.ecomms.spectre.hyperscan.HyperscanCompiler;
 import com.ibm.icu.text.Normalizer2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -25,6 +27,11 @@ import java.util.List;
  * {@link TranslationResult.Success} has already been validated by real Hyperscan, so callers need
  * not validate it again. (The {@code Regex} term type never passes through here; it is validated
  * where it is compiled.)
+ *
+ * <p><b>Current default: leaves, not one pattern.</b> Unless {@code lexicon.compiler.inline-proximity=true},
+ * {@link #resolveSide} never merges NEAR/FOLLOWEDBY into a gap-embedded pattern (database size — see
+ * {@link #inlineProximity}); the paragraph below describes the opt-in behaviour. A NEAR/FOLLOWEDBY inside a
+ * multi-operand {@code OR} is unaffected and still one gap-embedded pattern.
  *
  * <p><b>One pattern when safe, leaves as the fallback.</b> {@link PatternDecomposer#decompose} runs
  * for every side, and its {@code resolvedText} is always what {@code resolvedPatterns} reports.
@@ -85,8 +92,24 @@ public final class TermSyntaxTranslator {
 
     private final HyperscanCompiler compiler;
 
-    public TermSyntaxTranslator(HyperscanCompiler compiler) {
+    /**
+     * Whether {@link #resolveSide} may merge NEAR/FOLLOWEDBY into one gap-embedded pattern. Off by default:
+     * a bounded repeat such as {@code (?:\s+\S+){0,n}} is unrolled by Hyperscan into ~n copies of its states
+     * (times the width of the adjacent OR groups), which inflated the combined {@code .hdb} until the Scan
+     * Engine's executors crashed loading it. With it off, proximity always resolves to gap-less leaves and
+     * the Scan Engine enforces distance/order from {@code resolvedPatterns}.
+     */
+    private final boolean inlineProximity;
+
+    @Autowired
+    public TermSyntaxTranslator(HyperscanCompiler compiler,
+                                @Value("${lexicon.compiler.inline-proximity:false}") boolean inlineProximity) {
         this.compiler = compiler;
+        this.inlineProximity = inlineProximity;
+    }
+
+    public TermSyntaxTranslator(HyperscanCompiler compiler) {
+        this(compiler, false);
     }
 
     /**
@@ -318,7 +341,7 @@ public final class TermSyntaxTranslator {
      */
     private SideResult resolveSide(Ast sideAst, PatternDecomposer.Result decomposed, int flags,
                                     boolean wordBoundaries, String originalTerm, String sideLabel, List<String> warnings) {
-        if (decomposed.leaves().size() > 1 && !PatternComplexityAnalyzer.isOverBudget(sideAst)) {
+        if (inlineProximity && decomposed.leaves().size() > 1 && !PatternComplexityAnalyzer.isOverBudget(sideAst)) {
             // Fresh, scratch context: this attempt's own flag/warning discoveries are
             // only real if this path is actually used — discarding them on rejection
             // avoids polluting the term's final flags/warnings with a candidate that

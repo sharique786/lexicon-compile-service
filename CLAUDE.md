@@ -172,6 +172,14 @@ still one self-contained permutation pattern, exactly as before. Whether
 pattern instead, is `resolveSide`'s decision, same as any other side — see
 below.
 
+> **CURRENT DEFAULT (supersedes the section below for default behaviour): inline proximity is OFF.**
+> `lexicon.compiler.inline-proximity` (default `false`) gates `TermSyntaxTranslator#resolveSide`'s single
+> gap-embedded attempt. Bounded repeats `(?:\s+\S+){0,n}` unroll into ~n state copies and bloated the combined
+> `.hdb` until Scan Engine executors crashed loading it (SIGSEGV). With it off, every NEAR/FOLLOWEDBY side
+> resolves to gap-less leaves and the Scan Engine enforces distance/order from `resolvedPatterns`. Everything
+> else (whole-word `\b`, `?` wildcard, FAILED-blocks-bundle, nested tree shape, OR-nested-proximity exception) is unchanged.
+> Set it `true` to restore the merged behaviour.
+
 ### Simple, straightforward proximity terms compile to ONE pattern again — decomposition is the fallback
 
 **This area has been through two full architecture swings — know which one

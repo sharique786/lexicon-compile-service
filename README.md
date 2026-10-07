@@ -184,6 +184,12 @@ two spaces or a line break between the words.
 
 **Chained proximity** — `A FOLLOWEDBY{5} B FOLLOWEDBY{6} C` without parentheses is accepted and read
 as `(A FOLLOWEDBY{5} B) FOLLOWEDBY{6} C`; a warning is logged. Prefer explicit parentheses.
+**Mixing the two operators** in one unparenthesised chain (`A NEAR{3} B FOLLOWEDBY{4} C`) is rejected as
+ambiguous — write `(A NEAR{3} B) FOLLOWEDBY{4} C` or `A NEAR{3} (B FOLLOWEDBY{4} C)`.
+
+**OR with proximity inside it** — allowed when small (e.g. `(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)`),
+but rejected up front when it is both over the complexity budget (700) and a trial compile by real Hyperscan fails, because such an OR cannot be
+split and would become one Hyperscan pattern that is "too large". A big-looking OR that Hyperscan accepts still compiles. Split each alternative into its own term.
 
 ### `NOT`
 
@@ -790,6 +796,8 @@ Malformed ids are reported before duplicates.
 | operator with a missing operand | `NEAR{2} (price)` → `Could not parse term … (expected a term, parenthesis, or quoted phrase)` |
 | `NOT` misuse | `NOT (james bond)` → `NOT must always be combined with a preceding required expression via AND`; `price AND NOT legitimate` / `apple AND NOT NEAR{10} banana` → `NOT must always be followed immediately by a parenthesised group`; `A NOT B` → `Standalone NOT is not supported as an operator` |
 | proximity sandwiched in `OR` | `(a) OR (b) NEAR{2} (c) OR (d)` → `… combined with OR at the same level, with OTHER OR alternatives on BOTH sides …` |
+| `NEAR` and `FOLLOWEDBY` chained without parentheses | `(a) NEAR{3} (b) FOLLOWEDBY{4} (c)` → `NEAR and FOLLOWEDBY were combined at the same level without parentheses …` |
+| oversized `OR` containing proximity | `((…wide OR…) NEAR{3} (…wide OR…)) OR (…)` → `An OR combining NEAR/FOLLOWEDBY expressions is too complex to compile (<Hyperscan's error>) …` |
 | more than 5 `AND` operands | `Too many AND operands at the same level (6) …` |
 | `AND NOT` not at the root | `(x AND NOT (y)) NEAR{3} z` → `AND NOT may only appear at the top level of a term …` |
 | a pattern Hyperscan rejects for a non-size reason | Hyperscan's own message surfaced (`… translated to a pattern Hyperscan rejected: …`) |
@@ -839,7 +847,7 @@ them** (the response has no `warnings` field). Watch the service log (`WARN`, lo
 | Whole-word matching not applied | the term contains non-ASCII text (UCP) |
 | Gap clamped or narrowed | requested distance exceeded the compiled width; long-distance matches are missed |
 | Mixed RTL + LTR `FOLLOWEDBY` | matches stored order, which may differ from visual order |
-| Chained `NEAR`/`FOLLOWEDBY` without parentheses | read as left-associative nesting |
+| Chained same-operator `NEAR`/`FOLLOWEDBY` without parentheses | read as left-associative nesting (mixed operators are rejected, see error catalog) |
 | `NEAR{1}`/`FOLLOWEDBY{1}` with a single-character operand | likely an attempt to split one word, which can never match |
 
 ---

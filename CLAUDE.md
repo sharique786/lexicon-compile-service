@@ -566,6 +566,24 @@ documented, currently-used OR-nested-proximity exception (see
 `resolvedPatterns` section above). With no OTHER alternative left over on
 the side the proximity clause sits, there is nothing ambiguous to reject.
 
+### 6. Mixed NEAR/FOLLOWEDBY chains and oversized OR-with-proximity — rejected up front
+
+Two validations added after real terms failed with a raw "Pattern is too large":
+
+- **Mixed chain** — `ExpressionParser.parseProximity` rejects an unparenthesised chain that mixes
+  `NEAR` and `FOLLOWEDBY` at one level (`A NEAR{3} B FOLLOWEDBY{4} C`) as ambiguous. A chain of the SAME
+  operator still only warns (existing terms rely on it). This reverses the earlier "mixed chain compiles
+  with a warning" behaviour.
+- **Oversized OR containing proximity** — `TermSyntaxTranslator.rejectOversizedOrWithProximity` (run right
+  after parsing, walks the whole tree, both AND NOT sides included) throws when an `Ast.Or` contains
+  NEAR/FOLLOWEDBY, `PatternComplexityAnalyzer.isOverBudget` is true (cheap pre-gate) AND a trial compile of that OR's single pattern, with the term's real flags, is rejected by real Hyperscan. The budget alone never rejects (it scored a term that compiles fine at 2650 vs. limit 700). Rationale: OR-nested proximity is the
+  one shape with NO decomposition fallback (see "resolvedPatterns"), so it always becomes one gap-embedded
+  pattern and a wide one dies in Hyperscan. A small OR-with-proximity under budget (the documented
+  `"(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"`) is deliberately still allowed — don't ban the shape
+  outright. An under-budget OR is not trial-compiled here, so Hyperscan can still reject it later with its own message.
+
+Covered in `TermSyntaxTranslatorTest` (`ChainedProximityValidation`).
+
 ---
 
 ## Hyperscan `ExpressionFlag` scheme: three fixed cases, not per-content
@@ -972,3 +990,8 @@ verification scaffolding, not a repository fixture.
     narrower warning (`ExpressionParser.warnPossibleIntraWordSplit`) flags
     the visible signature of that specific mistake (a single-character
     operand at distance 1) without rejecting the term.
+17. **Up-front validation for "Pattern is too large" terms**: mixed `NEAR`/`FOLLOWEDBY` unparenthesised chains
+    are now rejected at parse time, and an `OR` containing NEAR/FOLLOWEDBY that is over
+    `PatternComplexityAnalyzer.COMPLEXITY_BUDGET` is rejected before Hyperscan is called, with an actionable
+    message instead of a raw Hyperscan error — see "6. Mixed NEAR/FOLLOWEDBY chains and oversized
+    OR-with-proximity" above. Small OR-with-proximity terms remain allowed.

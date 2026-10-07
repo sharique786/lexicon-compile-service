@@ -460,10 +460,58 @@ class TermSyntaxTranslatorTest {
         }
 
         @Test
-        @DisplayName("Mixed NEAR then FOLLOWEDBY chained at the same level also succeeds with a warning")
-        void chainedMixedProximity_warnsButSucceeds() {
-            var s = translateOk("(a) NEAR{3} (b) FOLLOWEDBY{4} (c)");
-            assertThat(s.warnings()).isNotEmpty();
+        @DisplayName("Mixed NEAR and FOLLOWEDBY chained at the same level is rejected as ambiguous")
+        void chainedMixedProximity_rejected() {
+            assertThat(translateError("(a) NEAR{3} (b) FOLLOWEDBY{4} (c)"))
+                    .contains("NEAR and FOLLOWEDBY were combined");
+            assertThat(translateError("(a) FOLLOWEDBY{3} (b) NEAR{4} (c)"))
+                    .contains("NEAR and FOLLOWEDBY were combined");
+        }
+
+        @Test
+        @DisplayName("Mixed NEAR/FOLLOWEDBY is fine once explicitly parenthesised")
+        void chainedMixedProximity_parenthesisedOk() {
+            translateOk("((a) NEAR{3} (b)) FOLLOWEDBY{4} (c)");
+        }
+
+        @Test
+        @DisplayName("Reported term 1 (German OR of two NEAR chains) fails validation up front")
+        void reportedTerm1_rejectedUpFront() {
+            String msg = translateError("(((ich OR wir OR DB OR sie) NEAR{3} (vermass* OR versau* OR verbock* OR beschissen"
+                    + " OR bescheissen OR reinlegen OR reingelegt OR ruinier* OR in den Sand OR verkack* OR am Arsch) NEAR{3}"
+                    + " (Handel OR Trade OR Trades OR Transaktion OR Transaktionen OR Auftrag OR Aufträge OR Auftraege OR Deal"
+                    + " OR Deals OR Klient OR Klienten OR Kunde OR Kunden OR Geschaeft OR Geschäft OR Geschaefte OR Geschäfte))"
+                    + " OR ((versuch*) NEAR{2} (verarschen OR reinzulegen OR Ohr zu hauen OR ausnutzen OR auszunutzen"
+                    + " OR benachteiligen OR abzocken OR abzuzocken)))");
+            assertThat(msg).contains("too complex to compile");
+        }
+
+        private static final String GERMAN_PLAIN = "(tiefer wuerde passen OR tiefer würde passen OR hoeher wuerde passen"
+                + " OR höher würde passen OR niedriger würde mir passen OR niedriger wuerde mir passen"
+                + " OR höher passt mir besser OR hoeher passt mir besser OR niedriger passt mir besser"
+                + " OR tiefer passt mir besser) OR ";
+        private static final String GERMAN_LEFT = "((bevorzug* OR brauch* OR wollen OR will* OR ziel* auf OR dräng*"
+                + " OR hoff* auf OR arbeit* auf) NEAR{1} ";
+        private static final String GERMAN_MID = "(niedrig* OR tief* OR hoh* OR hoch OR hoehe* OR höhe*)";
+        private static final String GERMAN_RIGHT = " FOLLOWEDBY{1} (Fix OR Fixing OR Referenzkurs*)";
+
+        @Test
+        @DisplayName("Explicitly nested NEAR over (FOLLOWEDBY) compiles")
+        void germanNestedGrouping_compiles() {
+            translateOk(GERMAN_PLAIN + GERMAN_LEFT + "(" + GERMAN_MID + GERMAN_RIGHT + "))");
+        }
+
+        @Test
+        @DisplayName("Unparenthesised NEAR + FOLLOWEDBY chain is rejected")
+        void germanMixedChain_rejected() {
+            assertThat(translateError(GERMAN_PLAIN + GERMAN_LEFT + GERMAN_MID + GERMAN_RIGHT + ")"))
+                    .contains("NEAR and FOLLOWEDBY were combined");
+        }
+
+        @Test
+        @DisplayName("A small OR with an edge NEAR alternative still compiles (documented exception)")
+        void orWithSmallProximity_stillOk() {
+            translateOk("(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)");
         }
 
         @Test

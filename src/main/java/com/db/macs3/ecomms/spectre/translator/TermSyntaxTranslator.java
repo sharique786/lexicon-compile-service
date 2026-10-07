@@ -185,6 +185,7 @@ public final class TermSyntaxTranslator {
                 PatternDecomposer.Result requiredResult = PatternDecomposer.decompose(andNot.required(), ctx);
                 PatternDecomposer.Result excludedResult = PatternDecomposer.decompose(excludedCombined, ctx);
                 int flags = ctx.computeFlags();
+                rejectOversizedOrWithProximity(ast, preprocessed, wordBoundaries, flags);
 
                 SideResult required
                         = resolveSide(andNot.required(), requiredResult, flags, wordBoundaries,
@@ -224,6 +225,7 @@ public final class TermSyntaxTranslator {
                 result = PatternDecomposer.decompose(ast, new ParseContext(true, false));
             }
             int flags = ctx.computeFlags();
+            rejectOversizedOrWithProximity(ast, preprocessed, wordBoundaries, flags);
             SideResult required = resolveSide(ast, result, flags, wordBoundaries, preprocessed, "term", warnings);
             warnings.addAll(ctx.getWarnings());
 
@@ -254,6 +256,66 @@ public final class TermSyntaxTranslator {
             log.error("Unexpected error translating '{}': {}", rawExpression, e.getMessage(), e);
             return TranslationResult.error("Unexpected error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Rejects an {@code OR} that has NEAR/FOLLOWEDBY inside it when its estimated complexity is over
+     * {@link PatternComplexityAnalyzer#COMPLEXITY_BUDGET}. Such an OR can never be decomposed into leaves
+     * (that would change what OR means), so it always compiles as one gap-embedded pattern, which
+     * Hyperscan rejects with "Pattern is too large" when the alternatives are wide. Failing here gives the
+     * author an actionable message up front instead of a raw Hyperscan error.
+     *
+     * @throws TranslationException naming the offending OR and how to fix it
+     */
+    private void rejectOversizedOrWithProximity(Ast node, String originalTerm, boolean wordBoundaries, int flags) {
+        switch (node) {
+            case Ast.Or or -> {
+                if (containsProximity(or) && PatternComplexityAnalyzer.isOverBudget(or)) {
+                    // The budget is only a cheap, approximate pre-check: real Hyperscan decides. A trial
+                    // compile of the single gap-embedded pattern (the only form this OR can take) is the
+                    // truth, so an over-budget estimate that Hyperscan actually accepts is NOT rejected.
+                    ParseContext trialCtx = new ParseContext(wordBoundaries);
+                    String trialPattern = PatternCodeGenerator.generate(or, trialCtx);
+                    HyperscanCompiler.ValidationResult trial = compiler.validate(trialPattern, flags);
+                    if (!trial.isPass()) {
+                        throw new TranslationException(
+                                "An OR combining NEAR/FOLLOWEDBY expressions is too complex to compile ("
+                                + trial.errorMessage() + ") in term: '" + originalTerm
+                                + "'. A NEAR/FOLLOWEDBY inside an OR cannot be split into independent parts, so the"
+                                + " whole OR becomes one Hyperscan pattern that is too large. Split each OR"
+                                + " alternative into its own lexicon term, reduce the number of OR-alternatives"
+                                + " inside the proximity operands, or reduce wildcard usage.");
+                    }
+                }
+                or.operands().forEach(child -> rejectOversizedOrWithProximity(child, originalTerm, wordBoundaries, flags));
+            }
+            case Ast.And and -> and.operands().forEach(child -> rejectOversizedOrWithProximity(child, originalTerm, wordBoundaries, flags));
+            case Ast.AndNot andNot -> {
+                rejectOversizedOrWithProximity(andNot.required(), originalTerm, wordBoundaries, flags);
+                andNot.excluded().forEach(child -> rejectOversizedOrWithProximity(child, originalTerm, wordBoundaries, flags));
+            }
+            case Ast.Near near -> {
+                rejectOversizedOrWithProximity(near.left(), originalTerm, wordBoundaries, flags);
+                rejectOversizedOrWithProximity(near.right(), originalTerm, wordBoundaries, flags);
+            }
+            case Ast.FollowedBy fb -> {
+                rejectOversizedOrWithProximity(fb.left(), originalTerm, wordBoundaries, flags);
+                rejectOversizedOrWithProximity(fb.right(), originalTerm, wordBoundaries, flags);
+            }
+            default -> { /* leaf (or Not, never present after parsing): nothing to check */ }
+        }
+    }
+
+    private static boolean containsProximity(Ast node) {
+        return switch (node) {
+            case Ast.Near ignored -> true;
+            case Ast.FollowedBy ignored -> true;
+            case Ast.Or or -> or.operands().stream().anyMatch(TermSyntaxTranslator::containsProximity);
+            case Ast.And and -> and.operands().stream().anyMatch(TermSyntaxTranslator::containsProximity);
+            case Ast.AndNot andNot -> containsProximity(andNot.required())
+                    || andNot.excluded().stream().anyMatch(TermSyntaxTranslator::containsProximity);
+            default -> false;
+        };
     }
 
     /**

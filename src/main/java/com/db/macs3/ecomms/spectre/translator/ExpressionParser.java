@@ -299,8 +299,16 @@ final class ExpressionParser {
         if (!peekIsNearOrFollowedBy()) {
             return leftOperand;
         }
+        boolean firstIsNear = peekIs(Token.Near.class);
         Ast result = consumeProximityOperator(leftOperand);
         while (peekIsNearOrFollowedBy()) {
+            if (peekIs(Token.Near.class) != firstIsNear) {
+                throw new TranslationException(
+                        "NEAR and FOLLOWEDBY were combined at the same level without parentheses in term: '"
+                        + originalTerm + "'. It is ambiguous which operator applies to which operands. Add"
+                        + " explicit parentheses to group them, e.g. '((A) NEAR{n} (B)) FOLLOWEDBY{m} (C)' or"
+                        + " '(A) NEAR{n} ((B) FOLLOWEDBY{m} (C))', or split this into separate lexicon terms.");
+            }
             warnChainedProximityOperator();
             result = consumeProximityOperator(result);
         }

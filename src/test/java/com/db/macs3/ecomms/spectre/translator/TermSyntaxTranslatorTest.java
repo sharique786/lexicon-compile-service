@@ -483,7 +483,7 @@ class TermSyntaxTranslatorTest {
                     + " OR Deals OR Klient OR Klienten OR Kunde OR Kunden OR Geschaeft OR Geschäft OR Geschaefte OR Geschäfte))"
                     + " OR ((versuch*) NEAR{2} (verarschen OR reinzulegen OR Ohr zu hauen OR ausnutzen OR auszunutzen"
                     + " OR benachteiligen OR abzocken OR abzuzocken)))");
-            assertThat(msg).contains("too complex to compile");
+            assertThat(msg).contains("multiple NEAR/FOLLOWEDBY proximity operators at the same level");
         }
 
         private static final String GERMAN_PLAIN = "(tiefer wuerde passen OR tiefer würde passen OR hoeher wuerde passen"

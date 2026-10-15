@@ -238,7 +238,7 @@ final class ExpressionParser {
             throw new TranslationException(
                     "Too many AND operands at the same level (" + operands.size() + ") in term: '"
                             + originalTerm + "'. A maximum of " + ParseContext.MAX_AND_OPERANDS + " is supported"
-                            + " — each additional operand multiplies the size of the resulting Hyperscan pattern."
+                            + " — too many operands make the term too complex to evaluate."
                             + " Split this term into multiple simpler lexicon terms instead.");
         }
         return foldNotOperands(operands);

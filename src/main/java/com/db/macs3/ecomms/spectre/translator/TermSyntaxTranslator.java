@@ -271,21 +271,33 @@ public final class TermSyntaxTranslator {
         switch (node) {
             case Ast.Or or -> {
                 if (containsProximity(or) && PatternComplexityAnalyzer.isOverBudget(or)) {
-                    // The budget is only a cheap, approximate pre-check: real Hyperscan decides. A trial
-                    // compile of the single gap-embedded pattern (the only form this OR can take) is the
-                    // truth, so an over-budget estimate that Hyperscan actually accepts is NOT rejected.
-                    ParseContext trialCtx = new ParseContext(wordBoundaries);
-                    String trialPattern = PatternCodeGenerator.generate(or, trialCtx);
-                    HyperscanCompiler.ValidationResult trial = compiler.validate(trialPattern, flags);
-                    if (!trial.isPass()) {
-                        throw new TranslationException(
-                                "An OR combining NEAR/FOLLOWEDBY expressions is too complex to compile ("
-                                + trial.errorMessage() + ") in term: '" + originalTerm
-                                + "'. A NEAR/FOLLOWEDBY inside an OR cannot be split into independent parts, so the"
-                                + " whole OR becomes one Hyperscan pattern that is too large. Split each OR"
-                                + " alternative into its own lexicon term, reduce the number of OR-alternatives"
-                                + " inside the proximity operands, or reduce wildcard usage.");
+                    // With inline proximity ON, the budget is only a cheap pre-check: a trial compile of
+                    // the single gap-embedded pattern (the only form this OR can take) is the truth, so an
+                    // over-budget estimate Hyperscan accepts is NOT rejected. With it OFF (default),
+                    // proximity must never be translated to regex — not even for validation — so the
+                    // structural budget estimate alone decides.
+                    String detail;
+                    if (inlineProximity) {
+                        ParseContext trialCtx = new ParseContext(wordBoundaries);
+                        String trialPattern = PatternCodeGenerator.generate(or, trialCtx);
+                        HyperscanCompiler.ValidationResult trial = compiler.validate(trialPattern, flags);
+                        if (trial.isPass()) {
+                            or.operands().forEach(child -> rejectOversizedOrWithProximity(child, originalTerm, wordBoundaries, flags));
+                            return;
+                        }
+                        detail = "Hyperscan compile error: " + trial.errorMessage();
+                    } else {
+                        detail = "estimated complexity exceeds the limit of "
+                                + PatternComplexityAnalyzer.COMPLEXITY_BUDGET;
                     }
+                    log.debug("Rejecting OR with proximity ({}) in term '{}'", detail, originalTerm);
+                    throw new TranslationException(
+                            "This term has multiple NEAR/FOLLOWEDBY proximity operators at the same level, combined"
+                            + " with OR/AND operators, which is too complex to evaluate as written: '" + originalTerm
+                            + "'. Use parentheses to group each proximity expression and its operands, and keep"
+                            + " each OR alternative to one small proximity group — or split the alternatives"
+                            + " into separate lexicon terms. For example, write '((A) NEAR{n} (B))' as its own"
+                            + " term instead of 'X OR ((A) NEAR{n} (B) NEAR{m} (C))'.");
                 }
                 or.operands().forEach(child -> rejectOversizedOrWithProximity(child, originalTerm, wordBoundaries, flags));
             }
@@ -439,12 +451,11 @@ public final class TermSyntaxTranslator {
             String pattern = leafPatterns.getFirst();
             HyperscanCompiler.ValidationResult validation = compiler.validate(pattern, flags);
             if (!validation.isPass()) {
+                log.debug("Hyperscan rejected {} expression of '{}': {}", sideLabel, originalTerm, validation.errorMessage());
                 throw new TranslationException(
-                        "This term's " + sideLabel + " expression translated to a pattern Hyperscan rejected: "
-                        + validation.errorMessage() + " In term: '" + originalTerm + "'. This expression has"
-                        + " no NEAR/FOLLOWEDBY structure to split further — to fix, reduce the number of"
-                        + " OR-alternatives, reduce wildcard usage, or split this into multiple simpler"
-                        + " lexicon terms.");
+                        "The " + sideLabel + " expression of this term is too large or complex to compile: '"
+                        + originalTerm + "'. Reduce the number of OR alternatives or wildcards (*) in it,"
+                        + " or split it into multiple simpler lexicon terms.");
             }
             return List.of(pattern);
         }
@@ -452,14 +463,11 @@ public final class TermSyntaxTranslator {
         for (String leafPattern : leafPatterns) {
             HyperscanCompiler.ValidationResult leafValidation = compiler.validate(leafPattern, flags);
             if (!leafValidation.isPass()) {
+                log.debug("Hyperscan rejected leaf '{}' of '{}': {}", leafPattern, originalTerm, leafValidation.errorMessage());
                 throw new TranslationException(
-                        "This term's " + sideLabel + " expression was split into " + leafPatterns.size()
-                        + " independent parts (see resolvedPatterns for the full NEAR/FOLLOWEDBY/AND NOT"
-                        + " structure), but one part ('" + leafPattern + "') was rejected by Hyperscan: "
-                        + leafValidation.errorMessage() + " — decomposition cannot help here, since that part"
-                        + " has no further NEAR/FOLLOWEDBY structure of its own to split. In term: '"
-                        + originalTerm + "'. To fix: reduce the number of OR-alternatives or wildcard usage"
-                        + " within that specific part.");
+                        "One part of the " + sideLabel + " expression is too large or complex to compile in"
+                        + " term: '" + originalTerm + "'. Reduce the number of OR alternatives or wildcards (*)"
+                        + " within each parenthesised group, or split this into multiple simpler lexicon terms.");
             }
         }
 

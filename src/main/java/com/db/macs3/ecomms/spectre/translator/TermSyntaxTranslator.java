@@ -271,25 +271,19 @@ public final class TermSyntaxTranslator {
         switch (node) {
             case Ast.Or or -> {
                 if (containsProximity(or) && PatternComplexityAnalyzer.isOverBudget(or)) {
-                    // With inline proximity ON, the budget is only a cheap pre-check: a trial compile of
-                    // the single gap-embedded pattern (the only form this OR can take) is the truth, so an
-                    // over-budget estimate Hyperscan accepts is NOT rejected. With it OFF (default),
-                    // proximity must never be translated to regex — not even for validation — so the
-                    // structural budget estimate alone decides.
-                    String detail;
-                    if (inlineProximity) {
-                        ParseContext trialCtx = new ParseContext(wordBoundaries);
-                        String trialPattern = PatternCodeGenerator.generate(or, trialCtx);
-                        HyperscanCompiler.ValidationResult trial = compiler.validate(trialPattern, flags);
-                        if (trial.isPass()) {
-                            or.operands().forEach(child -> rejectOversizedOrWithProximity(child, originalTerm, wordBoundaries, flags));
-                            return;
-                        }
-                        detail = "Hyperscan compile error: " + trial.errorMessage();
-                    } else {
-                        detail = "estimated complexity exceeds the limit of "
-                                + PatternComplexityAnalyzer.COMPLEXITY_BUDGET;
+                    // The budget is only a cheap pre-check. This OR has no leaf form, so its single
+                    // gap-embedded pattern is what gets compiled whatever inline-proximity says; a trial
+                    // compile of exactly that pattern is the truth, and an over-budget estimate that
+                    // Hyperscan accepts is NOT rejected (the estimate is a heuristic and overshoots for
+                    // small gaps such as FOLLOWEDBY{1}).
+                    ParseContext trialCtx = new ParseContext(wordBoundaries);
+                    String trialPattern = PatternCodeGenerator.generate(or, trialCtx);
+                    HyperscanCompiler.ValidationResult trial = compiler.validate(trialPattern, flags);
+                    if (trial.isPass()) {
+                        or.operands().forEach(child -> rejectOversizedOrWithProximity(child, originalTerm, wordBoundaries, flags));
+                        return;
                     }
+                    String detail = "Hyperscan compile error: " + trial.errorMessage();
                     log.debug("Rejecting OR with proximity ({}) in term '{}'", detail, originalTerm);
                     throw new TranslationException(
                             "This term has multiple NEAR/FOLLOWEDBY proximity operators at the same level, combined"

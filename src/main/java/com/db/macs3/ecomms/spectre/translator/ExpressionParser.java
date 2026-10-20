@@ -121,10 +121,15 @@ final class ExpressionParser {
 
     private Ast parseOr() {
         List<Ast> alternatives = new ArrayList<>();
+        List<Boolean> parenthesised = new ArrayList<>();
+        int start = currentTokenIndex;
         alternatives.add(parseAndNot());
+        parenthesised.add(isWrappedInOwnParens(start, currentTokenIndex));
         while (peekIs(Token.Or.class)) {
             advance();
+            start = currentTokenIndex;
             alternatives.add(parseAndNot());
+            parenthesised.add(isWrappedInOwnParens(start, currentTokenIndex));
         }
         if (alternatives.size() == 1) {
             // No actual OR combination happened — a deferred Ast.Not (see
@@ -135,8 +140,23 @@ final class ExpressionParser {
         for (Ast alternative : alternatives) {
             rejectBareNot(alternative, "as an OR alternative");
         }
-        rejectSandwichedProximity(alternatives);
+        rejectSandwichedProximity(alternatives, parenthesised);
         return new Ast.Or(alternatives);
+    }
+
+    /**
+     * True when the tokens in {@code [from, to)} are exactly one parenthesised group, i.e. the
+     * first token is '(' and its matching ')' is the last token. {@code (a) NEAR{2} (b)} is not.
+     */
+    private boolean isWrappedInOwnParens(int from, int to) {
+        if (to - from < 2 || !(tokens.get(from) instanceof Token.LParen)) return false;
+        int depth = 0;
+        for (int i = from; i < to; i++) {
+            Token token = tokens.get(i);
+            if (token instanceof Token.LParen) depth++;
+            else if (token instanceof Token.RParen && --depth == 0) return i == to - 1;
+        }
+        return false;
     }
 
     /**
@@ -153,9 +173,12 @@ final class ExpressionParser {
      *
      * @throws TranslationException naming the ambiguous shape and how to fix it
      */
-    private void rejectSandwichedProximity(List<Ast> alternatives) {
+    private void rejectSandwichedProximity(List<Ast> alternatives, List<Boolean> parenthesised) {
         for (int i = 1; i < alternatives.size() - 1; i++) {
             Ast alternative = alternatives.get(i);
+            // An alternative the author already wrapped in its own parentheses is explicitly
+            // grouped — exactly the fix this error message asks for — so it is unambiguous.
+            if (parenthesised.get(i)) continue;
             if (alternative instanceof Ast.Near || alternative instanceof Ast.FollowedBy) {
                 throw new TranslationException(
                         "A NEAR/FOLLOWEDBY operator was found combined with OR at the same level, with OTHER OR"

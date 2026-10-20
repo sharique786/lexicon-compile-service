@@ -647,6 +647,34 @@ class TermSyntaxTranslatorTest {
         void onlyTwoAlternatives_neverSandwiched() {
             assertThat(translator.translate("(a) OR (b) NEAR{3} (c)").isSuccess()).isTrue();
         }
+
+        @Test
+        @DisplayName("REPORTED: OR of three FOLLOWEDBY{1} chains AND NOT (...) — over the heuristic budget "
+                + "but real Hyperscan accepts it, so it must not be rejected")
+        void reportedOrOfSmallGapChains_accepted() {
+            String term = "((((eras* OR remov*) FOLLOWEDBY{1} (my OR your OR any OR their OR our OR his OR her OR the)) "
+                    + "FOLLOWEDBY{1} (evidence OR trail OR trails OR email OR emails OR message OR messages OR msg OR msgs "
+                    + "OR post OR posts OR proof OR pr00f)) OR (((delet*) FOLLOWEDBY{1} (my OR your OR any OR their OR our "
+                    + "OR his OR her)) FOLLOWEDBY{1} (evidence OR trail OR trails OR email OR emails OR message OR messages "
+                    + "OR msg OR msgs OR post OR posts OR proof OR pr00f)) OR (((accidentally erased) FOLLOWEDBY{1} (my OR "
+                    + "your OR any OR their OR our OR his OR her OR the)) FOLLOWEDBY{1} (email OR emails OR message OR "
+                    + "messages OR msg OR msgs))) AND NOT (remov* NEAR{2} (email address OR e?mail address))";
+            var result = translator.translate(term);
+            assertThat(result.isSuccess()).as(result.toString()).isTrue();
+        }
+
+        @Test
+        @DisplayName("A proximity alternative the author wrapped in its OWN parentheses is explicitly "
+                + "grouped, so it is not 'sandwiched' even in the middle of an OR list")
+        void parenthesisedMiddleProximityAlternative_accepted() {
+            assertThat(translator.translate("((a) NEAR{2} (b)) OR ((c) FOLLOWEDBY{1} (d)) OR (e)")
+                    .isSuccess()).isTrue();
+            assertThat(translator.translate(
+                    "((delay OR stall) NEAR{2} (trade OR order OR execution)) AND NOT "
+                    + "(((trade talk OR trade talks) FOLLOWEDBY{1} (stall)) OR ((in order to OR in order not) "
+                    + "FOLLOWEDBY{1} (delay)) OR (((sorry for OR sorry to) FOLLOWEDBY{1} (delay)) "
+                    + "FOLLOWEDBY{1} (trade OR order OR execution)))").isSuccess()).isTrue();
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════

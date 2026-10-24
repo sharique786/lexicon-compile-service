@@ -302,7 +302,7 @@ class TermSyntaxTranslatorTest {
         @DisplayName("AND NOT: exclusion is captured as a SEPARATE Hyperscan-valid pattern, " +
                 "never baked into hsPattern as an invalid lookbehind")
         void andNot_positivePatternAndSeparateExclusion() {
-            var s = translateOk("((fix) OR (rig)) FOLLOWEDBY{2} (the rate) AND NOT (fed rate move)");
+            var s = translateOk("(((fix) OR (rig)) FOLLOWEDBY{2} (the rate)) AND NOT (fed rate move)");
             // Required side's FOLLOWEDBY is simple/safe, so it merges into ONE gap-embedded pattern.
             assertThat(s.hsPatterns()).hasSize(1);
             assertThat(s.hsPatterns().getFirst()).contains("(?:\\bfix\\b|\\brig\\b)").contains("the rate");
@@ -437,26 +437,19 @@ class TermSyntaxTranslatorTest {
     // ══════════════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("Validation — chained NEAR/FOLLOWEDBY at the same level warns, but succeeds (backward compatibility)")
+    @DisplayName("Validation — chained NEAR/FOLLOWEDBY at the same level is rejected")
     class ChainedProximityValidation {
 
         @Test
-        @DisplayName("Chained FOLLOWEDBY at the same level SUCCEEDS with a warning — NOT rejected. " +
-                "Existing lexicon terms using this pattern must keep compiling.")
-        void chainedFollowedBySameLevel_warnsButSucceeds() {
-            var s = translateOk(
-                    "((termA OR termB OR termC) FOLLOWEDBY{5} (termD OR termE) FOLLOWEDBY{6} (termF OR termG))");
-            assertThat(s.warnings()).isNotEmpty();
-            boolean hasChainWarning = s.warnings().stream()
-                    .anyMatch(w -> w.contains("FOLLOWEDBY") || w.contains("chain"));
-            assertThat(hasChainWarning).isTrue();
-        }
-
-        @Test
-        @DisplayName("Chained NEAR at the same level also succeeds with a warning")
-        void chainedNearSameLevel_warnsButSucceeds() {
-            var s = translateOk("(a) NEAR{3} (b) NEAR{4} (c)");
-            assertThat(s.warnings()).isNotEmpty();
+        @DisplayName("Two or more proximity operators of the SAME kind at one level are rejected")
+        void chainedSameKind_rejected() {
+            for (String term : new String[] {
+                    "((termA OR termB) FOLLOWEDBY{5} (termD OR termE) FOLLOWEDBY{6} (termF OR termG))",
+                    "(a) NEAR{3} (b) NEAR{4} (c)",
+                    "(gewaschen OR waschen) NEAR{3} (Kleidung OR Hemd) NEAR{2} (waschen OR reinigen)"}) {
+                assertThat(translateError(term)).as(term)
+                        .contains("multiple NEAR/FOLLOWEDBY proximity operators at the same level");
+            }
         }
 
         @Test
@@ -515,16 +508,6 @@ class TermSyntaxTranslatorTest {
         }
 
         @Test
-        @DisplayName("Chained proximity produces the IDENTICAL pattern to the explicit, left-associative " +
-                "parenthesization — proving the warning-path AST construction is not just a " +
-                "different, accidentally-also-working translation")
-        void chainedProximity_identicalToExplicitNesting() {
-            var chained = translateOk("(termA) FOLLOWEDBY{5} (termD) FOLLOWEDBY{6} (termF)");
-            var explicit = translateOk("((termA) FOLLOWEDBY{5} (termD)) FOLLOWEDBY{6} (termF)");
-            assertThat(chained.hsPatterns()).isEqualTo(explicit.hsPatterns());
-        }
-
-        @Test
         @DisplayName("Explicit nesting via parentheses works identically and produces no chain warning")
         void explicitNestingStillWorks() {
             var s = translateOk("((termA OR termB) FOLLOWEDBY{5} (termD OR termE)) FOLLOWEDBY{6} (termF OR termG)");
@@ -569,7 +552,7 @@ class TermSyntaxTranslatorTest {
         @Test
         @DisplayName("Left-nested chaining (implicit or explicit) is UNCHANGED — still flat, no extra parens")
         void leftNestedChain_staysFlat() {
-            var chained = translateOk("(a) NEAR{5} (b) NEAR{5} (c)");
+            var chained = translateOk("((a) NEAR{5} (b)) NEAR{5} (c)");
             assertThat(chained.resolvedPattern()).isEqualTo("\\ba\\b NEAR{5} \\bb\\b NEAR{5} \\bc\\b");
 
             var explicit = translateOk("((a) NEAR{5} (b)) NEAR{5} (c)");
@@ -620,7 +603,7 @@ class TermSyntaxTranslatorTest {
         void sampleFix2_followedByAsItsOwnOrAlternative_compiles() {
             var result = translator.translate(
                     "((I) OR (you) OR (they) OR (we) OR (DB) OR (he) OR (she) OR (client) OR (us) OR (him) "
-                            + "OR (her)) OR ((them) FOLLOWEDBY{3} (sin bin) OR (penalty box) OR sinbin)");
+                            + "OR (her)) OR (((them) FOLLOWEDBY{3} (sin bin)) OR (penalty box) OR sinbin)");
             assertThat(result.isSuccess()).isTrue();
         }
 
@@ -642,10 +625,49 @@ class TermSyntaxTranslatorTest {
         }
 
         @Test
-        @DisplayName("A proximity operator with only ONE OR sibling (either side) is unaffected — " +
-                "sandwiching requires OTHER alternatives on BOTH sides")
-        void onlyTwoAlternatives_neverSandwiched() {
-            assertThat(translator.translate("(a) OR (b) NEAR{3} (c)").isSuccess()).isTrue();
+        @DisplayName("An unparenthesised proximity operator is rejected even with only ONE OR sibling "
+                + "(edge position) — OR and NEAR at the same level")
+        void unparenthesisedEdgeProximity_rejected() {
+            assertThat(translateError("(a) OR (b) NEAR{3} (c)")).containsIgnoringCase("ambiguous");
+            assertThat(translateError("(a) NEAR{3} (b) OR (c)")).containsIgnoringCase("ambiguous");
+        }
+
+        @Test
+        @DisplayName("Mixed operator kinds at ONE bracket level are rejected (OR+NEAR, AND+NEAR, "
+                + "NEAR+AND NOT, OR+AND NOT) while grouped equivalents pass")
+        void mixedOperatorsAtSameLevel_rejected() {
+            String[] bad = {
+                "(Geldwaesche OR Geldwaesche) OR (Dollars OR Euros) NEAR{2} (waschen OR reinigen) AND NOT ((a OR b) NEAR{3} (c OR d))",
+                "(Geldwaesche OR Geldwaesche) AND Dollars NEAR{2} (waschen OR reinigen)",
+                "a OR b AND NOT (c)",
+                "a AND b AND NOT (c)",
+                "(a) NEAR{2} (b) AND NOT (c)"
+            };
+            for (String term : bad) {
+                assertThat(translateError(term)).as(term).containsIgnoringCase("same level");
+            }
+            translateOk("(((a) OR (b)) NEAR{2} ((c) OR (d))) AND NOT (e)");
+            translateOk("(a) OR (b) OR (c)");
+            translateOk("(a) AND (b) AND (c)");
+            translateOk("(Geldwäsche OR Geldwaesche) OR (Dollars OR Euros OR Cash OR Barmittel OR Bargeld)");
+            translateOk("(Geldwäsche OR Geldwaesche) AND (Dollars OR Euros OR Cash OR Barmittel OR Bargeld)");
+            translateOk("Geldwäsche AND Dollars");
+        }
+
+        @Test
+        @DisplayName("Brackets resolve innermost-first: an error in a nested group is reported before the outer one")
+        void innerGroupErrorReportedFirst() {
+            String msg = translateError("((a OR b NEAR{2} c) NEAR{2} d) OR e NEAR{2} f");
+            assertThat(msg).contains("OR/AND, NEAR/FOLLOWEDBY").contains("'((a OR b NEAR{2} c)");
+        }
+
+        @Test
+        @DisplayName("REPORTED: '((x OR y) OR (d OR e) NEAR{2} (w OR v)) AND NOT (...)' — OR and NEAR at "
+                + "the same level inside the required group must FAIL")
+        void reportedGermanOrNearSameLevel_rejected() {
+            String msg = translateError("((Geldwäsche OR Geldwaesche) OR (Dollars OR Euros OR Cash) NEAR{2} "
+                    + "(waschen OR gewaschen OR reinigen)) AND NOT ((gewaschen OR waschen) NEAR{3} (Kleidung OR Hemd))");
+            assertThat(msg).containsIgnoringCase("ambiguous");
         }
 
         @Test

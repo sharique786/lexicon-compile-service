@@ -122,8 +122,8 @@ class ResolvedPatternMatchingIntegrationTest {
         // resolvedPatterns shape (confirmed against LexiconCompileBundleServiceTest's
         // "WORKED EXAMPLE" test, which already exercises this exact term).
         private static final String TERM =
-                "(insider AND NOT ((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) "
-                        + "FOLLOWEDBY{2} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN) "
+                "(insider AND NOT (((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) "
+                        + "FOLLOWEDBY{2} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) "
                         + "FOLLOWEDBY{2} (wordO* OR wordP* wordQ OR wordR* wordS OR wordT)))";
 
         @Test

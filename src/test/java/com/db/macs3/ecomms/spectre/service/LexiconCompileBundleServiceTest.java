@@ -772,8 +772,8 @@ class LexiconCompileBundleServiceTest {
             "excluded side — required id=8 (single), excluded ids 9/10/11 (decomposed) — patternMapping " +
             "is exactly \"(8&!(9&10&11))\", the AND-NOT formula the .hdb itself never encodes")
     void patternMapping_andNot_matchesReportedWorkedExample() {
-        String term = "(insider AND NOT ((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) "
-                + "FOLLOWEDBY{2} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN) "
+        String term = "(insider AND NOT (((wordA word B OR wordC* wordD OR wordE* wordF OR wordG) "
+                + "FOLLOWEDBY{2} (wordH* OR wordI wordJ* wordK OR wordL* wordM OR wordN)) "
                 + "FOLLOWEDBY{2} (wordO* OR wordP* wordQ OR wordR* wordS OR wordT)))";
 
         var req = new TypedCompileRequest();

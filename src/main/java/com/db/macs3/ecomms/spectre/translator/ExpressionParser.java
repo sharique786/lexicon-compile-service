@@ -49,9 +49,9 @@ import java.util.List;
  * <ul>
  *   <li>More than {@link ParseContext#MAX_AND_OPERANDS} operands at one AND level
  *       is rejected — AND is expanded into every ordering of its operands.</li>
- *   <li>A NEAR/FOLLOWEDBY that is an {@code OR} alternative with other alternatives
- *       on BOTH sides is rejected ({@link #rejectSandwichedProximity}); at either
- *       edge of the OR list it is allowed.</li>
+ *   <li>Two or more DIFFERENT operator kinds (OR, AND, AND NOT, NEAR/FOLLOWEDBY) at one
+ *       bracket level are rejected ({@link #rejectMixedOperators}); every group is
+ *       parsed innermost-first, so the innermost offending group is reported.</li>
  *   <li>Empty parentheses, a bare {@code NOT} between two expressions, and any
  *       unexpected token are rejected with a specific message.</li>
  * </ul>
@@ -120,17 +120,16 @@ final class ExpressionParser {
     // ── Grammar levels ───────────────────────────────────────────────────────
 
     private Ast parseOr() {
+        int groupStart = currentTokenIndex;
         List<Ast> alternatives = new ArrayList<>();
-        List<Boolean> parenthesised = new ArrayList<>();
-        int start = currentTokenIndex;
         alternatives.add(parseAndNot());
-        parenthesised.add(isWrappedInOwnParens(start, currentTokenIndex));
         while (peekIs(Token.Or.class)) {
             advance();
-            start = currentTokenIndex;
             alternatives.add(parseAndNot());
-            parenthesised.add(isWrappedInOwnParens(start, currentTokenIndex));
         }
+        // Runs after the whole level (and so every bracket nested in it) was parsed:
+        // brackets resolve innermost-first, and an inner error is reported before this one.
+        rejectMixedOperators(groupStart, currentTokenIndex);
         if (alternatives.size() == 1) {
             // No actual OR combination happened — a deferred Ast.Not (see
             // foldNotOperands) simply passes through unchanged, still eligible to be
@@ -140,60 +139,42 @@ final class ExpressionParser {
         for (Ast alternative : alternatives) {
             rejectBareNot(alternative, "as an OR alternative");
         }
-        rejectSandwichedProximity(alternatives, parenthesised);
         return new Ast.Or(alternatives);
     }
 
     /**
-     * True when the tokens in {@code [from, to)} are exactly one parenthesised group, i.e. the
-     * first token is '(' and its matching ')' is the last token. {@code (a) NEAR{2} (b)} is not.
+     * Rejects a bracket level whose tokens (outside any nested brackets) use more than one
+     * operator kind (one kind here — mixing the two
+     * proximity operators has its own message in {@link #parseProximity}). Repeating ONE
+     * kind, e.g. {@code a OR b OR c}, is fine. Precedence is deliberately never relied on:
+     * the author must group explicitly.
+     *
+     * @throws TranslationException naming the operators found and how to fix it
      */
-    private boolean isWrappedInOwnParens(int from, int to) {
-        if (to - from < 2 || !(tokens.get(from) instanceof Token.LParen)) return false;
+    private void rejectMixedOperators(int from, int to) {
+        java.util.LinkedHashSet<String> kinds = new java.util.LinkedHashSet<>();
         int depth = 0;
         for (int i = from; i < to; i++) {
             Token token = tokens.get(i);
             if (token instanceof Token.LParen) depth++;
-            else if (token instanceof Token.RParen && --depth == 0) return i == to - 1;
-        }
-        return false;
-    }
-
-    /**
-     * Rejects a NEAR/FOLLOWEDBY operator that is one alternative of an OR with other
-     * alternatives on BOTH sides, e.g.
-     * {@code "(I) OR (you) OR (them) FOLLOWEDBY{3} (sin bin) OR (penalty box)"}.
-     * It would relate only the two operands next to the operator and silently leave every
-     * other alternative unrelated to it — almost never what the author meant.
-     *
-     * <p>A NEAR/FOLLOWEDBY alternative at either EDGE of the OR list is allowed, e.g.
-     * {@code "(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"}: nothing else on that
-     * side could be meant to share its scope. See {@code PatternDecomposer} class Javadoc
-     * for how such a term is compiled.
-     *
-     * @throws TranslationException naming the ambiguous shape and how to fix it
-     */
-    private void rejectSandwichedProximity(List<Ast> alternatives, List<Boolean> parenthesised) {
-        for (int i = 1; i < alternatives.size() - 1; i++) {
-            Ast alternative = alternatives.get(i);
-            // An alternative the author already wrapped in its own parentheses is explicitly
-            // grouped — exactly the fix this error message asks for — so it is unambiguous.
-            if (parenthesised.get(i)) continue;
-            if (alternative instanceof Ast.Near || alternative instanceof Ast.FollowedBy) {
-                throw new TranslationException(
-                        "A NEAR/FOLLOWEDBY operator was found combined with OR at the same level, with OTHER OR"
-                        + " alternatives on BOTH sides of it, in term: '" + originalTerm + "'. This is ambiguous"
-                        + " — it is unclear whether the proximity operator should apply only to its own two"
-                        + " immediate operands (as currently written, with every other OR alternative unrelated"
-                        + " to it), or to a wider group including some of the surrounding OR alternatives too."
-                        + " Add explicit parentheses to make the intended grouping unambiguous — e.g. group every"
-                        + " alternative meant to be on the SAME side of the proximity operator together, such as"
-                        + " '((alt1) OR (alt2) OR ...) NEAR{n} ((altX) OR (altY) OR ...)'; or, if the proximity"
-                        + " clause really is meant to be its own independent OR alternative with no relation to"
-                        + " the others, restructure the term so it sits at an EDGE of its OR list instead of in"
-                        + " the middle, e.g. '(alt1) OR (alt2) OR (altZ) OR ((altX) NEAR{n} (altY))'.");
+            else if (token instanceof Token.RParen) depth--;
+            else if (depth == 0) {
+                if (token instanceof Token.Or || token instanceof Token.And) {
+                    kinds.add(LexiconOperatorKeyword.OR + "/" + LexiconOperatorKeyword.AND);
+                }
+                else if (token instanceof Token.AndNot) kinds.add(LexiconOperatorKeyword.AND_NOT_DISPLAY);
+                else if (token instanceof Token.Near || token instanceof Token.FollowedBy) {
+                    kinds.add(LexiconOperatorKeyword.NEAR + "/" + LexiconOperatorKeyword.FOLLOWEDBY);
+                }
             }
         }
+        if (kinds.size() < 2) return;
+        throw new TranslationException(
+                "Operators " + String.join(", ", kinds) + " were found at the same level without"
+                + " parentheses in term: '" + originalTerm + "'. This is ambiguous — it is unclear which"
+                + " operands each operator applies to. Group explicitly so that each bracket level uses ONE"
+                + " kind of operator, e.g. '((A) OR (B)) AND ((C) NEAR{2} (D))' instead of"
+                + " 'A OR B AND C NEAR{2} D', or split the term into separate lexicon terms.");
     }
 
     private Ast parseAndNot() {
@@ -311,11 +292,8 @@ final class ExpressionParser {
     /**
      * {@code proximityExpr := atom ( (NEAR | FOLLOWEDBY) atom )*}
      *
-     * <p>Chained operators at one level are accepted (with a warning): each further operator
-     * takes the accumulated result as its left operand, so
-     * {@code A FOLLOWEDBY{5} B FOLLOWEDBY{6} C} builds the same AST as the explicit
-     * {@code (A FOLLOWEDBY{5} B) FOLLOWEDBY{6} C}. An explicitly parenthesised group is parsed
-     * at its own level and never triggers the chained-operator warning.
+     * <p>Two or more proximity operators at one level (chained, same or mixed kind) are
+     * rejected: the author must parenthesise, e.g. {@code (A FOLLOWEDBY{5} B) FOLLOWEDBY{6} C}.
      */
     private Ast parseProximity() {
         Ast leftOperand = parseAtom();
@@ -332,8 +310,13 @@ final class ExpressionParser {
                         + " explicit parentheses to group them, e.g. '((A) NEAR{n} (B)) FOLLOWEDBY{m} (C)' or"
                         + " '(A) NEAR{n} ((B) FOLLOWEDBY{m} (C))', or split this into separate lexicon terms.");
             }
-            warnChainedProximityOperator();
-            result = consumeProximityOperator(result);
+            String keyword = firstIsNear ? LexiconOperatorKeyword.NEAR : LexiconOperatorKeyword.FOLLOWEDBY;
+            throw new TranslationException(
+                    "This term has multiple NEAR/FOLLOWEDBY proximity operators at the same level (" + keyword
+                    + " chained) without parentheses in term: '" + originalTerm + "'. It is ambiguous which operands each operator applies to."
+                    + " Add explicit parentheses to group them, e.g. '((A) " + keyword + "{n} (B)) " + keyword
+                    + "{m} (C)' or '(A) " + keyword + "{n} ((B) " + keyword + "{m} (C))', or split this into"
+                    + " separate lexicon terms.");
         }
         return result;
     }
@@ -397,24 +380,6 @@ final class ExpressionParser {
      */
     private static boolean isSingleCharacterWord(Ast ast) {
         return ast instanceof Ast.Word word && word.text().length() == 1;
-    }
-
-    /**
-     * Records a warning when a second (or later) NEAR/FOLLOWEDBY is chained directly after
-     * the first with no wrapping parentheses; the chain is treated as left-associative nesting.
-     */
-    private void warnChainedProximityOperator() {
-        Token next = tokens.get(currentTokenIndex);
-        String keyword = (next instanceof Token.Near) ? LexiconOperatorKeyword.NEAR : LexiconOperatorKeyword.FOLLOWEDBY;
-        warnings.add(
-                "Chained " + keyword + " operators without explicit parentheses were used in term: '"
-                        + originalTerm + "' (found a second " + keyword + " chained directly after the first)."
-                        + " This still compiles, for backward compatibility with existing lexicon terms, and is"
-                        + " treated as left-associative nesting — equivalent to wrapping the earlier operator(s)"
-                        + " in parentheses explicitly, e.g. 'A " + keyword + "{n} B " + keyword + "{m} C' is treated"
-                        + " as '(A " + keyword + "{n} B) " + keyword + "{m} C'. New terms should use explicit"
-                        + " parentheses instead, both for clarity and because this implicit form may be rejected"
-                        + " for newly-created terms in a future version.");
     }
 
     /**
@@ -515,6 +480,8 @@ final class ExpressionParser {
         }
         return collectedWords.size() == 1 ? new Ast.Word(collectedWords.getFirst()) : new Ast.Phrase(collectedWords);
     }
+
+
 
     /**
      * True when the token after the CURRENT (unconsumed) token is NEAR/FOLLOWEDBY.

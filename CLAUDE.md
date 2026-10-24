@@ -233,9 +233,9 @@ at least one whitespace character, so two fragments landing inside the SAME
 word can never satisfy any distance, merged into one pattern or not — this
 is a term-authoring problem (the term needs to be a literal word/phrase, or
 a Regex-type infix/wildcard pattern, not a proximity chain), not something
-this pipeline change addresses. `ExpressionParser.rejectSandwichedProximity`'s
-sibling check, `warnPossibleIntraWordSplit` (see `ExpressionParser` class
-Javadoc), flags the visible signature of this specific mistake (a
+this pipeline change addresses. `ExpressionParser.warnPossibleIntraWordSplit`
+(a sibling of the parse-time validations) (see `ExpressionParser` class
+Javadoc) flags the visible signature of this specific mistake (a
 single-character operand at distance 1) with a non-fatal warning.
 
 **Confirmed-fixed regression: a NEAR/FOLLOWEDBY nested as the RIGHT operand
@@ -525,46 +525,27 @@ behavior for a bare `NOT` immediately followed by `(`, which used to be
 literal text too (folded into `parseWordOrPhrase()`) and is now the
 NOT-group operator instead.
 
-### 5. NEAR/FOLLOWEDBY sandwiched between OR alternatives — rejected, not silently mismatched
+### 5. One operator kind per bracket level — mixed operators rejected, not silently mismatched
 
-A NEAR/FOLLOWEDBY operator sitting as one `OR` alternative with OTHER `OR`
-alternatives on BOTH sides of it parses successfully today (each
-`proximityExpr` already scopes correctly between `OR` boundaries — no
-grammar ambiguity), but the RESULT relates only that one operator's own two
-immediate operands to each other; every other `OR` alternative on both
-sides is simply ignored by that relationship, silently:
+`ExpressionParser.rejectMixedOperators` (called at the end of every `parseOr()`, i.e. AFTER the level's
+nested brackets were parsed, so brackets resolve innermost-first and the innermost offence is reported)
+scans the tokens of one bracket level outside nested brackets and throws a `TranslationException`
+(message contains "same level" / "ambiguous") when more than one kind is present. Kinds: **OR/AND (one
+kind — freely repeatable and mixable, AND binds tighter)**, **AND NOT**, **NEAR/FOLLOWEDBY**. So
+`a OR b NEAR{2} c`, `a AND b NEAR{2} c`, `a NEAR{2} b AND NOT (c)`, `a OR b AND NOT (c)` and
+`a AND b AND NOT (c)` all fail; `a OR b OR c`, `a AND b`, `a OR b AND c` pass. Precedence is never
+relied on for proximity/AND NOT — the author must group:
+`((a) OR (b)) NEAR{2} ((c) OR (d))`, `((a) NEAR{2} (b)) AND NOT (c)`.
 
-```
-"(I) OR (you) OR (they) OR ... OR (them) FOLLOWEDBY{3} (sin bin) OR (penalty box) OR sinbin"
-```
+This replaces the older `rejectSandwichedProximity` (which only caught a proximity alternative with OR
+siblings on BOTH sides and exempted the OR-list EDGES). The edge exemption is GONE: an unparenthesised
+proximity clause next to OR is rejected in any position. The documented OR-nested-proximity case still
+works because its clause is wrapped in its own parentheses:
+`"(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"`.
 
-only ever relates `(them)` to `(sin bin)` — `(I)` through `(her)` and
-`(penalty box)`/`sinbin` are unrelated OR alternatives, almost certainly not
-what an author intends when writing a long OR list with one proximity
-operator buried in the middle. `ExpressionParser.parseOr()` now calls
-`rejectSandwichedProximity()` once an actual `OR` has combined more than one
-alternative: any alternative (other than the FIRST or LAST) that is itself
-an `Ast.Near`/`Ast.FollowedBy` node throws a `TranslationException` naming
-the ambiguity and suggesting two fixes — wrap every alternative meant to
-share the proximity operator's scope into one explicit group on each side
-(`((...) OR (...)) NEAR{n} ((...) OR (...))`), or move the proximity clause
-to an EDGE of its `OR` list if it really is meant to be independent.
-
-**This is a hard rejection, unlike chained-proximity's warning-only
-treatment (`ExpressionParser`'s own "Chained NEAR/FOLLOWEDBY" section) —
-the two situations only look similar.** A chained proximity operator's flat
-rendering is EXACTLY what left-associative nesting already looks like (no
-information lost either way, so warning-and-keep-compiling was the right
-call for backward compatibility). A sandwiched proximity alternative
-silently discards a relationship a flat/warned rendering can't recover —
-there is no legacy-compatible middle ground, so this is rejected outright.
-
-**A NEAR/FOLLOWEDBY alternative at either EDGE of the OR list (nothing
-before it, or nothing after it) is deliberately NOT rejected** — e.g.
-`"(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)"`, the existing,
-documented, currently-used OR-nested-proximity exception (see
-`resolvedPatterns` section above). With no OTHER alternative left over on
-the side the proximity clause sits, there is nothing ambiguous to reject.
+**Breaking change for existing terms**: `A FOLLOWEDBY{2} B AND NOT (C)` must now be written
+`(A FOLLOWEDBY{2} B) AND NOT (C)`. Covered in `TermSyntaxTranslatorTest`
+(`SandwichedProximityValidation`, `ChainedProximityValidation`).
 
 ### 6. Mixed NEAR/FOLLOWEDBY chains and oversized OR-with-proximity — rejected up front
 
@@ -572,8 +553,8 @@ Two validations added after real terms failed with a raw "Pattern is too large":
 
 - **Mixed chain** — `ExpressionParser.parseProximity` rejects an unparenthesised chain that mixes
   `NEAR` and `FOLLOWEDBY` at one level (`A NEAR{3} B FOLLOWEDBY{4} C`) as ambiguous. A chain of the SAME
-  operator still only warns (existing terms rely on it). This reverses the earlier "mixed chain compiles
-  with a warning" behaviour.
+  operator (`A NEAR{3} B NEAR{2} C`) is now ALSO rejected ("multiple NEAR/FOLLOWEDBY proximity operators at
+  the same level") — the old warn-and-keep-compiling behaviour (`warnChainedProximityOperator`) was removed.
 - **Oversized OR containing proximity** — `TermSyntaxTranslator.rejectOversizedOrWithProximity` (run right
   after parsing, walks the whole tree, both AND NOT sides included) throws when an `Ast.Or` contains
   NEAR/FOLLOWEDBY, `PatternComplexityAnalyzer.isOverBudget` is true (cheap pre-gate) AND a trial compile of that OR's single pattern, with the term's real flags, is rejected by real Hyperscan. The budget alone never rejects (it scored a term that compiles fine at 2650 vs. limit 700). Rationale: OR-nested proximity is the
@@ -802,7 +783,7 @@ Genuinely compiled and tested — not merely reviewed — against a hand-built
 but functionally faithful stub environment (real Hyperscan `Scanner`/
 `Database` simulation with genuine `COMBINATION`/`QUIET` evaluation, real
 JSON parsing, a real parameterized-test runner for `@ParameterizedTest`/
-`@ValueSource`). 486 tests passing (real Hyperscan, including whole-word scans). The one
+`@ValueSource`). 494 tests passing (real Hyperscan, including whole-word scans). The one
 file needing full Spring Test infrastructure
 (`LexiconCompileControllerTest`, `MockMvc`) is out of this stub
 environment's scope — reviewed by hand, not compiled, consistent with the
@@ -995,3 +976,7 @@ verification scaffolding, not a repository fixture.
     `PatternComplexityAnalyzer.COMPLEXITY_BUDGET` is rejected before Hyperscan is called, with an actionable
     message instead of a raw Hyperscan error — see "6. Mixed NEAR/FOLLOWEDBY chains and oversized
     OR-with-proximity" above. Small OR-with-proximity terms remain allowed.
+18. **Strict one-operator-kind-per-bracket-level validation**: `rejectMixedOperators` (see "5." above) replaces
+    `rejectSandwichedProximity`; OR/AND may mix, but `AND NOT`/`NEAR`/`FOLLOWEDBY` may not share a level with
+    them or each other; chained same-kind proximity is rejected instead of warned. Fixtures and tests that
+    relied on `A FOLLOWEDBY{n} B FOLLOWEDBY{m} C` or `X FOLLOWEDBY{n} Y AND NOT (Z)` were parenthesised.

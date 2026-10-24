@@ -182,10 +182,16 @@ is interpreted for other scripts.
 inside a phrase are joined by exactly **one space**, so `bomb this place` does not match text with
 two spaces or a line break between the words.
 
-**Chained proximity** — `A FOLLOWEDBY{5} B FOLLOWEDBY{6} C` without parentheses is accepted and read
-as `(A FOLLOWEDBY{5} B) FOLLOWEDBY{6} C`; a warning is logged. Prefer explicit parentheses.
-**Mixing the two operators** in one unparenthesised chain (`A NEAR{3} B FOLLOWEDBY{4} C`) is rejected as
-ambiguous — write `(A NEAR{3} B) FOLLOWEDBY{4} C` or `A NEAR{3} (B FOLLOWEDBY{4} C)`.
+**One kind of operator per bracket level.** Brackets are resolved innermost-first, and within any one
+bracket level (outside nested brackets) only ONE kind of operator may appear:
+
+* `OR` and `AND` may be repeated and mixed with each other (`a OR b OR c`, `a AND b`, `a OR b AND c`; `AND` binds tighter).
+* `AND NOT`, `NEAR` and `FOLLOWEDBY` may NOT share a level with `OR`/`AND`, or with each other. Group explicitly:
+  `((a) OR (b)) NEAR{2} ((c) OR (d))`, `((a) NEAR{2} (b)) AND NOT (c)`.
+* Two or more proximity operators at one level — chained (`A FOLLOWEDBY{5} B FOLLOWEDBY{6} C`, `A NEAR{3} B NEAR{2} C`)
+  or mixed (`A NEAR{3} B FOLLOWEDBY{4} C`) — are rejected. Write `(A FOLLOWEDBY{5} B) FOLLOWEDBY{6} C`.
+
+All of these fail with a translation error (term `FAILED`), reported for the innermost offending bracket first.
 
 **OR with proximity inside it** — allowed when small (e.g. `(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)`),
 but rejected up front when it is both over the complexity budget (700) and a trial compile by real Hyperscan fails, because such an OR cannot be
@@ -226,10 +232,10 @@ with a message to split the term.
 
 ### A `NEAR`/`FOLLOWEDBY` alternative inside `OR`
 
-`(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)` is accepted — the proximity clause sits at the
-**edge** of the `OR` list. A proximity clause with `OR` alternatives on **both** sides
-(`(a) OR (b) NEAR{2} (c) OR (d)`) is rejected as ambiguous; group the intended operands
-(`((a) OR (b)) NEAR{2} ((c) OR (d))`) or move the clause to the edge.
+`(plain phrase) OR ((EURIBOR FIXING) NEAR{2} TENOR)` is accepted — the proximity clause is wrapped in its
+own parentheses. An unparenthesised proximity clause next to `OR`, in any position
+(`(a) OR (b) NEAR{2} (c)`, `(a) OR (b) NEAR{2} (c) OR (d)`), is rejected as ambiguous; group the intended operands
+(`((a) OR (b)) NEAR{2} ((c) OR (d))`) or parenthesise the clause.
 
 ### Wildcards, phrases and punctuation
 
@@ -795,8 +801,9 @@ Malformed ids are reported before duplicates.
 | distance not 1–50 | `NEAR{0}` → `zero is not allowed`; `NEAR{51}` → `only values from 1 to 50 are allowed`; also `NEAR{-1}`, `NEAR{03}`, `NEAR{3,6}`, `NEAR{x}` |
 | operator with a missing operand | `NEAR{2} (price)` → `Could not parse term … (expected a term, parenthesis, or quoted phrase)` |
 | `NOT` misuse | `NOT (james bond)` → `NOT must always be combined with a preceding required expression via AND`; `price AND NOT legitimate` / `apple AND NOT NEAR{10} banana` → `NOT must always be followed immediately by a parenthesised group`; `A NOT B` → `Standalone NOT is not supported as an operator` |
-| proximity sandwiched in `OR` | `(a) OR (b) NEAR{2} (c) OR (d)` → `… combined with OR at the same level, with OTHER OR alternatives on BOTH sides …` |
+| mixed operator kinds at one level | `(a) OR (b) NEAR{2} (c)`, `(a) AND (b) NEAR{2} (c)`, `(a) NEAR{2} (b) AND NOT (c)` → `Operators … were found at the same level without parentheses … ambiguous …` |
 | `NEAR` and `FOLLOWEDBY` chained without parentheses | `(a) NEAR{3} (b) FOLLOWEDBY{4} (c)` → `NEAR and FOLLOWEDBY were combined at the same level without parentheses …` |
+| two or more same-kind proximity operators at one level | `(a) NEAR{3} (b) NEAR{2} (c)` → `This term has multiple NEAR/FOLLOWEDBY proximity operators at the same level …` |
 | oversized `OR` containing proximity | `((…wide OR…) NEAR{3} (…wide OR…)) OR (…)` → `An OR combining NEAR/FOLLOWEDBY expressions is too complex to compile (<Hyperscan's error>) …` |
 | more than 5 `AND` operands | `Too many AND operands at the same level (6) …` |
 | `AND NOT` not at the root | `(x AND NOT (y)) NEAR{3} z` → `AND NOT may only appear at the top level of a term …` |
@@ -847,7 +854,6 @@ them** (the response has no `warnings` field). Watch the service log (`WARN`, lo
 | Whole-word matching not applied | the term contains non-ASCII text (UCP) |
 | Gap clamped or narrowed | requested distance exceeded the compiled width; long-distance matches are missed |
 | Mixed RTL + LTR `FOLLOWEDBY` | matches stored order, which may differ from visual order |
-| Chained same-operator `NEAR`/`FOLLOWEDBY` without parentheses | read as left-associative nesting (mixed operators are rejected, see error catalog) |
 | `NEAR{1}`/`FOLLOWEDBY{1}` with a single-character operand | likely an attempt to split one word, which can never match |
 
 ---

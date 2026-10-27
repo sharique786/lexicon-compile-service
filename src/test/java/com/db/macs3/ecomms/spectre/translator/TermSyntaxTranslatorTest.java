@@ -60,7 +60,7 @@ class TermSyntaxTranslatorTest {
             var s = translateOk("(crap OR bad) NEAR{3} (bonus OR comp)");
             assertThat(s.hsPatterns()).hasSize(1);
             assertThat(s.hsPatterns().getFirst()).contains("(?:\\bcrap\\b|\\bbad\\b)").contains("(?:\\bbonus\\b|\\bcomp\\b)");
-            assertThat(s.resolvedPattern()).isEqualTo("(?:\\bcrap\\b|\\bbad\\b) NEAR{3} (?:\\bbonus\\b|\\bcomp\\b)");
+            assertThat(s.resolvedPattern()).isEqualTo("((?:\\bcrap\\b|\\bbad\\b)) NEAR{3} ((?:\\bbonus\\b|\\bcomp\\b))");
         }
 
         @Test
@@ -70,7 +70,7 @@ class TermSyntaxTranslatorTest {
             var s = translateOk("(F) FOLLOWEDBY{1} (((me) OR (cking)))");
             assertThat(s.hsPatterns()).hasSize(1);
             assertThat(s.hsPatterns().getFirst()).contains("F").contains("(?:\\bme\\b|\\bcking\\b)");
-            assertThat(s.resolvedPattern()).isEqualTo("\\bF\\b FOLLOWEDBY{1} (?:\\bme\\b|\\bcking\\b)");
+            assertThat(s.resolvedPattern()).isEqualTo("\\bF\\b FOLLOWEDBY{1} ((?:\\bme\\b|\\bcking\\b))");
         }
 
         @ParameterizedTest(name = "[{index}] {0}")
@@ -310,7 +310,7 @@ class TermSyntaxTranslatorTest {
             assertThat(s.hsPatterns()).noneMatch(p -> NO_LOOKAROUND_CHECK.matcher(p).find());
             assertThat(s.exclusionRegexs().getFirst()).contains("fed rate move");
             assertThat(s.resolvedPattern()).isEqualTo(
-                    "(?:\\bfix\\b|\\brig\\b) FOLLOWEDBY{2} \\bthe rate\\b AND NOT (\\bfed rate move\\b)");
+                    "(((?:\\bfix\\b|\\brig\\b)) FOLLOWEDBY{2} \\bthe rate\\b) AND NOT (\\bfed rate move\\b)");
         }
 
         @Test
@@ -329,7 +329,7 @@ class TermSyntaxTranslatorTest {
             assertThat(s.exclusionRegexs()).hasSize(1);
             assertThat(s.exclusionRegexs().getFirst()).contains("(?:\\ba\\b|\\bb\\b)").contains("(?:\\bc\\b|\\bd\\b)").contains("(?:\\be\\b|\\bf\\b)");
             assertThat(s.resolvedPattern()).isEqualTo(
-                    "\\bhello\\b AND NOT ((?:\\ba\\b|\\bb\\b) FOLLOWEDBY{1} (?:\\bc\\b|\\bd\\b) FOLLOWEDBY{1} (?:\\be\\b|\\bf\\b))");
+                    "\\bhello\\b AND NOT ((((?:\\ba\\b|\\bb\\b)) FOLLOWEDBY{1} ((?:\\bc\\b|\\bd\\b))) FOLLOWEDBY{1} ((?:\\be\\b|\\bf\\b)))");
         }
 
         @Test
@@ -539,24 +539,33 @@ class TermSyntaxTranslatorTest {
             var s = translateOk("(manipulate OR front run) NEAR{5} ((price OR spread) NEAR{5} stock)");
             assertThat(s.hsPatterns()).containsExactly("(?:\\bmanipulate|\\bfront run)", "(?:\\bprice|\\bspread)", "\\bstock");
             assertThat(s.resolvedPattern()).isEqualTo(
-                    "(?:\\bmanipulate|\\bfront run) NEAR{5} ((?:\\bprice|\\bspread) NEAR{5} \\bstock)");
+                    "((?:\\bmanipulate|\\bfront run)) NEAR{5} (((?:\\bprice|\\bspread)) NEAR{5} \\bstock)");
         }
 
         @Test
         @DisplayName("Same shape with FOLLOWEDBY on both levels")
         void followedByNestedAsRightOperand_resolvedPatternsRetainsGrouping() {
             var s = translateOk("(a OR b) FOLLOWEDBY{5} ((c OR d) FOLLOWEDBY{3} e)");
-            assertThat(s.resolvedPattern()).isEqualTo("(?:\\ba\\b|\\bb\\b) FOLLOWEDBY{5} ((?:\\bc\\b|\\bd\\b) FOLLOWEDBY{3} \\be\\b)");
+            assertThat(s.resolvedPattern()).isEqualTo("((?:\\ba\\b|\\bb\\b)) FOLLOWEDBY{5} (((?:\\bc\\b|\\bd\\b)) FOLLOWEDBY{3} \\be\\b)");
+        }
+
+        @Test
+        @DisplayName("Bracketed required side + OR groups around NEAR, inside AND NOT")
+        void andNotWithBracketedProximitySides() {
+            var s = translateOk("((abc OR def OR lmn) NEAR{5} c) AND NOT (lmn NEAR{5} (xyz OR jkf))");
+            assertThat(s.resolvedPattern()).isEqualTo(
+                    "(((?:\\babc\\b|\\bdef\\b|\\blmn\\b)) NEAR{5} \\bc\\b)"
+                    + " AND NOT (\\blmn\\b NEAR{5} ((?:\\bxyz\\b|\\bjkf\\b)))");
         }
 
         @Test
         @DisplayName("Left-nested chaining (implicit or explicit) is UNCHANGED — still flat, no extra parens")
         void leftNestedChain_staysFlat() {
             var chained = translateOk("((a) NEAR{5} (b)) NEAR{5} (c)");
-            assertThat(chained.resolvedPattern()).isEqualTo("\\ba\\b NEAR{5} \\bb\\b NEAR{5} \\bc\\b");
+            assertThat(chained.resolvedPattern()).isEqualTo("(\\ba\\b NEAR{5} \\bb\\b) NEAR{5} \\bc\\b");
 
             var explicit = translateOk("((a) NEAR{5} (b)) NEAR{5} (c)");
-            assertThat(explicit.resolvedPattern()).isEqualTo("\\ba\\b NEAR{5} \\bb\\b NEAR{5} \\bc\\b");
+            assertThat(explicit.resolvedPattern()).isEqualTo("(\\ba\\b NEAR{5} \\bb\\b) NEAR{5} \\bc\\b");
         }
 
         @Test
@@ -1034,9 +1043,9 @@ class TermSyntaxTranslatorTest {
                     "(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
                     "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
             assertThat(s.resolvedPattern()).isEqualTo(
-                    "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide) FOLLOWEDBY{4} "
-                    + "(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*) FOLLOWEDBY{4} "
-                    + "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
+                    "(((?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide)) FOLLOWEDBY{4} "
+                    + "((?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*))) FOLLOWEDBY{4} "
+                    + "((?:das|dies|mich|sie|flow|Druck|Ausdruck))");
         }
 
         @Test

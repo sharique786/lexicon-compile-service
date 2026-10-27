@@ -157,15 +157,24 @@ final class PatternDecomposer {
 
         boolean rightIsNestedProximity = right instanceof Ast.Near || right instanceof Ast.FollowedBy;
 
-        String rightResolvedText = rightIsNestedProximity
+        // Brackets keep each operand's boundary explicit for the Scan Engine: a nested
+        // proximity or a multi-operand OR group is always wrapped, on either side.
+        String leftResolvedText = needsResolvedBrackets(left)
+                ? "(" + leftResult.resolvedText() + ")" : leftResult.resolvedText();
+        String rightResolvedText = needsResolvedBrackets(right)
                 ? "(" + rightResult.resolvedText() + ")" : rightResult.resolvedText();
-        String resolvedText = leftResult.resolvedText() + " " + keyword + "{" + distance + "} " + rightResolvedText;
+        String resolvedText = leftResolvedText + " " + keyword + "{" + distance + "} " + rightResolvedText;
 
         String shiftedRightFormula = shiftFormulaPlaceholders(rightResult.formulaTemplate(), leftResult.leaves().size());
         String rightFormula = rightIsNestedProximity ? "(" + shiftedRightFormula + ")" : shiftedRightFormula;
         String formulaTemplate = leftResult.formulaTemplate() + "&" + rightFormula;
 
         return new Result(combined, resolvedText, formulaTemplate);
+    }
+
+    private static boolean needsResolvedBrackets(Ast operand) {
+        return operand instanceof Ast.Near || operand instanceof Ast.FollowedBy
+                || (operand instanceof Ast.Or or && or.operands().size() > 1);
     }
 
     /**

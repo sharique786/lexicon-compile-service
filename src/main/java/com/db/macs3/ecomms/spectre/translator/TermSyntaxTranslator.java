@@ -195,7 +195,14 @@ public final class TermSyntaxTranslator {
                         preprocessed, "excluded (AND NOT)", warnings);
                 warnings.addAll(ctx.getWarnings());
 
-                String resolvedPattern = requiredResult.resolvedText()
+                // The excluded side is always bracketed; a compound required side (proximity,
+                // OR group, AND) is bracketed too so the boundary between the two is explicit.
+                boolean requiredIsCompound = !(andNot.required() instanceof Ast.Word
+                        || andNot.required() instanceof Ast.Phrase
+                        || andNot.required() instanceof Ast.QuotedPhrase);
+                String requiredText = requiredIsCompound
+                        ? "(" + requiredResult.resolvedText() + ")" : requiredResult.resolvedText();
+                String resolvedPattern = requiredText
                         + " AND NOT (" + excludedResult.resolvedText() + ")";
 
                 log.debug("Translated (AND NOT): '{}' -> required={} excluded={} flags={} warnings={}",

@@ -692,9 +692,9 @@ class LexiconCompileBundleServiceTest {
                 "(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*)",
                 "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
         assertThat(result.resolvedPatterns()).isEqualTo(
-                "(?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide) FOLLOWEDBY{4} "
-                + "(?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*) FOLLOWEDBY{4} "
-                + "(?:das|dies|mich|sie|flow|Druck|Ausdruck)");
+                "(((?:versuch nicht|mach\\S* nicht|tu\\S* nicht|vermeide)) FOLLOWEDBY{4} "
+                + "((?:frontrun\\S*|front run\\S*|übergeh\\S*|überspring\\S*))) FOLLOWEDBY{4} "
+                + "((?:das|dies|mich|sie|flow|Druck|Ausdruck))");
         assertThat(result.hyperscanExpressionId()).isEqualTo(4);
         assertThat(result.patternMapping()).isEqualTo("(5&6&7)");
     }
@@ -723,7 +723,7 @@ class LexiconCompileBundleServiceTest {
         assertThat(result.regexPattern()).containsExactly(
                 "(?:\\bmanipulate|\\bfront run)", "(?:\\bprice|\\bspread)", "\\bstock");
         assertThat(result.resolvedPatterns()).isEqualTo(
-                "(?:\\bmanipulate|\\bfront run) NEAR{5} ((?:\\bprice|\\bspread) NEAR{5} \\bstock)");
+                "((?:\\bmanipulate|\\bfront run)) NEAR{5} (((?:\\bprice|\\bspread)) NEAR{5} \\bstock)");
         assertThat(result.hyperscanExpressionId()).isEqualTo(53);
         assertThat(result.patternMapping()).isEqualTo("(54&(55&56))");
     }
